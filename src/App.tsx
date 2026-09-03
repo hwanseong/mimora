@@ -1,5 +1,9 @@
-import { useRef, useState } from 'react';
-import { assistantTestResponse, type ChatMessage } from './chat';
+import { useEffect, useRef, useState } from 'react';
+import {
+  assistantTestResponse,
+  type ChatMessage,
+  type ChatSessions,
+} from './chat';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatInput } from './components/ChatInput';
 import { ChatMessages } from './components/ChatMessages';
@@ -13,8 +17,18 @@ export function App() {
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatSessions, setChatSessions] = useState<ChatSessions>({});
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const assistantResponseTimeouts = useRef<number[]>([]);
+  const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
+
+  useEffect(() => {
+    return () => {
+      assistantResponseTimeouts.current.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+    };
+  }, []);
 
   function handleSelectPrompt(promptText: string): void {
     setMessage(promptText);
@@ -30,6 +44,25 @@ export function App() {
     };
   }
 
+  function appendMessagesToSession(
+    workspaceId: Workspace['id'],
+    newMessages: ChatMessage[],
+  ): void {
+    setChatSessions((currentSessions) => {
+      const sessionMessages = currentSessions[workspaceId] ?? [];
+
+      return {
+        ...currentSessions,
+        [workspaceId]: [...sessionMessages, ...newMessages],
+      };
+    });
+  }
+
+  function handleSelectWorkspace(workspace: Workspace): void {
+    setSelectedWorkspace(workspace);
+    setMessage('');
+  }
+
   function handleSendMessage(): void {
     const trimmedMessage = message.trim();
 
@@ -37,34 +70,39 @@ export function App() {
       return;
     }
 
+    const targetWorkspaceId = selectedWorkspace.id;
     const userMessage = createMessage('user', trimmedMessage);
-    const assistantMessage = createMessage('assistant', assistantTestResponse);
 
-    setMessages((currentMessages) => [
-      ...currentMessages,
-      userMessage,
-      assistantMessage,
-    ]);
+    appendMessagesToSession(targetWorkspaceId, [userMessage]);
     setMessage('');
+
+    const timeoutId = window.setTimeout(() => {
+      const assistantMessage = createMessage('assistant', assistantTestResponse);
+      appendMessagesToSession(targetWorkspaceId, [assistantMessage]);
+      assistantResponseTimeouts.current =
+        assistantResponseTimeouts.current.filter((id) => id !== timeoutId);
+    }, 400);
+
+    assistantResponseTimeouts.current.push(timeoutId);
   }
 
   return (
     <div className="app-layout">
       <Sidebar
         selectedWorkspaceId={selectedWorkspace.id}
-        onSelectWorkspace={setSelectedWorkspace}
+        onSelectWorkspace={handleSelectWorkspace}
       />
       <main className="chat-area" aria-label={`${selectedWorkspace.label} 채팅`}>
         <ChatHeader workspaceLabel={selectedWorkspace.label} />
         <div className="message-area">
-          {messages.length === 0 ? (
+          {currentMessages.length === 0 ? (
             <WelcomePanel onSelectPrompt={handleSelectPrompt} />
           ) : (
-            <ChatMessages messages={messages} />
+            <ChatMessages messages={currentMessages} />
           )}
         </div>
         <div className="chat-composer">
-          {messages.length > 0 ? (
+          {currentMessages.length > 0 ? (
             <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
           ) : null}
           <ChatInput

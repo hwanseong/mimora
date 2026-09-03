@@ -16,7 +16,7 @@ export function QuickPromptBar({
           }}
           type="button"
         >
-          {prompt.label}
+          {prompt.compactLabel}
         </button>
       ))}
     </div>
