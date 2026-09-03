@@ -34,9 +34,13 @@ function NavSection({
 }
 
 export function Sidebar({
+  isSettingsActive,
+  onOpenSettings,
   selectedWorkspaceId,
   onSelectWorkspace,
 }: {
+  isSettingsActive: boolean;
+  onOpenSettings: () => void;
   selectedWorkspaceId: string;
   onSelectWorkspace: (workspace: Workspace) => void;
 }) {
@@ -59,7 +63,12 @@ export function Sidebar({
         <button className="nav-item" type="button">
           최근 대화
         </button>
-        <button className="nav-item" type="button">
+        <button
+          aria-pressed={isSettingsActive}
+          className={`nav-item${isSettingsActive ? ' active' : ''}`}
+          onClick={onOpenSettings}
+          type="button"
+        >
           설정
         </button>
       </div>

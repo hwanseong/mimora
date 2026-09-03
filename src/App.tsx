@@ -9,11 +9,13 @@ import { ChatInput } from './components/ChatInput';
 import { ChatMessages } from './components/ChatMessages';
 import { ContextPanel } from './components/ContextPanel';
 import { QuickPromptBar } from './components/QuickPromptBar';
+import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
 import { WelcomePanel } from './components/WelcomePanel';
 import { defaultWorkspace, type Workspace } from './workspaces';
 
 export function App() {
+  const [activeView, setActiveView] = useState<'chat' | 'settings'>('chat');
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
   const [message, setMessage] = useState('');
@@ -60,6 +62,7 @@ export function App() {
 
   function handleSelectWorkspace(workspace: Workspace): void {
     setSelectedWorkspace(workspace);
+    setActiveView('chat');
     setMessage('');
   }
 
@@ -89,29 +92,43 @@ export function App() {
   return (
     <div className="app-layout">
       <Sidebar
+        isSettingsActive={activeView === 'settings'}
+        onOpenSettings={() => {
+          setActiveView('settings');
+          setMessage('');
+        }}
         selectedWorkspaceId={selectedWorkspace.id}
         onSelectWorkspace={handleSelectWorkspace}
       />
-      <main className="chat-area" aria-label={`${selectedWorkspace.label} 채팅`}>
-        <ChatHeader workspaceLabel={selectedWorkspace.label} />
-        <div className="message-area">
-          {currentMessages.length === 0 ? (
-            <WelcomePanel onSelectPrompt={handleSelectPrompt} />
-          ) : (
-            <ChatMessages messages={currentMessages} />
-          )}
-        </div>
-        <div className="chat-composer">
-          {currentMessages.length > 0 ? (
-            <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
-          ) : null}
-          <ChatInput
-            ref={chatInputRef}
-            value={message}
-            onChange={setMessage}
-            onSubmit={handleSendMessage}
-          />
-        </div>
+      <main
+        className={`chat-area${activeView === 'settings' ? ' settings-area' : ''}`}
+        aria-label={activeView === 'settings' ? '설정' : `${selectedWorkspace.label} 채팅`}
+      >
+        {activeView === 'settings' ? (
+          <SettingsView />
+        ) : (
+          <>
+            <ChatHeader workspaceLabel={selectedWorkspace.label} />
+            <div className="message-area">
+              {currentMessages.length === 0 ? (
+                <WelcomePanel onSelectPrompt={handleSelectPrompt} />
+              ) : (
+                <ChatMessages messages={currentMessages} />
+              )}
+            </div>
+            <div className="chat-composer">
+              {currentMessages.length > 0 ? (
+                <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
+              ) : null}
+              <ChatInput
+                ref={chatInputRef}
+                value={message}
+                onChange={setMessage}
+                onSubmit={handleSendMessage}
+              />
+            </div>
+          </>
+        )}
       </main>
       <ContextPanel />
     </div>
