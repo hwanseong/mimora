@@ -6,7 +6,12 @@ import type {
   UpdateVaultInput,
   VaultDirectorySelection,
 } from './settings';
-import type { VaultFile, VaultFileContent } from './vaultFiles';
+import type {
+  VaultFile,
+  VaultFileContent,
+  VaultSearchInput,
+  VaultSearchResult,
+} from './vaultFiles';
 
 type MimoraApi = {
     appName: string;
@@ -20,6 +25,7 @@ type MimoraApi = {
       vaultId: string,
       relativePath: string,
     ) => Promise<VaultFileContent>;
+    searchVaultFiles: (input: VaultSearchInput) => Promise<VaultSearchResult[]>;
 };
 
 declare global {

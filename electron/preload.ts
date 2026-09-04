@@ -6,7 +6,12 @@ import type {
   UpdateVaultInput,
   VaultDirectorySelection,
 } from '../src/settings';
-import type { VaultFile, VaultFileContent } from '../src/vaultFiles';
+import type {
+  VaultFile,
+  VaultFileContent,
+  VaultSearchInput,
+  VaultSearchResult,
+} from '../src/vaultFiles';
 
 function unwrapIpcResult<T>(result: MimoraIpcResult<T>): T {
   if (result.ok) {
@@ -59,5 +64,11 @@ contextBridge.exposeInMainWorld('mimora', {
         vaultId,
         relativePath,
       ) as Promise<MimoraIpcResult<VaultFileContent>>
+    ).then(unwrapIpcResult),
+  searchVaultFiles: (input: VaultSearchInput) =>
+    (
+      ipcRenderer.invoke('vaultFiles:search', input) as Promise<
+        MimoraIpcResult<VaultSearchResult[]>
+      >
     ).then(unwrapIpcResult),
 });

@@ -2,7 +2,12 @@ import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
-import type { VaultFile, VaultFileContent } from '../src/vaultFiles';
+import type {
+  VaultFile,
+  VaultFileContent,
+  VaultSearchInput,
+  VaultSearchResult,
+} from '../src/vaultFiles';
 
 type SettingsStore = ReturnType<typeof createSettingsStore>;
 
@@ -274,6 +279,110 @@ async function readMarkdownFile(
   }
 }
 
+function validateSearchInput(input: unknown): VaultSearchInput {
+  if (!input || typeof input !== 'object') {
+    throw new Error('검색 요청이 올바르지 않습니다.');
+  }
+
+  const candidate = input as Partial<VaultSearchInput>;
+  const query = typeof candidate.query === 'string' ? candidate.query.trim() : '';
+
+  if (!query) {
+    throw new Error('검색어를 입력하세요.');
+  }
+
+  if (candidate.scope !== 'current' && candidate.scope !== 'all') {
+    throw new Error('검색 범위가 올바르지 않습니다.');
+  }
+
+  if (
+    candidate.scope === 'current' &&
+    (typeof candidate.vaultId !== 'string' || !candidate.vaultId)
+  ) {
+    throw new Error('검색할 Vault를 선택하세요.');
+  }
+
+  return {
+    query,
+    scope: candidate.scope,
+    ...(candidate.scope === 'current' ? { vaultId: candidate.vaultId } : {}),
+  };
+}
+
+function createSearchSnippet(content: string, matchIndex: number, query: string): string {
+  const contextBefore = 70;
+  const contextAfter = 90;
+  const startIndex = Math.max(0, matchIndex - contextBefore);
+  const endIndex = Math.min(
+    content.length,
+    matchIndex + query.length + contextAfter,
+  );
+  const excerpt = content
+    .slice(startIndex, endIndex)
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
+    .replace(/^[ \t]*>[ \t]?/gm, '')
+    .replace(/^[ \t]*(?:[-+*]|\d+\.)[ \t]+/gm, '')
+    .replace(/[*_`~]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return `${startIndex > 0 ? '…' : ''}${excerpt}${
+    endIndex < content.length ? '…' : ''
+  }`;
+}
+
+async function searchVault(
+  vault: VaultConfig,
+  query: string,
+): Promise<VaultSearchResult[]> {
+  const rootPath = await resolveVaultRoot(vault);
+  const files: VaultFile[] = [];
+  const normalizedQuery = query.toLocaleLowerCase();
+  const results: VaultSearchResult[] = [];
+
+  await walkMarkdownFiles(rootPath, rootPath, [], files);
+
+  for (const file of files) {
+    const baseResult = {
+      vaultId: vault.id,
+      vaultName: vault.name,
+      vaultType: vault.type,
+      security: vault.security,
+      relativePath: file.relativePath,
+      fileName: file.name,
+    };
+
+    if (file.name.toLocaleLowerCase().includes(normalizedQuery)) {
+      results.push({ ...baseResult, matchType: 'filename' });
+      continue;
+    }
+
+    if (file.relativePath.toLocaleLowerCase().includes(normalizedQuery)) {
+      results.push({ ...baseResult, matchType: 'path' });
+      continue;
+    }
+
+    try {
+      const { content } = await readMarkdownFile(rootPath, file.relativePath);
+      const matchIndex = content.toLocaleLowerCase().indexOf(normalizedQuery);
+
+      if (matchIndex >= 0) {
+        results.push({
+          ...baseResult,
+          matchType: 'content',
+          snippet: createSearchSnippet(content, matchIndex, query),
+        });
+      }
+    } catch (error) {
+      console.warn('Skipped an unreadable Vault file during search.', error);
+    }
+  }
+
+  return results;
+}
+
 export function createVaultFilesService(settingsStore: SettingsStore) {
   return {
     async listVaultFiles(vaultId: unknown): Promise<VaultFile[]> {
@@ -295,6 +404,42 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
       const rootPath = await resolveVaultRoot(vault);
 
       return readMarkdownFile(rootPath, relativePath);
+    },
+
+    async searchVaultFiles(input: unknown): Promise<VaultSearchResult[]> {
+      const searchInput = validateSearchInput(input);
+      const settings = await settingsStore.getSettings();
+
+      if (settings.vaults.length === 0) {
+        throw new Error('등록된 Vault가 없습니다. 설정에서 Vault를 추가하세요.');
+      }
+
+      if (searchInput.scope === 'current') {
+        const vault = await getVault(settingsStore, searchInput.vaultId);
+        return searchVault(vault, searchInput.query);
+      }
+
+      const vaultSearches = await Promise.all(
+        settings.vaults.map(async (vault) => {
+          try {
+            return {
+              searched: true,
+              results: await searchVault(vault, searchInput.query),
+            };
+          } catch (error) {
+            console.warn('Skipped an unavailable Vault during search.', error);
+            return { searched: false, results: [] as VaultSearchResult[] };
+          }
+        }),
+      );
+
+      if (!vaultSearches.some((result) => result.searched)) {
+        throw new Error(
+          '검색할 수 있는 Vault가 없습니다. 설정에서 Vault 경로와 권한을 확인하세요.',
+        );
+      }
+
+      return vaultSearches.flatMap((result) => result.results);
     },
   };
 }

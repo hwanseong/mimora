@@ -9,7 +9,11 @@ import {
 } from '../src/settings';
 import { createSettingsStore } from './settingsStore';
 import { createVaultFilesService } from './vaultFiles';
-import type { VaultFile, VaultFileContent } from '../src/vaultFiles';
+import type {
+  VaultFile,
+  VaultFileContent,
+  VaultSearchResult,
+} from '../src/vaultFiles';
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
@@ -109,6 +113,15 @@ function registerVaultFileHandlers(): void {
       relativePath: unknown,
     ): Promise<MimoraIpcResult<VaultFileContent>> =>
       toIpcResult(() => vaultFilesService.readVaultFile(vaultId, relativePath)),
+  );
+
+  ipcMain.handle(
+    'vaultFiles:search',
+    async (
+      _event,
+      input: unknown,
+    ): Promise<MimoraIpcResult<VaultSearchResult[]>> =>
+      toIpcResult(() => vaultFilesService.searchVaultFiles(input)),
   );
 }
 

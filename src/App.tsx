@@ -4,6 +4,11 @@ import {
   type ChatMessage,
   type ChatSessions,
 } from './chat';
+import {
+  type AttachedContext,
+  type WorkspaceContexts,
+} from './attachedContext';
+import { AttachedContextBar } from './components/AttachedContextBar';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatInput } from './components/ChatInput';
 import { ChatMessages } from './components/ChatMessages';
@@ -23,9 +28,13 @@ export function App() {
     useState<Workspace>(defaultWorkspace);
   const [message, setMessage] = useState('');
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
+  const [workspaceContexts, setWorkspaceContexts] =
+    useState<WorkspaceContexts>({});
+  const workspaceContextsRef = useRef<WorkspaceContexts>({});
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const assistantResponseTimeouts = useRef<number[]>([]);
   const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
+  const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
 
   useEffect(() => {
     return () => {
@@ -92,6 +101,48 @@ export function App() {
     assistantResponseTimeouts.current.push(timeoutId);
   }
 
+  function attachContextToWorkspace(
+    workspaceId: Workspace['id'],
+    context: AttachedContext,
+  ): boolean {
+    const existingContexts = workspaceContextsRef.current[workspaceId] ?? [];
+
+    if (existingContexts.some((item) => item.id === context.id)) {
+      return false;
+    }
+
+    const nextContexts = {
+      ...workspaceContextsRef.current,
+      [workspaceId]: [...existingContexts, context],
+    };
+
+    workspaceContextsRef.current = nextContexts;
+    setWorkspaceContexts(nextContexts);
+    return true;
+  }
+
+  function removeContextFromWorkspace(
+    workspaceId: Workspace['id'],
+    contextId: string,
+  ): void {
+    const existingContexts = workspaceContextsRef.current[workspaceId] ?? [];
+    const nextWorkspaceContexts = existingContexts.filter(
+      (context) => context.id !== contextId,
+    );
+
+    if (nextWorkspaceContexts.length === existingContexts.length) {
+      return;
+    }
+
+    const nextContexts = {
+      ...workspaceContextsRef.current,
+      [workspaceId]: nextWorkspaceContexts,
+    };
+
+    workspaceContextsRef.current = nextContexts;
+    setWorkspaceContexts(nextContexts);
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -122,6 +173,10 @@ export function App() {
           <SettingsView />
         ) : activeView === 'vault-browser' ? (
           <VaultBrowserView
+            currentWorkspace={selectedWorkspace}
+            onAttachContext={(context) =>
+              attachContextToWorkspace(selectedWorkspace.id, context)
+            }
             onOpenSettings={() => {
               setActiveView('settings');
             }}
@@ -137,6 +192,12 @@ export function App() {
               )}
             </div>
             <div className="chat-composer">
+              <AttachedContextBar
+                contexts={currentContexts}
+                onRemove={(contextId) => {
+                  removeContextFromWorkspace(selectedWorkspace.id, contextId);
+                }}
+              />
               {currentMessages.length > 0 ? (
                 <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
               ) : null}
