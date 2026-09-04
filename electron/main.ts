@@ -8,6 +8,8 @@ import {
   type VaultDirectorySelection,
 } from '../src/settings';
 import { createSettingsStore } from './settingsStore';
+import { createVaultFilesService } from './vaultFiles';
+import type { VaultFile, VaultFileContent } from '../src/vaultFiles';
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
@@ -19,6 +21,7 @@ function getSettingsPath(): string {
 const settingsStore = createSettingsStore({
   getSettingsPath,
 });
+const vaultFilesService = createVaultFilesService(settingsStore);
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '설정 처리 중 오류가 발생했습니다.';
@@ -91,6 +94,24 @@ function registerSettingsHandlers(): void {
   );
 }
 
+function registerVaultFileHandlers(): void {
+  ipcMain.handle(
+    'vaultFiles:list',
+    async (_event, vaultId: unknown): Promise<MimoraIpcResult<VaultFile[]>> =>
+      toIpcResult(() => vaultFilesService.listVaultFiles(vaultId)),
+  );
+
+  ipcMain.handle(
+    'vaultFiles:read',
+    async (
+      _event,
+      vaultId: unknown,
+      relativePath: unknown,
+    ): Promise<MimoraIpcResult<VaultFileContent>> =>
+      toIpcResult(() => vaultFilesService.readVaultFile(vaultId, relativePath)),
+  );
+}
+
 function createMainWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1100,
@@ -121,6 +142,7 @@ function createMainWindow(): void {
 }
 
 registerSettingsHandlers();
+registerVaultFileHandlers();
 
 void app.whenReady().then(() => {
   createMainWindow();

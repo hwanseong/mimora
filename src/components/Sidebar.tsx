@@ -34,12 +34,16 @@ function NavSection({
 }
 
 export function Sidebar({
+  isVaultBrowserActive,
   isSettingsActive,
+  onOpenVaultBrowser,
   onOpenSettings,
   selectedWorkspaceId,
   onSelectWorkspace,
 }: {
+  isVaultBrowserActive: boolean;
   isSettingsActive: boolean;
+  onOpenVaultBrowser: () => void;
   onOpenSettings: () => void;
   selectedWorkspaceId: string;
   onSelectWorkspace: (workspace: Workspace) => void;
@@ -62,6 +66,14 @@ export function Sidebar({
       <div className="sidebar-bottom">
         <button className="nav-item" type="button">
           최근 대화
+        </button>
+        <button
+          aria-pressed={isVaultBrowserActive}
+          className={`nav-item${isVaultBrowserActive ? ' active' : ''}`}
+          onClick={onOpenVaultBrowser}
+          type="button"
+        >
+          Vault Browser
         </button>
         <button
           aria-pressed={isSettingsActive}

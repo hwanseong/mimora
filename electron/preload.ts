@@ -6,6 +6,7 @@ import type {
   UpdateVaultInput,
   VaultDirectorySelection,
 } from '../src/settings';
+import type { VaultFile, VaultFileContent } from '../src/vaultFiles';
 
 function unwrapIpcResult<T>(result: MimoraIpcResult<T>): T {
   if (result.ok) {
@@ -45,4 +46,18 @@ contextBridge.exposeInMainWorld('mimora', {
     ipcRenderer.invoke(
       'settings:selectVaultDirectory',
     ) as Promise<VaultDirectorySelection | null>,
+  listVaultFiles: (vaultId: string) =>
+    (
+      ipcRenderer.invoke('vaultFiles:list', vaultId) as Promise<
+        MimoraIpcResult<VaultFile[]>
+      >
+    ).then(unwrapIpcResult),
+  readVaultFile: (vaultId: string, relativePath: string) =>
+    (
+      ipcRenderer.invoke(
+        'vaultFiles:read',
+        vaultId,
+        relativePath,
+      ) as Promise<MimoraIpcResult<VaultFileContent>>
+    ).then(unwrapIpcResult),
 });

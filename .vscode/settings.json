@@ -1,0 +1,15 @@
+{
+  "npm.packageManager": "npm",
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "editor.formatOnSave": true,
+  "files.exclude": {
+    "dist": true,
+    "dist-electron": true
+  },
+  "search.exclude": {
+    "dist": true,
+    "dist-electron": true
+  },
+  "terminal.integrated.defaultProfile.windows": "Command Prompt"
+}

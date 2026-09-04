@@ -11,11 +11,14 @@ import { ContextPanel } from './components/ContextPanel';
 import { QuickPromptBar } from './components/QuickPromptBar';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
+import { VaultBrowserView } from './components/VaultBrowserView';
 import { WelcomePanel } from './components/WelcomePanel';
 import { defaultWorkspace, type Workspace } from './workspaces';
 
 export function App() {
-  const [activeView, setActiveView] = useState<'chat' | 'settings'>('chat');
+  const [activeView, setActiveView] = useState<
+    'chat' | 'vault-browser' | 'settings'
+  >('chat');
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
   const [message, setMessage] = useState('');
@@ -92,20 +95,37 @@ export function App() {
   return (
     <div className="app-layout">
       <Sidebar
+        isVaultBrowserActive={activeView === 'vault-browser'}
         isSettingsActive={activeView === 'settings'}
+        onOpenVaultBrowser={() => {
+          setActiveView('vault-browser');
+          setMessage('');
+        }}
         onOpenSettings={() => {
           setActiveView('settings');
           setMessage('');
         }}
-        selectedWorkspaceId={selectedWorkspace.id}
+        selectedWorkspaceId={activeView === 'chat' ? selectedWorkspace.id : ''}
         onSelectWorkspace={handleSelectWorkspace}
       />
       <main
-        className={`chat-area${activeView === 'settings' ? ' settings-area' : ''}`}
-        aria-label={activeView === 'settings' ? '설정' : `${selectedWorkspace.label} 채팅`}
+        className={`chat-area${activeView !== 'chat' ? ' settings-area' : ''}`}
+        aria-label={
+          activeView === 'settings'
+            ? '설정'
+            : activeView === 'vault-browser'
+              ? 'Vault Browser'
+              : `${selectedWorkspace.label} 채팅`
+        }
       >
         {activeView === 'settings' ? (
           <SettingsView />
+        ) : activeView === 'vault-browser' ? (
+          <VaultBrowserView
+            onOpenSettings={() => {
+              setActiveView('settings');
+            }}
+          />
         ) : (
           <>
             <ChatHeader workspaceLabel={selectedWorkspace.label} />
