@@ -1,4 +1,5 @@
 import type { AutoRetrievedContext } from './autoContext';
+import type { AttachedContext } from './attachedContext';
 import type {
   LLMContextSource,
   LocalAIPerformanceMetrics,
@@ -18,6 +19,7 @@ export type ChatMessage = {
   sources?: LLMContextSource[];
   performance?: LocalAIPerformanceMetrics;
   routingDecision?: RoutingDecision;
+  manualContext?: AttachedContext[];
 };
 
 export type ChatSessions = Record<string, ChatMessage[]>;

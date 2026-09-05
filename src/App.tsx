@@ -142,6 +142,7 @@ export function App() {
       ...createMessage('user', trimmedMessage),
       autoContext: [],
       autoContextStatus: 'loading',
+      manualContext: manualContexts,
     };
     const assistantMessage: ChatMessage = {
       ...createMessage('assistant', 'Mimora가 분석 중입니다...'),
@@ -550,7 +551,10 @@ export function App() {
               {currentMessages.length === 0 ? (
                 <WelcomePanel onSelectPrompt={handleSelectPrompt} />
               ) : (
-                <ChatMessages messages={currentMessages} />
+                <ChatMessages
+                  messages={currentMessages}
+                  workspaceId={selectedWorkspace.id}
+                />
               )}
             </div>
             <div className="chat-composer">

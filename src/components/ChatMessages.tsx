@@ -1,15 +1,69 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '../chat';
 import { AutoContextPanel } from './AutoContextPanel';
 import { SourcesList } from './SourcesList';
 import { RoutingStatus } from './RoutingStatus';
+import { ExternalPayloadPreviewModal } from './ExternalPayloadPreviewModal';
+import {
+  createExternalPayloadPreview,
+  type ExternalPayloadPreview,
+} from '../security/externalPayloadPreview';
 
-export function ChatMessages({ messages }: { messages: ChatMessage[] }) {
+export function ChatMessages({
+  messages,
+  workspaceId,
+}: {
+  messages: ChatMessage[];
+  workspaceId: string;
+}) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [preview, setPreview] = useState<ExternalPayloadPreview | null>(null);
+  const [loadingMessageId, setLoadingMessageId] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
+
+  async function openExternalPreview(message: ChatMessage): Promise<void> {
+    if (!message.routingDecision) {
+      return;
+    }
+
+    setLoadingMessageId(message.id);
+    setPreviewError(null);
+
+    try {
+      const settings = await window.mimora.getSettings();
+      const nextPreview = createExternalPayloadPreview({
+        workspaceId,
+        effectiveSecurity: message.routingDecision.security,
+        question: message.content,
+        manualContexts: message.manualContext ?? [],
+        autoContexts: message.autoContext ?? [],
+        maskingEntries: settings.masking.entries,
+      });
+
+      console.info('[Mimora External Preview]', {
+        workspace: nextPreview.workspaceId,
+        security: nextPreview.effectiveSecurity,
+        documents: nextPreview.documentCount,
+        replacementCount: nextPreview.totalReplacementCount,
+        maskedQuestionChars: nextPreview.maskedQuestion.length,
+        maskedContextChars: nextPreview.maskedContextChars,
+        status: nextPreview.status,
+      });
+      setPreview(nextPreview);
+    } catch (error) {
+      setPreviewError(
+        error instanceof Error
+          ? error.message
+          : 'External Preview를 생성하지 못했습니다.',
+      );
+    } finally {
+      setLoadingMessageId(null);
+    }
+  }
 
   return (
     <section className="chat-messages" aria-label="대화 메시지">
@@ -39,6 +93,20 @@ export function ChatMessages({ messages }: { messages: ChatMessage[] }) {
                   error={message.autoContextError}
                   status={message.autoContextStatus}
                 />
+              ) : null}
+              {message.role === 'user' && message.routingDecision ? (
+                <button
+                  className="external-preview-trigger"
+                  disabled={loadingMessageId !== null}
+                  onClick={() => {
+                    void openExternalPreview(message);
+                  }}
+                  type="button"
+                >
+                  {loadingMessageId === message.id
+                    ? 'Preview 생성 중…'
+                    : 'External Preview'}
+                </button>
               ) : null}
               {message.role === 'assistant' && message.sources ? (
                 <SourcesList sources={message.sources} />
@@ -71,8 +139,21 @@ export function ChatMessages({ messages }: { messages: ChatMessage[] }) {
             </div>
           </article>
         ))}
+        {previewError ? (
+          <p className="external-preview-error" role="alert">
+            {previewError}
+          </p>
+        ) : null}
         <div ref={bottomRef} />
       </div>
+      {preview ? (
+        <ExternalPayloadPreviewModal
+          onClose={() => {
+            setPreview(null);
+          }}
+          preview={preview}
+        />
+      ) : null}
     </section>
   );
 }
