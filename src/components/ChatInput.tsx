@@ -3,11 +3,12 @@ import { forwardRef } from 'react';
 export const ChatInput = forwardRef<
   HTMLTextAreaElement,
   {
+    disabled?: boolean;
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
   }
->(function ChatInput({ value, onChange, onSubmit }, ref) {
+>(function ChatInput({ disabled = false, value, onChange, onSubmit }, ref) {
   return (
     <form
       className="chat-input-bar"
@@ -19,6 +20,7 @@ export const ChatInput = forwardRef<
     >
       <textarea
         aria-label="메시지"
+        disabled={disabled}
         onChange={(event) => {
           onChange(event.target.value);
         }}
@@ -28,13 +30,13 @@ export const ChatInput = forwardRef<
             onSubmit();
           }
         }}
-        placeholder="메시지를 입력하세요"
+        placeholder={disabled ? 'Mimora가 분석 중입니다...' : '메시지를 입력하세요'}
         ref={ref}
         rows={1}
         value={value}
       />
-      <button aria-label="전송" type="submit">
-        전송
+      <button aria-label="전송" disabled={disabled} type="submit">
+        {disabled ? '분석 중' : '전송'}
       </button>
     </form>
   );

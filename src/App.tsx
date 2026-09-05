@@ -1,14 +1,16 @@
 import { useRef, useState } from 'react';
-import {
-  getAssistantTestResponse,
-  type ChatMessage,
-  type ChatSessions,
-} from './chat';
+import { type ChatMessage, type ChatSessions } from './chat';
 import type { AutoRetrievedContext } from './autoContext';
 import {
   type AttachedContext,
   type WorkspaceContexts,
 } from './attachedContext';
+import {
+  RECENT_HISTORY_MESSAGE_LIMIT,
+  type LLMChatMessage,
+  type LLMContextDocument,
+  type LocalAIPerformanceMetrics,
+} from './llmChat';
 import { AttachedContextBar } from './components/AttachedContextBar';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatInput } from './components/ChatInput';
@@ -32,9 +34,16 @@ export function App() {
   const [workspaceContexts, setWorkspaceContexts] =
     useState<WorkspaceContexts>({});
   const workspaceContextsRef = useRef<WorkspaceContexts>({});
+  const generatingWorkspaceIdsRef = useRef<Set<string>>(new Set());
+  const [generatingWorkspaceIds, setGeneratingWorkspaceIds] = useState<
+    Set<string>
+  >(new Set());
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
   const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
+  const isCurrentWorkspaceGenerating = generatingWorkspaceIds.has(
+    selectedWorkspace.id,
+  );
 
   function handleSelectPrompt(promptText: string): void {
     setMessage(promptText);
@@ -71,51 +80,216 @@ export function App() {
   }
 
   function handleSendMessage(): void {
+    const endToEndStartedTime = performance.now();
     const trimmedMessage = message.trim();
 
-    if (!trimmedMessage) {
+    if (
+      !trimmedMessage ||
+      generatingWorkspaceIdsRef.current.has(selectedWorkspace.id)
+    ) {
       return;
     }
 
     const targetWorkspaceId = selectedWorkspace.id;
+    const previousMessages = (chatSessions[targetWorkspaceId] ?? []).slice(
+      -RECENT_HISTORY_MESSAGE_LIMIT,
+    );
+    const manualContexts = [
+      ...(workspaceContextsRef.current[targetWorkspaceId] ?? []),
+    ];
     const userMessage: ChatMessage = {
       ...createMessage('user', trimmedMessage),
       autoContext: [],
       autoContextStatus: 'loading',
     };
+    const assistantMessage: ChatMessage = {
+      ...createMessage('assistant', 'Mimora가 분석 중입니다...'),
+      generationStatus: 'loading',
+    };
 
-    appendMessagesToSession(targetWorkspaceId, [userMessage]);
+    setWorkspaceGenerating(targetWorkspaceId, true);
+    appendMessagesToSession(targetWorkspaceId, [userMessage, assistantMessage]);
     setMessage('');
 
-    void retrieveAutoContextForMessage(
+    void completeChatRequest(
       targetWorkspaceId,
       userMessage.id,
+      assistantMessage.id,
       trimmedMessage,
+      previousMessages,
+      manualContexts,
+      endToEndStartedTime,
     );
   }
 
-  async function retrieveAutoContextForMessage(
+  function toLLMContextDocument(
+    context: AttachedContext | AutoRetrievedContext,
+  ): LLMContextDocument {
+    return {
+      vaultId: context.vaultId,
+      vaultName: context.vaultName,
+      vaultType: context.vaultType,
+      security: context.security,
+      relativePath: context.relativePath,
+      fileName: context.fileName,
+      ...('snippet' in context ? { snippet: context.snippet } : {}),
+      content: context.content,
+    };
+  }
+
+  function getChatErrorMessage(error: unknown): string {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : 'Local AI 응답을 생성하지 못했습니다.';
+
+    if (
+      errorMessage.includes('Error invoking remote method') ||
+      errorMessage.includes('\n    at ')
+    ) {
+      return 'Local AI 응답을 생성하지 못했습니다. Settings에서 연결 상태를 확인하세요.';
+    }
+
+    return errorMessage;
+  }
+
+  async function completeChatRequest(
     workspaceId: Workspace['id'],
     userMessageId: string,
+    assistantMessageId: string,
     query: string,
+    previousMessages: ChatMessage[],
+    manualContexts: AttachedContext[],
+    endToEndStartedTime: number,
   ): Promise<void> {
+    let autoContext: AutoRetrievedContext[] = [];
+    let autoContextError: string | undefined;
+    const retrievalStartedTime = performance.now();
+
     try {
-      const autoContext = await window.mimora.retrieveAutoContext({
+      autoContext = await window.mimora.retrieveAutoContext({
         query,
         limit: 5,
       });
-
-      completeAutoContextRetrieval(workspaceId, userMessageId, autoContext);
     } catch (error) {
-      completeAutoContextRetrieval(
-        workspaceId,
-        userMessageId,
-        [],
+      autoContextError =
         error instanceof Error
           ? error.message
-          : '자동 참조 문서를 검색하지 못했습니다.',
-      );
+          : '자동 참조 문서를 검색하지 못했습니다.';
     }
+    const retrievalMs = performance.now() - retrievalStartedTime;
+
+    completeAutoContextRetrieval(
+      workspaceId,
+      userMessageId,
+      autoContext,
+      autoContextError,
+    );
+
+    try {
+      const history: LLMChatMessage[] = previousMessages.map(
+        (previousMessage) => ({
+          role: previousMessage.role,
+          content: previousMessage.content,
+        }),
+      );
+      const response = await window.mimora.chatWithLocalAI({
+        workspaceId,
+        question: query,
+        history,
+        manualContexts: manualContexts.map(toLLMContextDocument),
+        autoContexts: autoContext.map(toLLMContextDocument),
+      });
+      const metrics: LocalAIPerformanceMetrics = {
+        ...response.performance,
+        retrievalMs,
+        totalElapsedMs: performance.now() - endToEndStartedTime,
+      };
+
+      console.info('[Mimora Performance]', {
+        workspaceId,
+        queryChars: metrics.queryChars,
+        retrieval: {
+          ms: metrics.retrievalMs,
+        },
+        contextBuild: {
+          ms: metrics.contextBuildMs,
+        },
+        context: {
+          manualCount: metrics.manualContextCount,
+          autoCount: metrics.autoContextCount,
+          deduplicatedDocumentCount: metrics.deduplicatedDocumentCount,
+          documentsUsed: metrics.documentCount,
+          rawChars: metrics.rawContextChars,
+          finalChars: metrics.finalContextChars,
+        },
+        history: {
+          messages: metrics.historyMessageCount,
+          chars: metrics.historyChars,
+        },
+        prompt: {
+          systemChars: metrics.systemPromptChars,
+          finalUserPromptChars: metrics.finalPromptChars,
+          requestChars: metrics.requestChars,
+        },
+        ollama: {
+          roundTripMs: metrics.ollamaRoundTripMs,
+          ...metrics.ollama,
+        },
+        responseChars: metrics.responseChars,
+        total: {
+          elapsedMs: metrics.totalElapsedMs,
+        },
+      });
+
+      completeAssistantMessage(workspaceId, assistantMessageId, {
+        content: response.content,
+        generationStatus: 'complete',
+        sources: response.sources,
+        performance: metrics,
+      });
+    } catch (error) {
+      const errorMessage = getChatErrorMessage(error);
+
+      completeAssistantMessage(workspaceId, assistantMessageId, {
+        content: errorMessage,
+        generationStatus: 'error',
+        ...(errorMessage === 'Local AI 응답 시간이 초과되었습니다.'
+          ? {
+              generationErrorDetail:
+                '참고 문서가 많거나 Local AI 처리 속도가 느린 경우 발생할 수 있습니다.',
+            }
+          : {}),
+      });
+    } finally {
+      setWorkspaceGenerating(workspaceId, false);
+    }
+  }
+
+  function completeAssistantMessage(
+    workspaceId: Workspace['id'],
+    assistantMessageId: string,
+    update: Pick<
+      ChatMessage,
+      | 'content'
+      | 'generationStatus'
+      | 'generationErrorDetail'
+      | 'sources'
+      | 'performance'
+    >,
+  ): void {
+    setChatSessions((currentSessions) => {
+      const sessionMessages = currentSessions[workspaceId] ?? [];
+
+      return {
+        ...currentSessions,
+        [workspaceId]: sessionMessages.map((chatMessage) =>
+          chatMessage.id === assistantMessageId
+            ? { ...chatMessage, ...update }
+            : chatMessage,
+        ),
+      };
+    });
   }
 
   function completeAutoContextRetrieval(
@@ -141,26 +315,31 @@ export function App() {
         autoContextStatus: errorMessage ? 'error' : 'complete',
         ...(errorMessage ? { autoContextError: errorMessage } : {}),
       };
-      const assistantMessage: ChatMessage = {
-        id: `assistant-for-${userMessageId}`,
-        role: 'assistant',
-        content: getAssistantTestResponse(autoContext.length, Boolean(errorMessage)),
-        createdAt: new Date().toISOString(),
-      };
       const nextSessionMessages = [...sessionMessages];
 
-      nextSessionMessages.splice(
-        userMessageIndex,
-        1,
-        updatedUserMessage,
-        assistantMessage,
-      );
+      nextSessionMessages.splice(userMessageIndex, 1, updatedUserMessage);
 
       return {
         ...currentSessions,
         [workspaceId]: nextSessionMessages,
       };
     });
+  }
+
+  function setWorkspaceGenerating(
+    workspaceId: Workspace['id'],
+    isGenerating: boolean,
+  ): void {
+    const nextWorkspaceIds = new Set(generatingWorkspaceIdsRef.current);
+
+    if (isGenerating) {
+      nextWorkspaceIds.add(workspaceId);
+    } else {
+      nextWorkspaceIds.delete(workspaceId);
+    }
+
+    generatingWorkspaceIdsRef.current = nextWorkspaceIds;
+    setGeneratingWorkspaceIds(nextWorkspaceIds);
   }
 
   function attachContextToWorkspace(
@@ -264,6 +443,7 @@ export function App() {
                 <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
               ) : null}
               <ChatInput
+                disabled={isCurrentWorkspaceGenerating}
                 ref={chatInputRef}
                 value={message}
                 onChange={setMessage}

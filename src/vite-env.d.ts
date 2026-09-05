@@ -10,6 +10,7 @@ import type {
   LocalAIConnectionInput,
   LocalAISettings,
 } from './localAI';
+import type { LocalAIChatInput, LocalAIChatResult } from './llmChat';
 import type {
   AddVaultInput,
   MimoraSettings,
@@ -38,6 +39,9 @@ type MimoraApi = {
     testLocalAIConnection: (
       input: LocalAIConnectionInput,
     ) => Promise<ConnectionTestResult>;
+    chatWithLocalAI: (
+      input: LocalAIChatInput,
+    ) => Promise<LocalAIChatResult>;
     selectVaultDirectory: () => Promise<VaultDirectorySelection | null>;
     listVaultFiles: (vaultId: string) => Promise<VaultFile[]>;
     readVaultFile: (

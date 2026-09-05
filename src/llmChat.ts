@@ -1,0 +1,113 @@
+import type { VaultSecurity, VaultType } from './settings';
+
+export const RECENT_HISTORY_MESSAGE_LIMIT = 4;
+
+export type LLMChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+};
+
+export type LLMChatRequest = {
+  messages: LLMChatMessage[];
+};
+
+export type LLMChatResponse = {
+  content: string;
+  model?: string;
+  done?: boolean;
+  performance?: OllamaResponsePerformance;
+};
+
+export type OllamaResponsePerformance = {
+  totalDurationNs?: number;
+  loadDurationNs?: number;
+  promptEvalCount?: number;
+  promptEvalDurationNs?: number;
+  evalCount?: number;
+  evalDurationNs?: number;
+};
+
+export type OllamaPerformanceMetrics = {
+  totalMs?: number;
+  loadMs?: number;
+  promptEvalCount?: number;
+  promptEvalMs?: number;
+  promptTokensPerSecond?: number;
+  evalCount?: number;
+  evalMs?: number;
+  generationTokensPerSecond?: number;
+};
+
+export type LocalAIExecutionMetrics = {
+  contextBuildMs: number;
+  ollamaRoundTripMs: number;
+  queryChars: number;
+  manualContextCount: number;
+  autoContextCount: number;
+  documentCount: number;
+  deduplicatedDocumentCount: number;
+  rawContextChars: number;
+  finalContextChars: number;
+  historyMessageCount: number;
+  historyChars: number;
+  systemPromptChars: number;
+  finalPromptChars: number;
+  requestChars: number;
+  responseChars: number;
+  ollamaRequestStartedAt: string;
+  ollamaResponseCompletedAt: string;
+  ollama?: OllamaPerformanceMetrics;
+};
+
+export type LocalAIPerformanceMetrics = LocalAIExecutionMetrics & {
+  retrievalMs: number;
+  totalElapsedMs: number;
+};
+
+export type LLMContextDocument = {
+  vaultId: string;
+  vaultName: string;
+  vaultType: VaultType;
+  security: VaultSecurity;
+  relativePath: string;
+  fileName: string;
+  snippet?: string;
+  content: string;
+};
+
+export type LLMContextSource = Omit<
+  LLMContextDocument,
+  'content' | 'snippet'
+>;
+
+export type LLMChatDiagnostics = {
+  queryChars: number;
+  manualDocumentCount: number;
+  autoDocumentCount: number;
+  deduplicatedDocumentCount: number;
+  deliveredDocumentCount: number;
+  manualRawChars: number;
+  autoRawChars: number;
+  rawContextChars: number;
+  deduplicatedRawChars: number;
+  finalContextChars: number;
+  historyMessageCount: number;
+  historyChars: number;
+  systemPromptChars: number;
+  finalUserPromptChars: number;
+  totalRequestChars: number;
+  requestMessageCount: number;
+};
+
+export type LocalAIChatInput = {
+  workspaceId: string;
+  question: string;
+  history: LLMChatMessage[];
+  manualContexts: LLMContextDocument[];
+  autoContexts: LLMContextDocument[];
+};
+
+export type LocalAIChatResult = Omit<LLMChatResponse, 'performance'> & {
+  sources: LLMContextSource[];
+  performance: LocalAIExecutionMetrics;
+};

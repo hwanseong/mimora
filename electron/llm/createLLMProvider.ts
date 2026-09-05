@@ -18,5 +18,12 @@ export function createLLMProvider(input: unknown): LLMProvider {
     throw new Error('지원하지 않는 Local AI Provider 설정입니다.');
   }
 
-  return new OllamaProvider(input.endpoint);
+  const model =
+    'model' in input &&
+    typeof input.model === 'string' &&
+    input.model.trim()
+      ? input.model.trim()
+      : null;
+
+  return new OllamaProvider(input.endpoint, model);
 }

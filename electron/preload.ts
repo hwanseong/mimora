@@ -10,6 +10,10 @@ import type {
   LocalAISettings,
 } from '../src/localAI';
 import type {
+  LocalAIChatInput,
+  LocalAIChatResult,
+} from '../src/llmChat';
+import type {
   AddVaultInput,
   MimoraIpcResult,
   MimoraSettings,
@@ -83,6 +87,12 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('localAI:testConnection', input) as Promise<
         MimoraIpcResult<ConnectionTestResult>
+      >
+    ).then(unwrapIpcResult),
+  chatWithLocalAI: (input: LocalAIChatInput) =>
+    (
+      ipcRenderer.invoke('localAI:chat', input) as Promise<
+        MimoraIpcResult<LocalAIChatResult>
       >
     ).then(unwrapIpcResult),
   readVaultFile: (vaultId: string, relativePath: string) =>
