@@ -1134,6 +1134,134 @@ button {
   line-height: 1.4;
 }
 
+.local-ai-card {
+  display: grid;
+  gap: 12px;
+  width: min(900px, 100%);
+  margin: 0 auto 16px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
+}
+
+.local-ai-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.local-ai-header h2,
+.local-ai-header p,
+.local-ai-messages p {
+  margin: 0;
+}
+
+.local-ai-header h2 {
+  color: #111827;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.local-ai-header p {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.local-ai-connection {
+  flex: 0 0 auto;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.local-ai-connection.is-connected {
+  color: #237a4b;
+}
+
+.local-ai-form {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.local-ai-form label {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.local-ai-form label > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.local-ai-form input,
+.local-ai-form select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  padding: 6px 9px;
+  font: inherit;
+  outline: 0;
+}
+
+.local-ai-form input:focus,
+.local-ai-form select:focus {
+  border-color: #b8c0cc;
+  box-shadow: 0 0 0 3px rgb(32 41 56 / 8%);
+}
+
+.local-ai-form select:disabled {
+  background: #f8fafc;
+  color: #475467;
+}
+
+.local-ai-endpoint-field,
+.local-ai-model-field,
+.local-ai-actions {
+  grid-column: 1 / -1;
+}
+
+.local-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.local-ai-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.local-ai-messages {
+  display: grid;
+  gap: 4px;
+  min-height: 16px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.local-ai-messages .success {
+  color: #237a4b;
+}
+
+.local-ai-messages .error {
+  color: #9b3b37;
+}
+
+.local-ai-messages .warning {
+  color: #9a6700;
+}
+
 .empty-vaults {
   border: 1px dashed #d9dde5;
   border-radius: 8px;
@@ -1508,6 +1636,15 @@ button {
 
   .quick-prompt-bar {
     width: calc(100% - 24px);
+  }
+
+  .local-ai-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .local-ai-form {
+    grid-template-columns: 1fr;
   }
 
   .attached-context-bar {

@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  defaultLocalAISettings,
+  type ConnectionTestResult,
+  type LLMModel,
+  type LocalAISettings,
+} from '../localAI';
+import {
   defaultSettings,
   vaultSecurityLabels,
   vaultSecurityOptions,
@@ -21,6 +27,11 @@ type VaultFormState = {
   path: string;
 };
 
+type LocalAIFeedback = {
+  tone: 'success' | 'error';
+  message: string;
+};
+
 const emptyFormState: VaultFormState = {
   name: '',
   autoSuggestedName: null,
@@ -39,9 +50,30 @@ export function SettingsView() {
   const [deleteTarget, setDeleteTarget] = useState<VaultConfig | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [localAIForm, setLocalAIForm] = useState<LocalAISettings>({
+    ...defaultLocalAISettings,
+  });
+  const [localAIModels, setLocalAIModels] = useState<LLMModel[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [localAIFeedback, setLocalAIFeedback] =
+    useState<LocalAIFeedback | null>(null);
+  const [connectionResult, setConnectionResult] =
+    useState<ConnectionTestResult | null>(null);
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [isSavingLocalAI, setIsSavingLocalAI] = useState(false);
 
   const isEditing = Boolean(formState?.id);
   const sortedVaults = useMemo(() => settings.vaults, [settings.vaults]);
+  const configuredModelMissing = Boolean(
+    modelsLoaded &&
+      localAIForm.model &&
+      !localAIModels.some((model) => model.model === localAIForm.model),
+  );
+  const localAISettingsChanged =
+    localAIForm.provider !== settings.localAI.provider ||
+    localAIForm.endpoint !== settings.localAI.endpoint ||
+    localAIForm.model !== settings.localAI.model;
 
   useEffect(() => {
     let isMounted = true;
@@ -52,6 +84,7 @@ export function SettingsView() {
 
         if (isMounted) {
           setSettings(loadedSettings);
+          setLocalAIForm({ ...loadedSettings.localAI });
         }
       } catch (error) {
         if (isMounted) {
@@ -70,6 +103,82 @@ export function SettingsView() {
       isMounted = false;
     };
   }, []);
+
+  function getConnectionInput() {
+    return {
+      provider: localAIForm.provider,
+      endpoint: localAIForm.endpoint,
+    };
+  }
+
+  async function refreshLocalAIModels(): Promise<void> {
+    setIsRefreshingModels(true);
+    setLocalAIFeedback(null);
+
+    try {
+      const models = await window.mimora.listLocalAIModels(
+        getConnectionInput(),
+      );
+      setLocalAIModels(models);
+      setModelsLoaded(true);
+      setLocalAIFeedback({
+        tone: 'success',
+        message: `설치 모델 ${models.length}개를 불러왔습니다.`,
+      });
+    } catch (error) {
+      setLocalAIModels([]);
+      setModelsLoaded(false);
+      setLocalAIFeedback({
+        tone: 'error',
+        message: getErrorMessage(error),
+      });
+    } finally {
+      setIsRefreshingModels(false);
+    }
+  }
+
+  async function testLocalAIConnection(): Promise<void> {
+    setIsTestingConnection(true);
+    setLocalAIFeedback(null);
+
+    try {
+      const result = await window.mimora.testLocalAIConnection(
+        getConnectionInput(),
+      );
+      setConnectionResult(result);
+    } catch (error) {
+      setConnectionResult({
+        connected: false,
+        message: `연결 실패: ${getErrorMessage(error)}`,
+      });
+    } finally {
+      setIsTestingConnection(false);
+    }
+  }
+
+  async function saveLocalAISettings(): Promise<void> {
+    setIsSavingLocalAI(true);
+    setLocalAIFeedback(null);
+
+    try {
+      const nextSettings = await window.mimora.updateLocalAISettings(
+        localAIForm,
+      );
+      setSettings(nextSettings);
+      setLocalAIForm({ ...nextSettings.localAI });
+      setLocalAIFeedback({
+        tone: 'success',
+        message: 'Local AI 설정을 저장했습니다.',
+      });
+    } catch (error) {
+      setLocalAIFeedback({
+        tone: 'error',
+        message: getErrorMessage(error),
+      });
+    } finally {
+      setIsSavingLocalAI(false);
+    }
+  }
 
   function openAddForm(): void {
     setErrorMessage(null);
@@ -177,6 +286,140 @@ export function SettingsView() {
           {errorMessage}
         </p>
       ) : null}
+
+      <section className="local-ai-card" aria-labelledby="local-ai-heading">
+        <div className="local-ai-header">
+          <div>
+            <h2 id="local-ai-heading">Local AI</h2>
+            <p>로컬 또는 원격 Ollama 연결 설정</p>
+          </div>
+          <span
+            className={`local-ai-connection ${
+              connectionResult?.connected ? 'is-connected' : ''
+            }`}
+          >
+            {connectionResult?.connected ? '● Connected' : '○ Not connected'}
+          </span>
+        </div>
+
+        <form
+          className="local-ai-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveLocalAISettings();
+          }}
+        >
+          <label>
+            <span>Provider</span>
+            <select disabled value={localAIForm.provider}>
+              <option value="ollama">Ollama</option>
+            </select>
+          </label>
+
+          <label className="local-ai-endpoint-field">
+            <span>Endpoint</span>
+            <input
+              onChange={(event) => {
+                setLocalAIForm({
+                  ...localAIForm,
+                  endpoint: event.target.value,
+                });
+                setLocalAIModels([]);
+                setModelsLoaded(false);
+                setConnectionResult(null);
+                setLocalAIFeedback(null);
+              }}
+              placeholder={defaultLocalAISettings.endpoint}
+              spellCheck={false}
+              value={localAIForm.endpoint}
+            />
+          </label>
+
+          <label className="local-ai-model-field">
+            <span>Model</span>
+            <select
+              onChange={(event) => {
+                setLocalAIForm({
+                  ...localAIForm,
+                  model: event.target.value || null,
+                });
+                setLocalAIFeedback(null);
+              }}
+              value={localAIForm.model ?? ''}
+            >
+              {!localAIForm.model ? (
+                <option value="">설치 모델을 선택하세요.</option>
+              ) : null}
+              {localAIForm.model &&
+              !localAIModels.some(
+                (model) => model.model === localAIForm.model,
+              ) ? (
+                <option value={localAIForm.model}>
+                  {localAIForm.model}
+                  {modelsLoaded ? ' (설치되지 않음)' : ' (현재 설정)'}
+                </option>
+              ) : null}
+              {localAIModels.map((model) => (
+                <option key={model.model} value={model.model}>
+                  {model.model || model.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="local-ai-actions">
+            <button
+              className="secondary-button"
+              disabled={isRefreshingModels || !localAIForm.endpoint.trim()}
+              onClick={() => {
+                void refreshLocalAIModels();
+              }}
+              type="button"
+            >
+              {isRefreshingModels ? '조회 중…' : '모델 새로고침'}
+            </button>
+            <button
+              className="secondary-button"
+              disabled={isTestingConnection || !localAIForm.endpoint.trim()}
+              onClick={() => {
+                void testLocalAIConnection();
+              }}
+              type="button"
+            >
+              {isTestingConnection ? '확인 중…' : 'Connection Test'}
+            </button>
+            <button
+              className="primary-button"
+              disabled={
+                isSavingLocalAI ||
+                !localAISettingsChanged ||
+                !localAIForm.endpoint.trim()
+              }
+              type="submit"
+            >
+              {isSavingLocalAI ? '저장 중…' : '설정 저장'}
+            </button>
+          </div>
+        </form>
+
+        <div className="local-ai-messages" aria-live="polite">
+          {connectionResult ? (
+            <p className={connectionResult.connected ? 'success' : 'error'}>
+              {connectionResult.message}
+            </p>
+          ) : null}
+          {localAIFeedback ? (
+            <p className={localAIFeedback.tone}>
+              {localAIFeedback.message}
+            </p>
+          ) : null}
+          {configuredModelMissing ? (
+            <p className="warning">
+              선택된 모델이 현재 Ollama에 설치되어 있지 않습니다.
+            </p>
+          ) : null}
+        </div>
+      </section>
 
       {formState ? (
         <form

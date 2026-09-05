@@ -1,5 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
+import type {
+  ConnectionTestResult,
+  LLMModel,
+} from '../src/localAI';
 import {
   type AddVaultInput,
   type MimoraIpcResult,
@@ -10,6 +14,7 @@ import {
 import type { AutoRetrievedContext } from '../src/autoContext';
 import { createSettingsStore } from './settingsStore';
 import { createVaultFilesService } from './vaultFiles';
+import { createLLMProvider } from './llm/createLLMProvider';
 import type {
   VaultFile,
   VaultFileContent,
@@ -78,6 +83,15 @@ function registerSettingsHandlers(): void {
   );
 
   ipcMain.handle(
+    'settings:updateLocalAI',
+    async (
+      _event,
+      input: unknown,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateLocalAISettings(input)),
+  );
+
+  ipcMain.handle(
     'settings:selectVaultDirectory',
     async (): Promise<VaultDirectorySelection | null> => {
     const result = await dialog.showOpenDialog({
@@ -96,6 +110,23 @@ function registerSettingsHandlers(): void {
         suggestedName: path.basename(selectedPath),
       };
     },
+  );
+}
+
+function registerLocalAIHandlers(): void {
+  ipcMain.handle(
+    'localAI:listModels',
+    async (_event, input: unknown): Promise<MimoraIpcResult<LLMModel[]>> =>
+      toIpcResult(() => createLLMProvider(input).listModels()),
+  );
+
+  ipcMain.handle(
+    'localAI:testConnection',
+    async (
+      _event,
+      input: unknown,
+    ): Promise<MimoraIpcResult<ConnectionTestResult>> =>
+      toIpcResult(() => createLLMProvider(input).testConnection()),
   );
 }
 
@@ -166,6 +197,7 @@ function createMainWindow(): void {
 
 registerSettingsHandlers();
 registerVaultFileHandlers();
+registerLocalAIHandlers();
 
 void app.whenReady().then(() => {
   createMainWindow();

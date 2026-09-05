@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  defaultLocalAISettings,
+  type LocalAISettings,
+} from '../src/localAI';
+import {
   defaultSettings,
   vaultSecurityOptions,
   vaultTypeOptions,
@@ -28,7 +32,53 @@ type SettingsStoreOptions = {
 function cloneSettings(settings: MimoraSettings): MimoraSettings {
   return {
     vaults: settings.vaults.map((vault) => ({ ...vault })),
+    localAI: { ...settings.localAI },
   };
+}
+
+function parseLocalAISettings(value: unknown): LocalAISettings | null {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    (value as LocalAISettings).provider !== 'ollama' ||
+    typeof (value as LocalAISettings).endpoint !== 'string' ||
+    !((value as LocalAISettings).endpoint.trim()) ||
+    !(
+      (value as LocalAISettings).model === null ||
+      typeof (value as LocalAISettings).model === 'string'
+    )
+  ) {
+    return null;
+  }
+
+  const localAI = value as LocalAISettings;
+
+  return {
+    provider: 'ollama',
+    endpoint: localAI.endpoint.trim(),
+    model:
+      typeof localAI.model === 'string' && localAI.model.trim()
+        ? localAI.model.trim()
+        : null,
+  };
+}
+
+function validateLocalAISettings(value: unknown): LocalAISettings {
+  const parsedSettings = parseLocalAISettings(value);
+
+  if (!parsedSettings) {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      (value as Partial<LocalAISettings>).provider !== 'ollama'
+    ) {
+      throw new Error('지원하지 않는 Local AI Provider입니다.');
+    }
+
+    throw new Error('Ollama Endpoint를 입력하세요.');
+  }
+
+  return parsedSettings;
 }
 
 function isVaultType(value: unknown): value is VaultType {
@@ -166,7 +216,10 @@ function migrateLegacySettings(
     }
   }
 
-  return { vaults };
+  return {
+    vaults,
+    localAI: { ...defaultLocalAISettings },
+  };
 }
 
 function isMimoraSettings(value: unknown): value is MimoraSettings {
@@ -189,6 +242,10 @@ function parseSettings(
   const parsedSettings = JSON.parse(rawContent) as unknown;
 
   if (isMimoraSettings(parsedSettings)) {
+    const localAI = parseLocalAISettings(
+      (parsedSettings as Partial<MimoraSettings>).localAI,
+    );
+
     return {
       settings: {
         vaults: parsedSettings.vaults.filter(
@@ -203,8 +260,9 @@ function parseSettings(
             typeof vault.createdAt === 'string' &&
             typeof vault.updatedAt === 'string',
         ),
+        localAI: localAI ?? { ...defaultLocalAISettings },
       },
-      migrated: false,
+      migrated: localAI === null,
     };
   }
 
@@ -317,7 +375,8 @@ export function createSettingsStore({
         ensureUniqueVaultPath(settings, vaultInput.path, platform);
 
         const now = getNow();
-        const nextSettings = {
+        const nextSettings: MimoraSettings = {
+          localAI: settings.localAI,
           vaults: [
             ...settings.vaults,
             {
@@ -346,7 +405,8 @@ export function createSettingsStore({
         const vaultInput = validateVaultInput(input);
         ensureUniqueVaultPath(settings, vaultInput.path, platform, input.id);
 
-        const nextSettings = {
+        const nextSettings: MimoraSettings = {
+          localAI: settings.localAI,
           vaults: settings.vaults.map((vault) =>
             vault.id === input.id
               ? {
@@ -370,11 +430,23 @@ export function createSettingsStore({
           throw new Error('삭제할 Vault를 찾을 수 없습니다.');
         }
 
-        const nextSettings = {
+        const nextSettings: MimoraSettings = {
+          localAI: settings.localAI,
           vaults: settings.vaults.filter((vault) => vault.id !== id),
         };
 
         return persistSettings(nextSettings);
+      }),
+
+    updateLocalAISettings: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const localAI = validateLocalAISettings(input);
+
+        return persistSettings({
+          vaults: settings.vaults,
+          localAI,
+        });
       }),
   };
 }

@@ -4,6 +4,12 @@ import type {
   AutoRetrievedContext,
 } from '../src/autoContext';
 import type {
+  ConnectionTestResult,
+  LLMModel,
+  LocalAIConnectionInput,
+  LocalAISettings,
+} from '../src/localAI';
+import type {
   AddVaultInput,
   MimoraIpcResult,
   MimoraSettings,
@@ -59,6 +65,24 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('vaultFiles:list', vaultId) as Promise<
         MimoraIpcResult<VaultFile[]>
+      >
+    ).then(unwrapIpcResult),
+  updateLocalAISettings: (input: LocalAISettings) =>
+    (
+      ipcRenderer.invoke('settings:updateLocalAI', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  listLocalAIModels: (input: LocalAIConnectionInput) =>
+    (
+      ipcRenderer.invoke('localAI:listModels', input) as Promise<
+        MimoraIpcResult<LLMModel[]>
+      >
+    ).then(unwrapIpcResult),
+  testLocalAIConnection: (input: LocalAIConnectionInput) =>
+    (
+      ipcRenderer.invoke('localAI:testConnection', input) as Promise<
+        MimoraIpcResult<ConnectionTestResult>
       >
     ).then(unwrapIpcResult),
   readVaultFile: (vaultId: string, relativePath: string) =>
