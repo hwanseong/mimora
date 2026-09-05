@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { ChatMessage } from '../chat';
 import { AutoContextPanel } from './AutoContextPanel';
 import { SourcesList } from './SourcesList';
+import { RoutingStatus } from './RoutingStatus';
 
 export function ChatMessages({ messages }: { messages: ChatMessage[] }) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -41,6 +42,9 @@ export function ChatMessages({ messages }: { messages: ChatMessage[] }) {
               ) : null}
               {message.role === 'assistant' && message.sources ? (
                 <SourcesList sources={message.sources} />
+              ) : null}
+              {message.role === 'assistant' && message.routingDecision ? (
+                <RoutingStatus decision={message.routingDecision} />
               ) : null}
               {import.meta.env.DEV &&
               message.role === 'assistant' &&

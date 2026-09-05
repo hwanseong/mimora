@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { type ChatMessage, type ChatSessions } from './chat';
 import type { AutoRetrievedContext } from './autoContext';
 import {
@@ -22,6 +22,12 @@ import { Sidebar } from './components/Sidebar';
 import { VaultBrowserView } from './components/VaultBrowserView';
 import { WelcomePanel } from './components/WelcomePanel';
 import { defaultWorkspace, type Workspace } from './workspaces';
+import {
+  evaluateSecurity,
+  routeAIRequest,
+  type AIMode,
+  type RoutingDecision,
+} from './security/securityRouter';
 
 export function App() {
   const [activeView, setActiveView] = useState<
@@ -30,6 +36,8 @@ export function App() {
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
   const [message, setMessage] = useState('');
+  const [aiMode, setAIMode] = useState<AIMode>('auto');
+  const [isSavingAIMode, setIsSavingAIMode] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
   const [workspaceContexts, setWorkspaceContexts] =
     useState<WorkspaceContexts>({});
@@ -44,6 +52,37 @@ export function App() {
   const isCurrentWorkspaceGenerating = generatingWorkspaceIds.has(
     selectedWorkspace.id,
   );
+  const latestRoutingDecision = currentMessages.reduce<
+    RoutingDecision | undefined
+  >(
+    (latestDecision, chatMessage) =>
+      chatMessage.routingDecision ?? latestDecision,
+    undefined,
+  );
+  const currentSecurity =
+    latestRoutingDecision?.security ??
+    evaluateSecurity(selectedWorkspace.type, currentContexts).security;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void window.mimora
+      .getSettings()
+      .then((settings) => {
+        if (isMounted) {
+          setAIMode(settings.aiMode);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error('[Mimora Settings] Failed to load AI Mode.', {
+          error: getChatErrorMessage(error),
+        });
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   function handleSelectPrompt(promptText: string): void {
     setMessage(promptText);
@@ -91,6 +130,8 @@ export function App() {
     }
 
     const targetWorkspaceId = selectedWorkspace.id;
+    const targetWorkspaceType = selectedWorkspace.type;
+    const targetAIMode = aiMode;
     const previousMessages = (chatSessions[targetWorkspaceId] ?? []).slice(
       -RECENT_HISTORY_MESSAGE_LIMIT,
     );
@@ -113,6 +154,8 @@ export function App() {
 
     void completeChatRequest(
       targetWorkspaceId,
+      targetWorkspaceType,
+      targetAIMode,
       userMessage.id,
       assistantMessage.id,
       trimmedMessage,
@@ -155,6 +198,8 @@ export function App() {
 
   async function completeChatRequest(
     workspaceId: Workspace['id'],
+    workspaceType: Workspace['type'],
+    requestAIMode: AIMode,
     userMessageId: string,
     assistantMessageId: string,
     query: string,
@@ -185,6 +230,30 @@ export function App() {
       autoContext,
       autoContextError,
     );
+
+    const routingDecision = routeAIRequest({
+      mode: requestAIMode,
+      workspaceType,
+      manualContexts,
+      autoContexts: autoContext,
+    });
+
+    saveRoutingDecisionForTurn(
+      workspaceId,
+      userMessageId,
+      assistantMessageId,
+      routingDecision,
+    );
+
+    console.info('[Mimora Routing]', {
+      mode: routingDecision.mode,
+      workspace: workspaceId,
+      security: routingDecision.security,
+      provider: routingDecision.provider,
+      reason: routingDecision.reason,
+      manualContext: routingDecision.manualContextCount,
+      autoContext: routingDecision.autoContextCount,
+    });
 
     try {
       const history: LLMChatMessage[] = previousMessages.map(
@@ -247,6 +316,7 @@ export function App() {
         generationStatus: 'complete',
         sources: response.sources,
         performance: metrics,
+        routingDecision,
       });
     } catch (error) {
       const errorMessage = getChatErrorMessage(error);
@@ -254,6 +324,7 @@ export function App() {
       completeAssistantMessage(workspaceId, assistantMessageId, {
         content: errorMessage,
         generationStatus: 'error',
+        routingDecision,
         ...(errorMessage === 'Local AI 응답 시간이 초과되었습니다.'
           ? {
               generationErrorDetail:
@@ -269,14 +340,15 @@ export function App() {
   function completeAssistantMessage(
     workspaceId: Workspace['id'],
     assistantMessageId: string,
-    update: Pick<
+    update: Partial<Pick<
       ChatMessage,
       | 'content'
       | 'generationStatus'
       | 'generationErrorDetail'
       | 'sources'
       | 'performance'
-    >,
+      | 'routingDecision'
+    >>,
   ): void {
     setChatSessions((currentSessions) => {
       const sessionMessages = currentSessions[workspaceId] ?? [];
@@ -290,6 +362,47 @@ export function App() {
         ),
       };
     });
+  }
+
+  function saveRoutingDecisionForTurn(
+    workspaceId: Workspace['id'],
+    userMessageId: string,
+    assistantMessageId: string,
+    routingDecision: RoutingDecision,
+  ): void {
+    setChatSessions((currentSessions) => {
+      const sessionMessages = currentSessions[workspaceId] ?? [];
+
+      return {
+        ...currentSessions,
+        [workspaceId]: sessionMessages.map((chatMessage) =>
+          chatMessage.id === userMessageId ||
+          chatMessage.id === assistantMessageId
+            ? { ...chatMessage, routingDecision }
+            : chatMessage,
+        ),
+      };
+    });
+  }
+
+  async function handleChangeAIMode(nextAIMode: AIMode): Promise<void> {
+    const previousAIMode = aiMode;
+
+    setAIMode(nextAIMode);
+    setIsSavingAIMode(true);
+
+    try {
+      const settings = await window.mimora.updateAIMode(nextAIMode);
+
+      setAIMode(settings.aiMode);
+    } catch (error) {
+      setAIMode(previousAIMode);
+      console.error('[Mimora Settings] Failed to save AI Mode.', {
+        error: getChatErrorMessage(error),
+      });
+    } finally {
+      setIsSavingAIMode(false);
+    }
   }
 
   function completeAutoContextRetrieval(
@@ -424,7 +537,15 @@ export function App() {
           />
         ) : (
           <>
-            <ChatHeader workspaceLabel={selectedWorkspace.label} />
+            <ChatHeader
+              aiMode={aiMode}
+              disabled={isSavingAIMode || isCurrentWorkspaceGenerating}
+              effectiveSecurity={currentSecurity}
+              onChangeAIMode={(nextAIMode) => {
+                void handleChangeAIMode(nextAIMode);
+              }}
+              workspaceLabel={selectedWorkspace.label}
+            />
             <div className="message-area">
               {currentMessages.length === 0 ? (
                 <WelcomePanel onSelectPrompt={handleSelectPrompt} />

@@ -10,6 +10,7 @@ import type {
   OllamaPerformanceMetrics,
   OllamaResponsePerformance,
 } from '../src/llmChat';
+import type { AIMode } from '../src/security/securityRouter';
 import {
   type AddVaultInput,
   type MimoraIpcResult,
@@ -96,6 +97,15 @@ function registerSettingsHandlers(): void {
       input: unknown,
     ): Promise<MimoraIpcResult<MimoraSettings>> =>
       toIpcResult(() => settingsStore.updateLocalAISettings(input)),
+  );
+
+  ipcMain.handle(
+    'settings:updateAIMode',
+    async (
+      _event,
+      aiMode: unknown,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateAIMode(aiMode as AIMode)),
   );
 
   ipcMain.handle(

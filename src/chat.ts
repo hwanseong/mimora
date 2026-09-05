@@ -3,6 +3,7 @@ import type {
   LLMContextSource,
   LocalAIPerformanceMetrics,
 } from './llmChat';
+import type { RoutingDecision } from './security/securityRouter';
 
 export type ChatMessage = {
   id: string;
@@ -16,6 +17,7 @@ export type ChatMessage = {
   generationErrorDetail?: string;
   sources?: LLMContextSource[];
   performance?: LocalAIPerformanceMetrics;
+  routingDecision?: RoutingDecision;
 };
 
 export type ChatSessions = Record<string, ChatMessage[]>;

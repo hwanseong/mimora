@@ -16,6 +16,10 @@ import {
   type VaultSecurity,
   type VaultType,
 } from '../src/settings';
+import {
+  aiModeOptions,
+  type AIMode,
+} from '../src/security/securityRouter';
 
 type LegacyVaultSettings = {
   workVaultPath?: unknown;
@@ -33,7 +37,15 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
   return {
     vaults: settings.vaults.map((vault) => ({ ...vault })),
     localAI: { ...settings.localAI },
+    aiMode: settings.aiMode,
   };
+}
+
+function isAIMode(value: unknown): value is AIMode {
+  return (
+    typeof value === 'string' &&
+    aiModeOptions.includes(value as AIMode)
+  );
 }
 
 function parseLocalAISettings(value: unknown): LocalAISettings | null {
@@ -219,6 +231,7 @@ function migrateLegacySettings(
   return {
     vaults,
     localAI: { ...defaultLocalAISettings },
+    aiMode: 'auto',
   };
 }
 
@@ -245,6 +258,11 @@ function parseSettings(
     const localAI = parseLocalAISettings(
       (parsedSettings as Partial<MimoraSettings>).localAI,
     );
+    const aiMode = isAIMode(
+      (parsedSettings as Partial<MimoraSettings>).aiMode,
+    )
+      ? (parsedSettings as MimoraSettings).aiMode
+      : 'auto';
 
     return {
       settings: {
@@ -261,8 +279,11 @@ function parseSettings(
             typeof vault.updatedAt === 'string',
         ),
         localAI: localAI ?? { ...defaultLocalAISettings },
+        aiMode,
       },
-      migrated: localAI === null,
+      migrated:
+        localAI === null ||
+        !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode),
     };
   }
 
@@ -377,6 +398,7 @@ export function createSettingsStore({
         const now = getNow();
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
+          aiMode: settings.aiMode,
           vaults: [
             ...settings.vaults,
             {
@@ -407,6 +429,7 @@ export function createSettingsStore({
 
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
+          aiMode: settings.aiMode,
           vaults: settings.vaults.map((vault) =>
             vault.id === input.id
               ? {
@@ -432,6 +455,7 @@ export function createSettingsStore({
 
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
+          aiMode: settings.aiMode,
           vaults: settings.vaults.filter((vault) => vault.id !== id),
         };
 
@@ -446,6 +470,21 @@ export function createSettingsStore({
         return persistSettings({
           vaults: settings.vaults,
           localAI,
+          aiMode: settings.aiMode,
+        });
+      }),
+
+    updateAIMode: (input: unknown) =>
+      runExclusive(async () => {
+        if (!isAIMode(input)) {
+          throw new Error('지원하지 않는 AI Mode입니다.');
+        }
+
+        const settings = await loadSettings();
+
+        return persistSettings({
+          ...settings,
+          aiMode: input,
         });
       }),
   };

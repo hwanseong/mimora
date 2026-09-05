@@ -11,6 +11,7 @@ import type {
   LocalAISettings,
 } from './localAI';
 import type { LocalAIChatInput, LocalAIChatResult } from './llmChat';
+import type { AIMode } from './security/securityRouter';
 import type {
   AddVaultInput,
   MimoraSettings,
@@ -33,6 +34,7 @@ type MimoraApi = {
     updateLocalAISettings: (
       input: LocalAISettings,
     ) => Promise<MimoraSettings>;
+    updateAIMode: (aiMode: AIMode) => Promise<MimoraSettings>;
     listLocalAIModels: (
       input: LocalAIConnectionInput,
     ) => Promise<LLMModel[]>;

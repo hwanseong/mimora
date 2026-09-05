@@ -2,6 +2,7 @@ import {
   defaultLocalAISettings,
   type LocalAISettings,
 } from './localAI';
+import type { AIMode } from './security/securityRouter';
 
 export const vaultTypeOptions = ['work', 'private', 'knowledge'] as const;
 export const vaultSecurityOptions = [
@@ -26,6 +27,7 @@ export type VaultConfig = {
 export type MimoraSettings = {
   vaults: VaultConfig[];
   localAI: LocalAISettings;
+  aiMode: AIMode;
 };
 
 export type AddVaultInput = {
@@ -57,6 +59,7 @@ export type MimoraIpcResult<T> =
 export const defaultSettings: MimoraSettings = {
   vaults: [],
   localAI: { ...defaultLocalAISettings },
+  aiMode: 'auto',
 };
 
 export const vaultTypeLabels: Record<VaultType, string> = {

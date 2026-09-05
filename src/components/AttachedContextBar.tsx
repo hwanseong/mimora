@@ -1,5 +1,6 @@
 import type { AttachedContext } from '../attachedContext';
 import { vaultSecurityLabels } from '../settings';
+import { inspectContextSecurity } from '../security/securityRouter';
 
 export function AttachedContextBar({
   contexts,
@@ -12,17 +13,13 @@ export function AttachedContextBar({
     return null;
   }
 
-  const containsSensitive = contexts.some(
-    (context) => context.security === 'sensitive',
-  );
-  const containsPrivate = contexts.some(
-    (context) => context.vaultType === 'private',
-  );
-  const securityNotice = containsSensitive
-    ? '🔒 Sensitive Context 포함'
-    : containsPrivate
-      ? '🔒 Private Context 포함'
-      : null;
+  const securitySummary = inspectContextSecurity(contexts);
+  const securityNotice =
+    securitySummary.sensitiveContextCount > 0
+      ? '🔒 Sensitive Context 포함'
+      : securitySummary.privateVaultContextCount > 0
+        ? '🔒 Private Context 포함'
+        : null;
 
   return (
     <section className="attached-context-bar" aria-label="Attached Context">

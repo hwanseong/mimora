@@ -20,6 +20,7 @@ import type {
   UpdateVaultInput,
   VaultDirectorySelection,
 } from '../src/settings';
+import type { AIMode } from '../src/security/securityRouter';
 import type {
   VaultFile,
   VaultFileContent,
@@ -74,6 +75,12 @@ contextBridge.exposeInMainWorld('mimora', {
   updateLocalAISettings: (input: LocalAISettings) =>
     (
       ipcRenderer.invoke('settings:updateLocalAI', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  updateAIMode: (aiMode: AIMode) =>
+    (
+      ipcRenderer.invoke('settings:updateAIMode', aiMode) as Promise<
         MimoraIpcResult<MimoraSettings>
       >
     ).then(unwrapIpcResult),
