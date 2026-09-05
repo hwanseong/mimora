@@ -2,7 +2,6 @@ import {
   effectiveSecurityLabels,
 } from '../security/securityRouter';
 import type {
-  ExternalPayloadBlocker,
   ExternalPayloadPreview,
 } from '../security/externalPayloadPreview';
 import { maskingEntityTypeLabels } from '../security/maskingEngine';
@@ -11,12 +10,10 @@ import {
   vaultTypeLabels,
 } from '../settings';
 
-const blockerLabels: Record<ExternalPayloadBlocker, string> = {
-  'manual-review-required': '외부 전송 전 수동 검토가 필요합니다.',
-  'private-vault-context': 'Private Vault 문서가 포함되어 있습니다.',
-  'sensitive-context': 'Sensitive Context가 포함되어 있습니다.',
-  'unmasked-data-possible':
-    'Dictionary에 등록되지 않은 민감정보가 남아 있을 수 있습니다.',
+const safetyStatusLabels = {
+  pass: 'PASS',
+  'review-required': 'REVIEW REQUIRED',
+  block: 'BLOCKED',
 };
 
 export function ExternalPayloadPreviewModal({
@@ -49,8 +46,15 @@ export function ExternalPayloadPreviewModal({
           </button>
         </header>
 
-        <div className="external-preview-status">
-          <strong>⚠ Review Required</strong>
+        <div className={`external-preview-status ${preview.status}`}>
+          <strong>
+            {preview.status === 'pass'
+              ? '✓ '
+              : preview.status === 'block'
+                ? '⛔ '
+                : '⚠ '}
+            {safetyStatusLabels[preview.status]}
+          </strong>
           <span>
             Effective Security ·{' '}
             {effectiveSecurityLabels[preview.effectiveSecurity]}
@@ -110,20 +114,34 @@ export function ExternalPayloadPreviewModal({
         </section>
 
         <section className="external-preview-section">
-          <h3>Security Check</h3>
-          <ul className="external-preview-blockers">
-            {preview.blockers.map((blocker) => (
-              <li key={blocker}>{blockerLabels[blocker]}</li>
+          <h3>External Payload Safety</h3>
+          <ul className="external-preview-checks">
+            {preview.safety.checks.map((safetyCheck) => (
+              <li className={safetyCheck.status} key={safetyCheck.id}>
+                <span aria-hidden="true">
+                  {safetyCheck.status === 'pass'
+                    ? '✓'
+                    : safetyCheck.status === 'warn'
+                      ? '⚠'
+                      : '⛔'}
+                </span>
+                <div>
+                  <strong>{safetyCheck.label}</strong>
+                  <small>{safetyCheck.message}</small>
+                </div>
+              </li>
             ))}
           </ul>
         </section>
 
         <section className="external-preview-section external-text-section">
-          <div className="external-preview-section-heading">
-            <h3>External Text</h3>
-            <span>Alias-only document boundaries</span>
-          </div>
-          <pre>{preview.externalText}</pre>
+          <details>
+            <summary>
+              <strong>Final External Payload</strong>
+              <span>Alias-only document boundaries</span>
+            </summary>
+            <pre>{preview.externalText}</pre>
+          </details>
         </section>
 
         <footer className="external-preview-footer">

@@ -1058,6 +1058,18 @@ button {
   font-size: 12px;
 }
 
+.external-preview-status.pass {
+  border-color: #cddfd5;
+  background: #f6fbf8;
+  color: #237a4b;
+}
+
+.external-preview-status.block {
+  border-color: #e6b4b1;
+  background: #fff7f7;
+  color: #9b3b37;
+}
+
 .external-preview-section {
   display: grid;
   gap: 7px;
@@ -1119,7 +1131,7 @@ button {
 }
 
 .external-preview-replacements,
-.external-preview-blockers {
+.external-preview-checks {
   display: grid;
   gap: 5px;
   margin: 0;
@@ -1128,7 +1140,7 @@ button {
 }
 
 .external-preview-replacements li,
-.external-preview-blockers li {
+.external-preview-checks li {
   border: 1px solid #eceef2;
   border-radius: 7px;
   background: #fafafa;
@@ -1142,10 +1154,37 @@ button {
   color: #344054;
 }
 
-.external-preview-blockers li::before {
-  content: '⚠';
-  margin-right: 6px;
+.external-preview-checks li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 7px;
+}
+
+.external-preview-checks li > span {
+  color: #237a4b;
+}
+
+.external-preview-checks li.warn > span {
   color: #9a6700;
+}
+
+.external-preview-checks li.fail > span {
+  color: #9b3b37;
+}
+
+.external-preview-checks li > div {
+  display: grid;
+  gap: 2px;
+}
+
+.external-preview-checks strong {
+  color: #475467;
+  font-size: 11px;
+}
+
+.external-preview-checks small {
+  color: #7b8494;
+  font-size: 10.5px;
 }
 
 .external-preview-empty {
@@ -1161,6 +1200,31 @@ button {
 .external-text-section {
   border-top: 1px solid #eceef2;
   padding-top: 12px;
+}
+
+.external-text-section details {
+  display: grid;
+  gap: 8px;
+}
+
+.external-text-section summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #475467;
+  cursor: pointer;
+  font-size: 11.5px;
+}
+
+.external-text-section summary span {
+  color: #7b8494;
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.external-text-section details[open] pre {
+  margin-top: 8px;
 }
 
 .external-preview-footer {

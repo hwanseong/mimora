@@ -5,12 +5,12 @@ import {
   type MaskingEntry,
   type MaskingReplacement,
 } from './maskingEngine';
-
-export type ExternalPayloadBlocker =
-  | 'manual-review-required'
-  | 'private-vault-context'
-  | 'sensitive-context'
-  | 'unmasked-data-possible';
+import { buildExternalPayloadText } from './externalPayloadBuilder';
+import {
+  evaluateOutboundPayload,
+  type PayloadSafetyResult,
+  type PayloadSafetyStatus,
+} from './outboundPayloadSafety';
 
 export type ExternalPreviewDocument = {
   documentId: string;
@@ -19,6 +19,7 @@ export type ExternalPreviewDocument = {
   vaultType: VaultType;
   security: VaultSecurity;
   relativePath: string;
+  fileName: string;
   originalChars: number;
   maskedContent: string;
   replacementCount: number;
@@ -36,9 +37,10 @@ export type ExternalPayloadPreview = {
   replacements: MaskingReplacement[];
   totalReplacementCount: number;
   externalText: string;
-  safeToSend: false;
-  status: 'review-required';
-  blockers: ExternalPayloadBlocker[];
+  safeToSend: boolean;
+  status: PayloadSafetyStatus;
+  blockers: string[];
+  safety: PayloadSafetyResult;
 };
 
 export type ExternalPreviewContextInput = {
@@ -47,6 +49,7 @@ export type ExternalPreviewContextInput = {
   vaultType: VaultType;
   security: VaultSecurity;
   relativePath: string;
+  fileName: string;
   content: string;
 };
 
@@ -101,17 +104,17 @@ export function createExternalPayloadPreview(input: {
     input.autoContexts,
   );
   const questionResult = maskText(input.question, input.maskingEntries);
-  const documentResults = contextDocuments.map((document, index) => {
+  const documentResults = contextDocuments.map((document) => {
     const maskingResult = maskText(document.content, input.maskingEntries);
 
     return {
       document: {
-        documentId: `DOCUMENT_${index + 1}`,
         vaultId: document.vaultId,
         vaultName: document.vaultName,
         vaultType: document.vaultType,
         security: document.security,
         relativePath: document.relativePath,
+        fileName: document.fileName,
         originalChars: document.content.length,
         maskedContent: maskingResult.maskedText,
         replacementCount: maskingResult.totalReplacementCount,
@@ -119,34 +122,25 @@ export function createExternalPayloadPreview(input: {
       replacements: maskingResult.replacements,
     };
   });
-  const documents = documentResults.map((result) => result.document);
+  const builtPayload = buildExternalPayloadText({
+    maskedQuestion: questionResult.maskedText,
+    maskedDocumentContents: documentResults.map(
+      (result) => result.document.maskedContent,
+    ),
+  });
+  const documents = documentResults.map((result, index) => ({
+    ...result.document,
+    documentId: builtPayload.documents[index].documentId,
+  }));
   const replacements = mergeReplacements([
     questionResult.replacements,
     ...documentResults.map((result) => result.replacements),
   ]);
-  const externalContext = documents
-    .map(
-      (document) =>
-        `[${document.documentId}]\n${document.maskedContent}\n[/${document.documentId}]`,
-    )
-    .join('\n\n');
-  const externalText = `<Project Context>\n${
-    externalContext || 'No project context was provided.'
-  }\n</Project Context>\n\n<User Question>\n${
-    questionResult.maskedText
-  }\n</User Question>`;
-  const blockers: ExternalPayloadBlocker[] = [
-    'manual-review-required',
-    'unmasked-data-possible',
-  ];
-
-  if (documents.some((document) => document.vaultType === 'private')) {
-    blockers.push('private-vault-context');
-  }
-
-  if (documents.some((document) => document.security === 'sensitive')) {
-    blockers.push('sensitive-context');
-  }
+  const safety = evaluateOutboundPayload({
+    externalText: builtPayload.text,
+    documents,
+    maskingEntries: input.maskingEntries,
+  });
 
   return {
     workspaceId: input.workspaceId,
@@ -168,9 +162,10 @@ export function createExternalPayloadPreview(input: {
       (total, replacement) => total + replacement.count,
       0,
     ),
-    externalText,
-    safeToSend: false,
-    status: 'review-required',
-    blockers,
+    externalText: builtPayload.text,
+    safeToSend: safety.status === 'pass',
+    status: safety.status,
+    blockers: safety.blockers,
+    safety,
   };
 }
