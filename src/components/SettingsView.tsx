@@ -17,6 +17,7 @@ import {
   type VaultSecurity,
   type VaultType,
 } from '../settings';
+import { MaskingSettingsSection } from './MaskingSettingsSection';
 
 type VaultFormState = {
   id?: string;
@@ -274,7 +275,7 @@ export function SettingsView() {
       <div className="settings-header">
         <div>
           <p className="eyebrow">Settings</p>
-          <h1 id="settings-heading">Obsidian Vaults</h1>
+          <h1 id="settings-heading">Mimora Settings</h1>
         </div>
         <button className="secondary-button" onClick={openAddForm} type="button">
           + Vault 추가
@@ -420,6 +421,11 @@ export function SettingsView() {
           ) : null}
         </div>
       </section>
+
+      <MaskingSettingsSection
+        onSettingsChange={setSettings}
+        settings={settings}
+      />
 
       {formState ? (
         <form

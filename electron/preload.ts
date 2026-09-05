@@ -22,6 +22,10 @@ import type {
 } from '../src/settings';
 import type { AIMode } from '../src/security/securityRouter';
 import type {
+  AddMaskingEntryInput,
+  UpdateMaskingEntryInput,
+} from '../src/security/maskingEngine';
+import type {
   VaultFile,
   VaultFileContent,
   VaultSearchInput,
@@ -81,6 +85,24 @@ contextBridge.exposeInMainWorld('mimora', {
   updateAIMode: (aiMode: AIMode) =>
     (
       ipcRenderer.invoke('settings:updateAIMode', aiMode) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  addMaskingEntry: (input: AddMaskingEntryInput) =>
+    (
+      ipcRenderer.invoke('settings:addMaskingEntry', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  updateMaskingEntry: (input: UpdateMaskingEntryInput) =>
+    (
+      ipcRenderer.invoke('settings:updateMaskingEntry', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  deleteMaskingEntry: (id: string) =>
+    (
+      ipcRenderer.invoke('settings:deleteMaskingEntry', id) as Promise<
         MimoraIpcResult<MimoraSettings>
       >
     ).then(unwrapIpcResult),

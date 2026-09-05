@@ -13,6 +13,10 @@ import type {
 import type { LocalAIChatInput, LocalAIChatResult } from './llmChat';
 import type { AIMode } from './security/securityRouter';
 import type {
+  AddMaskingEntryInput,
+  UpdateMaskingEntryInput,
+} from './security/maskingEngine';
+import type {
   AddVaultInput,
   MimoraSettings,
   UpdateVaultInput,
@@ -35,6 +39,13 @@ type MimoraApi = {
       input: LocalAISettings,
     ) => Promise<MimoraSettings>;
     updateAIMode: (aiMode: AIMode) => Promise<MimoraSettings>;
+    addMaskingEntry: (
+      input: AddMaskingEntryInput,
+    ) => Promise<MimoraSettings>;
+    updateMaskingEntry: (
+      input: UpdateMaskingEntryInput,
+    ) => Promise<MimoraSettings>;
+    deleteMaskingEntry: (id: string) => Promise<MimoraSettings>;
     listLocalAIModels: (
       input: LocalAIConnectionInput,
     ) => Promise<LLMModel[]>;

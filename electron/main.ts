@@ -11,6 +11,10 @@ import type {
   OllamaResponsePerformance,
 } from '../src/llmChat';
 import type { AIMode } from '../src/security/securityRouter';
+import type {
+  AddMaskingEntryInput,
+  UpdateMaskingEntryInput,
+} from '../src/security/maskingEngine';
 import {
   type AddVaultInput,
   type MimoraIpcResult,
@@ -106,6 +110,33 @@ function registerSettingsHandlers(): void {
       aiMode: unknown,
     ): Promise<MimoraIpcResult<MimoraSettings>> =>
       toIpcResult(() => settingsStore.updateAIMode(aiMode as AIMode)),
+  );
+
+  ipcMain.handle(
+    'settings:addMaskingEntry',
+    async (
+      _event,
+      input: AddMaskingEntryInput,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.addMaskingEntry(input)),
+  );
+
+  ipcMain.handle(
+    'settings:updateMaskingEntry',
+    async (
+      _event,
+      input: UpdateMaskingEntryInput,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateMaskingEntry(input)),
+  );
+
+  ipcMain.handle(
+    'settings:deleteMaskingEntry',
+    async (
+      _event,
+      id: string,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.deleteMaskingEntry(id)),
   );
 
   ipcMain.handle(

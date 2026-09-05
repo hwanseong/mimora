@@ -20,6 +20,15 @@ import {
   aiModeOptions,
   type AIMode,
 } from '../src/security/securityRouter';
+import {
+  createDefaultMaskingSettings,
+  maskingEntityTypes,
+  type AddMaskingEntryInput,
+  type MaskingEntityType,
+  type MaskingEntry,
+  type MaskingSettings,
+  type UpdateMaskingEntryInput,
+} from '../src/security/maskingEngine';
 
 type LegacyVaultSettings = {
   workVaultPath?: unknown;
@@ -38,6 +47,10 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
     vaults: settings.vaults.map((vault) => ({ ...vault })),
     localAI: { ...settings.localAI },
     aiMode: settings.aiMode,
+    masking: {
+      entries: settings.masking.entries.map((entry) => ({ ...entry })),
+      sequences: { ...settings.masking.sequences },
+    },
   };
 }
 
@@ -46,6 +59,173 @@ function isAIMode(value: unknown): value is AIMode {
     typeof value === 'string' &&
     aiModeOptions.includes(value as AIMode)
   );
+}
+
+function isMaskingEntityType(value: unknown): value is MaskingEntityType {
+  return (
+    typeof value === 'string' &&
+    maskingEntityTypes.includes(value as MaskingEntityType)
+  );
+}
+
+function normalizeMaskingValue(value: string): string {
+  return value.trim().toLocaleLowerCase('en-US');
+}
+
+function parseMaskingSettings(value: unknown): {
+  masking: MaskingSettings;
+  migrated: boolean;
+} {
+  if (typeof value !== 'object' || value === null) {
+    return { masking: createDefaultMaskingSettings(), migrated: true };
+  }
+
+  const rawMasking = value as {
+    entries?: unknown;
+    sequences?: unknown;
+  };
+  const rawEntries = Array.isArray(rawMasking.entries)
+    ? rawMasking.entries
+    : [];
+  const seenEntries = new Set<string>();
+  const entries = rawEntries.filter((entry): entry is MaskingEntry => {
+    if (typeof entry !== 'object' || entry === null) {
+      return false;
+    }
+
+    const candidate = entry as Partial<MaskingEntry>;
+
+    if (
+      typeof candidate.id !== 'string' ||
+      !isMaskingEntityType(candidate.type) ||
+      typeof candidate.value !== 'string' ||
+      !candidate.value.trim() ||
+      typeof candidate.alias !== 'string' ||
+      !candidate.alias.trim() ||
+      typeof candidate.enabled !== 'boolean' ||
+      typeof candidate.createdAt !== 'string' ||
+      typeof candidate.updatedAt !== 'string'
+    ) {
+      return false;
+    }
+
+    const entryKey = JSON.stringify([
+      candidate.type,
+      normalizeMaskingValue(candidate.value),
+    ]);
+
+    if (seenEntries.has(entryKey)) {
+      return false;
+    }
+
+    seenEntries.add(entryKey);
+    return true;
+  });
+  const sequences = createDefaultMaskingSettings().sequences;
+  let sequencesMigrated =
+    typeof rawMasking.sequences !== 'object' ||
+    rawMasking.sequences === null;
+
+  for (const type of maskingEntityTypes) {
+    const storedSequence =
+      typeof rawMasking.sequences === 'object' &&
+      rawMasking.sequences !== null
+        ? (rawMasking.sequences as Record<string, unknown>)[type]
+        : undefined;
+
+    if (
+      typeof storedSequence === 'number' &&
+      Number.isInteger(storedSequence) &&
+      storedSequence >= 0
+    ) {
+      sequences[type] = storedSequence;
+    } else {
+      sequencesMigrated = true;
+    }
+  }
+
+  for (const entry of entries) {
+    const aliasMatch = new RegExp(`^${entry.type.toUpperCase()}_(\\d+)$`).exec(
+      entry.alias,
+    );
+    const aliasSequence = aliasMatch ? Number(aliasMatch[1]) : 0;
+
+    if (Number.isSafeInteger(aliasSequence)) {
+      sequences[entry.type] = Math.max(sequences[entry.type], aliasSequence);
+    }
+  }
+
+  return {
+    masking: {
+      entries: entries.map((entry) => ({
+        ...entry,
+        value: entry.value.trim(),
+        alias: entry.alias.trim(),
+      })),
+      sequences,
+    },
+    migrated:
+      !Array.isArray(rawMasking.entries) ||
+      rawEntries.length !== entries.length ||
+      sequencesMigrated,
+  };
+}
+
+function validateMaskingEntryInput(
+  input: unknown,
+): AddMaskingEntryInput | UpdateMaskingEntryInput {
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('Masking Entity 입력값이 올바르지 않습니다.');
+  }
+
+  const candidate = input as Partial<UpdateMaskingEntryInput>;
+
+  if (!isMaskingEntityType(candidate.type)) {
+    throw new Error('지원하지 않는 Masking Entity Type입니다.');
+  }
+
+  if (typeof candidate.value !== 'string' || !candidate.value.trim()) {
+    throw new Error('Masking 원본 값을 입력하세요.');
+  }
+
+  if (
+    ('id' in candidate && typeof candidate.id !== 'string') ||
+    ('enabled' in candidate && typeof candidate.enabled !== 'boolean')
+  ) {
+    throw new Error('Masking Entity 입력값이 올바르지 않습니다.');
+  }
+
+  return {
+    ...candidate,
+    type: candidate.type,
+    value: candidate.value.trim(),
+  } as AddMaskingEntryInput | UpdateMaskingEntryInput;
+}
+
+function ensureUniqueMaskingEntry(
+  entries: MaskingEntry[],
+  type: MaskingEntityType,
+  value: string,
+  ignoredEntryId?: string,
+): void {
+  const normalizedValue = normalizeMaskingValue(value);
+  const duplicated = entries.some(
+    (entry) =>
+      entry.id !== ignoredEntryId &&
+      entry.type === type &&
+      normalizeMaskingValue(entry.value) === normalizedValue,
+  );
+
+  if (duplicated) {
+    throw new Error('동일한 Type과 원본 값이 이미 등록되어 있습니다.');
+  }
+}
+
+function createMaskingAlias(
+  type: MaskingEntityType,
+  sequence: number,
+): string {
+  return `${type.toUpperCase()}_${String(sequence).padStart(3, '0')}`;
 }
 
 function parseLocalAISettings(value: unknown): LocalAISettings | null {
@@ -232,6 +412,7 @@ function migrateLegacySettings(
     vaults,
     localAI: { ...defaultLocalAISettings },
     aiMode: 'auto',
+    masking: createDefaultMaskingSettings(),
   };
 }
 
@@ -263,6 +444,9 @@ function parseSettings(
     )
       ? (parsedSettings as MimoraSettings).aiMode
       : 'auto';
+    const parsedMasking = parseMaskingSettings(
+      (parsedSettings as Partial<MimoraSettings>).masking,
+    );
 
     return {
       settings: {
@@ -280,10 +464,12 @@ function parseSettings(
         ),
         localAI: localAI ?? { ...defaultLocalAISettings },
         aiMode,
+        masking: parsedMasking.masking,
       },
       migrated:
         localAI === null ||
-        !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode),
+        !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode) ||
+        parsedMasking.migrated,
     };
   }
 
@@ -399,6 +585,7 @@ export function createSettingsStore({
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
           aiMode: settings.aiMode,
+          masking: settings.masking,
           vaults: [
             ...settings.vaults,
             {
@@ -430,6 +617,7 @@ export function createSettingsStore({
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
           aiMode: settings.aiMode,
+          masking: settings.masking,
           vaults: settings.vaults.map((vault) =>
             vault.id === input.id
               ? {
@@ -456,6 +644,7 @@ export function createSettingsStore({
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
           aiMode: settings.aiMode,
+          masking: settings.masking,
           vaults: settings.vaults.filter((vault) => vault.id !== id),
         };
 
@@ -471,6 +660,7 @@ export function createSettingsStore({
           vaults: settings.vaults,
           localAI,
           aiMode: settings.aiMode,
+          masking: settings.masking,
         });
       }),
 
@@ -485,6 +675,122 @@ export function createSettingsStore({
         return persistSettings({
           ...settings,
           aiMode: input,
+        });
+      }),
+
+    addMaskingEntry: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const entryInput = validateMaskingEntryInput(
+          input,
+        ) as AddMaskingEntryInput;
+
+        ensureUniqueMaskingEntry(
+          settings.masking.entries,
+          entryInput.type,
+          entryInput.value,
+        );
+
+        const sequence = settings.masking.sequences[entryInput.type] + 1;
+        const now = getNow();
+
+        return persistSettings({
+          ...settings,
+          masking: {
+            entries: [
+              ...settings.masking.entries,
+              {
+                id: createId(),
+                type: entryInput.type,
+                value: entryInput.value,
+                alias: createMaskingAlias(entryInput.type, sequence),
+                enabled: true,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+            sequences: {
+              ...settings.masking.sequences,
+              [entryInput.type]: sequence,
+            },
+          },
+        });
+      }),
+
+    updateMaskingEntry: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const entryInput = validateMaskingEntryInput(
+          input,
+        ) as UpdateMaskingEntryInput;
+        const existingEntry = settings.masking.entries.find(
+          (entry) => entry.id === entryInput.id,
+        );
+
+        if (!existingEntry) {
+          throw new Error('수정할 Masking Entity를 찾을 수 없습니다.');
+        }
+
+        ensureUniqueMaskingEntry(
+          settings.masking.entries,
+          entryInput.type,
+          entryInput.value,
+          entryInput.id,
+        );
+
+        const typeChanged = existingEntry.type !== entryInput.type;
+        const sequence = typeChanged
+          ? settings.masking.sequences[entryInput.type] + 1
+          : settings.masking.sequences[entryInput.type];
+        const alias = typeChanged
+          ? createMaskingAlias(entryInput.type, sequence)
+          : existingEntry.alias;
+
+        return persistSettings({
+          ...settings,
+          masking: {
+            entries: settings.masking.entries.map((entry) =>
+              entry.id === entryInput.id
+                ? {
+                    ...entry,
+                    type: entryInput.type,
+                    value: entryInput.value,
+                    alias,
+                    enabled: entryInput.enabled,
+                    updatedAt: getNow(),
+                  }
+                : entry,
+            ),
+            sequences: typeChanged
+              ? {
+                  ...settings.masking.sequences,
+                  [entryInput.type]: sequence,
+                }
+              : settings.masking.sequences,
+          },
+        });
+      }),
+
+    deleteMaskingEntry: (id: unknown) =>
+      runExclusive(async () => {
+        if (typeof id !== 'string') {
+          throw new Error('삭제할 Masking Entity 정보가 올바르지 않습니다.');
+        }
+
+        const settings = await loadSettings();
+
+        if (!settings.masking.entries.some((entry) => entry.id === id)) {
+          throw new Error('삭제할 Masking Entity를 찾을 수 없습니다.');
+        }
+
+        return persistSettings({
+          ...settings,
+          masking: {
+            entries: settings.masking.entries.filter(
+              (entry) => entry.id !== id,
+            ),
+            sequences: settings.masking.sequences,
+          },
         });
       }),
   };
