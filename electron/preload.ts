@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  AutoContextRetrievalInput,
+  AutoRetrievedContext,
+} from '../src/autoContext';
+import type {
   AddVaultInput,
   MimoraIpcResult,
   MimoraSettings,
@@ -69,6 +73,12 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('vaultFiles:search', input) as Promise<
         MimoraIpcResult<VaultSearchResult[]>
+      >
+    ).then(unwrapIpcResult),
+  retrieveAutoContext: (input: AutoContextRetrievalInput) =>
+    (
+      ipcRenderer.invoke('vaultFiles:retrieveAutoContext', input) as Promise<
+        MimoraIpcResult<AutoRetrievedContext[]>
       >
     ).then(unwrapIpcResult),
 });

@@ -7,6 +7,7 @@ import {
   type UpdateVaultInput,
   type VaultDirectorySelection,
 } from '../src/settings';
+import type { AutoRetrievedContext } from '../src/autoContext';
 import { createSettingsStore } from './settingsStore';
 import { createVaultFilesService } from './vaultFiles';
 import type {
@@ -122,6 +123,15 @@ function registerVaultFileHandlers(): void {
       input: unknown,
     ): Promise<MimoraIpcResult<VaultSearchResult[]>> =>
       toIpcResult(() => vaultFilesService.searchVaultFiles(input)),
+  );
+
+  ipcMain.handle(
+    'vaultFiles:retrieveAutoContext',
+    async (
+      _event,
+      input: unknown,
+    ): Promise<MimoraIpcResult<AutoRetrievedContext[]>> =>
+      toIpcResult(() => vaultFilesService.retrieveAutoContext(input)),
   );
 }
 

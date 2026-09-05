@@ -1,6 +1,10 @@
 /// <reference types="vite/client" />
 
 import type {
+  AutoContextRetrievalInput,
+  AutoRetrievedContext,
+} from './autoContext';
+import type {
   AddVaultInput,
   MimoraSettings,
   UpdateVaultInput,
@@ -26,6 +30,9 @@ type MimoraApi = {
       relativePath: string,
     ) => Promise<VaultFileContent>;
     searchVaultFiles: (input: VaultSearchInput) => Promise<VaultSearchResult[]>;
+    retrieveAutoContext: (
+      input: AutoContextRetrievalInput,
+    ) => Promise<AutoRetrievedContext[]>;
 };
 
 declare global {

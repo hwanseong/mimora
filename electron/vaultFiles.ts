@@ -1,5 +1,9 @@
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import type {
+  AutoContextRetrievalInput,
+  AutoRetrievedContext,
+} from '../src/autoContext';
 import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
 import type {
@@ -10,6 +14,10 @@ import type {
 } from '../src/vaultFiles';
 
 type SettingsStore = ReturnType<typeof createSettingsStore>;
+
+function createVaultDocumentId(vaultId: string, relativePath: string): string {
+  return JSON.stringify([vaultId, relativePath]);
+}
 
 function getFsErrorCode(error: unknown): string | null {
   return error && typeof error === 'object' && 'code' in error
@@ -383,6 +391,286 @@ async function searchVault(
   return results;
 }
 
+const retrievalStopWords = new Set([
+  '관련',
+  '관련된',
+  '관련한',
+  '내용',
+  '내용을',
+  '대해',
+  '대한',
+  '무엇',
+  '어떤',
+  '최근',
+  '정리',
+  '정리해줘',
+  '알려줘',
+  '보여줘',
+]);
+
+const koreanParticles = [
+  '에게서',
+  '으로',
+  '에서',
+  '에게',
+  '부터',
+  '까지',
+  '처럼',
+  '보다',
+  '이나',
+  '거나',
+  '은',
+  '는',
+  '이',
+  '가',
+  '을',
+  '를',
+  '과',
+  '와',
+  '의',
+  '에',
+  '로',
+  '도',
+  '만',
+];
+
+function normalizeRetrievalText(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase()
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function stripKoreanParticle(token: string): string {
+  for (const particle of koreanParticles) {
+    if (token.endsWith(particle) && token.length - particle.length >= 2) {
+      return token.slice(0, -particle.length);
+    }
+  }
+
+  return token;
+}
+
+function preprocessRetrievalQuery(query: string): {
+  phrase: string;
+  tokens: string[];
+} {
+  const phrase = normalizeRetrievalText(query);
+  const rawTokens = phrase.split(' ').filter((token) => token.length >= 2);
+  const meaningfulTokens = rawTokens
+    .map(stripKoreanParticle)
+    .filter((token) => token.length >= 2 && !retrievalStopWords.has(token));
+
+  return {
+    phrase,
+    tokens: [...new Set(meaningfulTokens.length > 0 ? meaningfulTokens : rawTokens)],
+  };
+}
+
+function countOccurrences(content: string, term: string): number {
+  let count = 0;
+  let searchIndex = 0;
+
+  while (searchIndex < content.length) {
+    const matchIndex = content.indexOf(term, searchIndex);
+
+    if (matchIndex < 0) {
+      break;
+    }
+
+    count += 1;
+    searchIndex = matchIndex + Math.max(term.length, 1);
+  }
+
+  return count;
+}
+
+function getMarkdownHeadings(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .filter((line) => /^\s*#{1,6}\s+/.test(line))
+    .map((line) => line.replace(/^\s*#{1,6}\s+/, ''))
+    .join(' ');
+}
+
+function calculateRetrievalScore(
+  file: VaultFile,
+  content: string,
+  phrase: string,
+  tokens: string[],
+): {
+  matchedTokenCount: number;
+  phraseMatched: boolean;
+  score: number;
+} {
+  const fileName = normalizeRetrievalText(file.name);
+  const folderPath = normalizeRetrievalText(file.folder);
+  const headings = normalizeRetrievalText(getMarkdownHeadings(content));
+  const body = normalizeRetrievalText(content);
+  let score = 0;
+  let phraseMatched = false;
+
+  if (phrase.length >= 2) {
+    if (fileName.includes(phrase)) {
+      score += 50;
+      phraseMatched = true;
+    }
+    if (folderPath.includes(phrase)) {
+      score += 30;
+      phraseMatched = true;
+    }
+    if (headings.includes(phrase)) {
+      score += 45;
+      phraseMatched = true;
+    }
+    if (body.includes(phrase)) {
+      score += 20;
+      phraseMatched = true;
+    }
+  }
+
+  let matchedTokenCount = 0;
+
+  for (const token of tokens) {
+    let tokenMatched = false;
+
+    if (fileName.includes(token)) {
+      score += 14;
+      tokenMatched = true;
+    }
+
+    if (folderPath.includes(token)) {
+      score += 8;
+      tokenMatched = true;
+    }
+
+    if (headings.includes(token)) {
+      score += 12;
+      tokenMatched = true;
+    }
+
+    const bodyOccurrences = countOccurrences(body, token);
+
+    if (bodyOccurrences > 0) {
+      score += Math.min(bodyOccurrences, 3) * 2;
+      tokenMatched = true;
+    }
+
+    if (tokenMatched) {
+      matchedTokenCount += 1;
+    }
+  }
+
+  if (matchedTokenCount >= 2) {
+    score += matchedTokenCount * (matchedTokenCount - 1) * 3;
+  }
+
+  if (tokens.length > 0 && matchedTokenCount === tokens.length) {
+    score += 12;
+  }
+
+  return { matchedTokenCount, phraseMatched, score };
+}
+
+function createAutoContextSnippet(
+  content: string,
+  originalQuery: string,
+  tokens: string[],
+): string {
+  const normalizedContent = content.toLocaleLowerCase();
+  const query = originalQuery.trim().toLocaleLowerCase();
+  let matchIndex = query ? normalizedContent.indexOf(query) : -1;
+  let matchedTerm = query;
+
+  if (matchIndex < 0) {
+    for (const token of [...tokens].sort((left, right) => right.length - left.length)) {
+      matchIndex = normalizedContent.indexOf(token);
+
+      if (matchIndex >= 0) {
+        matchedTerm = token;
+        break;
+      }
+    }
+  }
+
+  if (matchIndex < 0) {
+    matchIndex = 0;
+    matchedTerm = '';
+  }
+
+  return createSearchSnippet(content, matchIndex, matchedTerm);
+}
+
+async function retrieveFromVault(
+  vault: VaultConfig,
+  query: string,
+  phrase: string,
+  tokens: string[],
+): Promise<AutoRetrievedContext[]> {
+  const rootPath = await resolveVaultRoot(vault);
+  const files: VaultFile[] = [];
+  const results: AutoRetrievedContext[] = [];
+
+  await walkMarkdownFiles(rootPath, rootPath, [], files);
+
+  for (const file of files) {
+    try {
+      const { content } = await readMarkdownFile(rootPath, file.relativePath);
+      const { matchedTokenCount, phraseMatched, score } =
+        calculateRetrievalScore(file, content, phrase, tokens);
+
+      if (
+        score <= 0 ||
+        (tokens.length >= 3 && matchedTokenCount < 2 && !phraseMatched)
+      ) {
+        continue;
+      }
+
+      results.push({
+        documentId: createVaultDocumentId(vault.id, file.relativePath),
+        vaultId: vault.id,
+        vaultName: vault.name,
+        vaultType: vault.type,
+        security: vault.security,
+        relativePath: file.relativePath,
+        fileName: file.name,
+        score,
+        snippet: createAutoContextSnippet(content, query, tokens),
+        content,
+      });
+    } catch (error) {
+      console.warn('Skipped an unreadable Vault file during retrieval.', error);
+    }
+  }
+
+  return results;
+}
+
+function validateAutoContextInput(input: unknown): Required<AutoContextRetrievalInput> {
+  if (!input || typeof input !== 'object') {
+    throw new Error('자동 문서 검색 요청이 올바르지 않습니다.');
+  }
+
+  const candidate = input as Partial<AutoContextRetrievalInput>;
+  const query = typeof candidate.query === 'string' ? candidate.query.trim() : '';
+
+  if (!query) {
+    throw new Error('자동 문서 검색을 위한 질문이 비어 있습니다.');
+  }
+
+  const requestedLimit =
+    typeof candidate.limit === 'number' && Number.isFinite(candidate.limit)
+      ? Math.floor(candidate.limit)
+      : 5;
+
+  return {
+    query,
+    limit: Math.min(Math.max(requestedLimit, 1), 10),
+  };
+}
+
 export function createVaultFilesService(settingsStore: SettingsStore) {
   return {
     async listVaultFiles(vaultId: unknown): Promise<VaultFile[]> {
@@ -440,6 +728,51 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
       }
 
       return vaultSearches.flatMap((result) => result.results);
+    },
+
+    async retrieveAutoContext(input: unknown): Promise<AutoRetrievedContext[]> {
+      const retrievalInput = validateAutoContextInput(input);
+      const settings = await settingsStore.getSettings();
+
+      if (settings.vaults.length === 0) {
+        return [];
+      }
+
+      const { phrase, tokens } = preprocessRetrievalQuery(retrievalInput.query);
+      const vaultRetrievals = await Promise.all(
+        settings.vaults.map(async (vault) => {
+          try {
+            return {
+              searched: true,
+              results: await retrieveFromVault(
+                vault,
+                retrievalInput.query,
+                phrase,
+                tokens,
+              ),
+            };
+          } catch (error) {
+            console.warn('Skipped an unavailable Vault during retrieval.', error);
+            return { searched: false, results: [] as AutoRetrievedContext[] };
+          }
+        }),
+      );
+
+      if (!vaultRetrievals.some((result) => result.searched)) {
+        throw new Error(
+          '자동 검색에 사용할 수 있는 Vault가 없습니다. Vault 경로와 권한을 확인하세요.',
+        );
+      }
+
+      return vaultRetrievals
+        .flatMap((result) => result.results)
+        .sort(
+          (left, right) =>
+            right.score - left.score ||
+            left.vaultName.localeCompare(right.vaultName) ||
+            left.relativePath.localeCompare(right.relativePath),
+        )
+        .slice(0, retrievalInput.limit);
     },
   };
 }

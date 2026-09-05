@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
-  assistantTestResponse,
+  getAssistantTestResponse,
   type ChatMessage,
   type ChatSessions,
 } from './chat';
+import type { AutoRetrievedContext } from './autoContext';
 import {
   type AttachedContext,
   type WorkspaceContexts,
@@ -32,17 +33,8 @@ export function App() {
     useState<WorkspaceContexts>({});
   const workspaceContextsRef = useRef<WorkspaceContexts>({});
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
-  const assistantResponseTimeouts = useRef<number[]>([]);
   const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
   const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
-
-  useEffect(() => {
-    return () => {
-      assistantResponseTimeouts.current.forEach((timeoutId) => {
-        window.clearTimeout(timeoutId);
-      });
-    };
-  }, []);
 
   function handleSelectPrompt(promptText: string): void {
     setMessage(promptText);
@@ -86,19 +78,89 @@ export function App() {
     }
 
     const targetWorkspaceId = selectedWorkspace.id;
-    const userMessage = createMessage('user', trimmedMessage);
+    const userMessage: ChatMessage = {
+      ...createMessage('user', trimmedMessage),
+      autoContext: [],
+      autoContextStatus: 'loading',
+    };
 
     appendMessagesToSession(targetWorkspaceId, [userMessage]);
     setMessage('');
 
-    const timeoutId = window.setTimeout(() => {
-      const assistantMessage = createMessage('assistant', assistantTestResponse);
-      appendMessagesToSession(targetWorkspaceId, [assistantMessage]);
-      assistantResponseTimeouts.current =
-        assistantResponseTimeouts.current.filter((id) => id !== timeoutId);
-    }, 400);
+    void retrieveAutoContextForMessage(
+      targetWorkspaceId,
+      userMessage.id,
+      trimmedMessage,
+    );
+  }
 
-    assistantResponseTimeouts.current.push(timeoutId);
+  async function retrieveAutoContextForMessage(
+    workspaceId: Workspace['id'],
+    userMessageId: string,
+    query: string,
+  ): Promise<void> {
+    try {
+      const autoContext = await window.mimora.retrieveAutoContext({
+        query,
+        limit: 5,
+      });
+
+      completeAutoContextRetrieval(workspaceId, userMessageId, autoContext);
+    } catch (error) {
+      completeAutoContextRetrieval(
+        workspaceId,
+        userMessageId,
+        [],
+        error instanceof Error
+          ? error.message
+          : '자동 참조 문서를 검색하지 못했습니다.',
+      );
+    }
+  }
+
+  function completeAutoContextRetrieval(
+    workspaceId: Workspace['id'],
+    userMessageId: string,
+    autoContext: AutoRetrievedContext[],
+    errorMessage?: string,
+  ): void {
+    setChatSessions((currentSessions) => {
+      const sessionMessages = currentSessions[workspaceId] ?? [];
+      const userMessageIndex = sessionMessages.findIndex(
+        (chatMessage) => chatMessage.id === userMessageId,
+      );
+
+      if (userMessageIndex < 0) {
+        return currentSessions;
+      }
+
+      const userMessage = sessionMessages[userMessageIndex];
+      const updatedUserMessage: ChatMessage = {
+        ...userMessage,
+        autoContext,
+        autoContextStatus: errorMessage ? 'error' : 'complete',
+        ...(errorMessage ? { autoContextError: errorMessage } : {}),
+      };
+      const assistantMessage: ChatMessage = {
+        id: `assistant-for-${userMessageId}`,
+        role: 'assistant',
+        content: getAssistantTestResponse(autoContext.length, Boolean(errorMessage)),
+        createdAt: new Date().toISOString(),
+      };
+      const nextSessionMessages = [...sessionMessages];
+
+      nextSessionMessages.splice(
+        userMessageIndex,
+        1,
+        updatedUserMessage,
+        assistantMessage,
+      );
+
+      return {
+        ...currentSessions,
+        [workspaceId]: nextSessionMessages,
+      };
+    });
   }
 
   function attachContextToWorkspace(
