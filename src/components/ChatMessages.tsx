@@ -172,6 +172,14 @@ export function ChatMessages({
                   model={message.model}
                 />
               ) : null}
+              {message.role === 'assistant' &&
+              message.routingDecision?.provider === 'openai' &&
+              message.responseUnmasking &&
+              message.responseUnmasking.replacementCount > 0 ? (
+                <small className="message-unmasking">
+                  로컬에서 익명화 명칭 복원
+                </small>
+              ) : null}
               {message.role === 'assistant' && message.externalSafetyAction ? (
                 <div className={`external-safety-action ${message.externalSafetyAction.status}`}>
                   <strong>

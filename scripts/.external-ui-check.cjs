@@ -258,6 +258,24 @@ function runElectronFixture() {
               throw new Error('Timed out waiting for the External UI state.');
             };
 
+            const recentChatsButton = await waitFor(() =>
+              Array.from(document.querySelectorAll('button')).find(
+                (button) => button.textContent.trim() === '최근 대화',
+              ),
+            );
+            recentChatsButton.click();
+            const recentChatsEmpty = Boolean(
+              await waitFor(() =>
+                document.body.textContent.includes('아직 대화 기록이 없습니다.'),
+              ),
+            );
+            const allWorkspaceButton = await waitFor(() =>
+              Array.from(document.querySelectorAll('button')).find(
+                (button) => button.textContent.trim() === '전체 업무',
+              ),
+            );
+            allWorkspaceButton.click();
+
             const modeSelect = await waitFor(() =>
               document.querySelector('select[aria-label="AI Mode"]'),
             );
@@ -384,9 +402,41 @@ function runElectronFixture() {
             );
             const localFallbackCompleted = Boolean(completedLocalFooter);
 
-            valueSetter.call(messageInput, '보안자격증명 점검문서 설명해줘');
-            messageInput.dispatchEvent(new Event('input', { bubbles: true }));
-            messageInput.form.requestSubmit();
+            const recentChatsAfterMessageButton = Array.from(
+              document.querySelectorAll('button'),
+            ).find((button) => button.textContent.trim() === '최근 대화');
+
+            if (!recentChatsAfterMessageButton) {
+              throw new Error('Recent Chats navigation was not available.');
+            }
+
+            recentChatsAfterMessageButton.click();
+            const recentChatItem = await waitFor(() =>
+              document.querySelector('.recent-chat-item'),
+            );
+            const recentChatSummaryVisible =
+              recentChatItem.textContent.includes('전체 업무') &&
+              recentChatItem.textContent.includes('검토대상 고객계획') &&
+              recentChatItem.textContent.includes('2 messages') &&
+              recentChatItem.textContent.includes('방금 전');
+
+            if (!recentChatSummaryVisible) {
+              throw new Error('Recent Chats summary was not rendered.');
+            }
+
+            recentChatItem.click();
+            const resumedMessageInput = await waitFor(() =>
+              document.querySelector('textarea[aria-label="메시지"]'),
+            );
+            const workspaceChatRestored =
+              document.body.textContent.includes('검토대상 고객계획') &&
+              document.body.textContent.includes(
+                'Local AI · External · Local fallback',
+              );
+
+            valueSetter.call(resumedMessageInput, '보안자격증명 점검문서 설명해줘');
+            resumedMessageInput.dispatchEvent(new Event('input', { bubbles: true }));
+            resumedMessageInput.form.requestSubmit();
 
             await waitFor(() =>
               document.body.textContent.includes(
@@ -464,6 +514,9 @@ function runElectronFixture() {
 
             return {
               hasExternalOption,
+              recentChatsEmpty,
+              recentChatSummaryVisible,
+              workspaceChatRestored,
               composerIsReviewPending,
               reviewActionsVisible,
               reviewPersistedAfterClose,
@@ -477,6 +530,9 @@ function runElectronFixture() {
 
         if (
           !result.hasExternalOption ||
+          !result.recentChatsEmpty ||
+          !result.recentChatSummaryVisible ||
+          !result.workspaceChatRestored ||
           !result.composerIsReviewPending ||
           !result.reviewActionsVisible ||
           !result.reviewPersistedAfterClose ||

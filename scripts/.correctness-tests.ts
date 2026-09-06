@@ -14,18 +14,34 @@ import { createSettingsStore } from '../electron/settingsStore';
 import {
   isChatRequestBusy,
   tryBeginExternalAction,
+  type ChatSessions,
 } from '../src/chat';
 import { ChatInput } from '../src/components/ChatInput';
+import { ChatMessages } from '../src/components/ChatMessages';
 import { ExternalPayloadPreviewModal } from '../src/components/ExternalPayloadPreviewModal';
 import { MarkdownRenderer } from '../src/components/MarkdownRenderer';
+import {
+  createRecentChatItems,
+  formatRecentChatTime,
+  PRIVATE_RECENT_CHAT_PREVIEW_MAX_CHARS,
+  RecentChatsView,
+  RECENT_CHAT_PREVIEW_MAX_CHARS,
+} from '../src/components/RecentChatsView';
 import { RoutingStatus } from '../src/components/RoutingStatus';
 import { SecretDetectionSettingsSection } from '../src/components/SecretDetectionSettingsSection';
 import { buildExternalPayloadText } from '../src/security/externalPayloadBuilder';
 import { createExternalPayloadPreview } from '../src/security/externalPayloadPreview';
+import type { MaskingEntry } from '../src/security/maskingEngine';
 import {
   authorizeExternalSend,
   evaluateOutboundPayload,
 } from '../src/security/outboundPayloadSafety';
+import {
+  applyResponseUnmasking,
+  createResponseUnmaskingSnapshot,
+  unmaskExternalResponse,
+  unmaskExternalResponseFromSnapshot,
+} from '../src/security/responseUnmasking';
 import { routeAIRequest } from '../src/security/securityRouter';
 import { defaultSettings } from '../src/settings';
 import {
@@ -48,6 +64,93 @@ function renderMarkdown(content: string): string {
     createElement(MarkdownRenderer, { content, className: 'chat-markdown' }),
   );
 }
+
+const recentChatSessions: ChatSessions = {
+  all: [
+    {
+      id: 'all-user',
+      role: 'user',
+      content: '셀트리온 프로젝트 현황을 알려줘.',
+      createdAt: '2026-09-06T10:00:00.000Z',
+    },
+    {
+      id: 'all-assistant',
+      role: 'assistant',
+      content: '프로젝트 현황입니다.',
+      createdAt: '2026-09-06T10:00:01.000Z',
+    },
+  ],
+  'pjt-a': [
+    {
+      id: 'project-user',
+      role: 'user',
+      content: '현재 주요 리스크를 분석해줘.',
+      createdAt: '2026-09-06T12:00:00.000Z',
+    },
+  ],
+  private: [
+    {
+      id: 'private-user',
+      role: 'user',
+      content:
+        '개인 업무에 대한 매우 긴 질문입니다.\n한 줄로 표시하면서 상세 원문을 과도하게 노출하지 않도록 충분히 긴 내용을 계속 작성합니다. 추가 내용도 화면에 전부 나오면 안 됩니다.',
+      createdAt: '2026-09-06T11:00:00.000Z',
+    },
+    {
+      id: 'private-assistant',
+      role: 'assistant',
+      content: '개인 업무 답변입니다.',
+      createdAt: '2026-09-06T11:00:01.000Z',
+    },
+  ],
+};
+const recentChatItems = createRecentChatItems(recentChatSessions);
+
+assert.deepEqual(
+  recentChatItems.map((item) => item.workspace.id),
+  ['pjt-a', 'private', 'all'],
+);
+assert.equal(recentChatItems[0].preview, '현재 주요 리스크를 분석해줘.');
+assert.ok(
+  [...recentChatItems[0].preview].length <= RECENT_CHAT_PREVIEW_MAX_CHARS,
+);
+assert.equal(recentChatItems[2].messageCount, 2);
+assert.ok(
+  [...recentChatItems[1].preview].length <=
+    PRIVATE_RECENT_CHAT_PREVIEW_MAX_CHARS,
+);
+assert.match(recentChatItems[1].preview, /…$/u);
+assert.doesNotMatch(recentChatItems[1].preview, /\n/u);
+const relativeTimeNow = Date.parse('2026-09-06T12:30:00.000Z');
+assert.equal(
+  formatRecentChatTime('2026-09-06T12:29:40.000Z', relativeTimeNow),
+  '방금 전',
+);
+assert.equal(
+  formatRecentChatTime('2026-09-06T12:05:00.000Z', relativeTimeNow),
+  '25분 전',
+);
+assert.equal(
+  formatRecentChatTime('2026-09-06T10:30:00.000Z', relativeTimeNow),
+  '2시간 전',
+);
+
+const emptyRecentChatsHtml = renderToStaticMarkup(
+  createElement(RecentChatsView, {
+    chatSessions: {},
+    onOpenWorkspace: () => undefined,
+  }),
+);
+assert.match(emptyRecentChatsHtml, /아직 대화 기록이 없습니다/u);
+const populatedRecentChatsHtml = renderToStaticMarkup(
+  createElement(RecentChatsView, {
+    chatSessions: recentChatSessions,
+    onOpenWorkspace: () => undefined,
+  }),
+);
+assert.match(populatedRecentChatsHtml, /PJT-A/u);
+assert.match(populatedRecentChatsHtml, /PM Private/u);
+assert.match(populatedRecentChatsHtml, /2 messages/u);
 
 const boldHtml = renderMarkdown('**리스크**와 **이슈**');
 assert.match(boldHtml, /<strong>리스크<\/strong>/u);
@@ -940,6 +1043,149 @@ assert.equal(
   'pass',
 );
 
+const responseUnmaskingEntries: MaskingEntry[] = [
+  ...consistentMaskingEntries,
+  {
+    id: 'organization-example',
+    type: 'organization',
+    value: '미모라 연구소',
+    alias: 'ORGANIZATION_001',
+    enabled: true,
+    createdAt: '2026-09-06T00:00:02.000Z',
+    updatedAt: '2026-09-06T00:00:02.000Z',
+  },
+  {
+    id: 'project-example',
+    type: 'project',
+    value: '통합 프로젝트',
+    alias: 'PROJECT_001',
+    enabled: true,
+    createdAt: '2026-09-06T00:00:03.000Z',
+    updatedAt: '2026-09-06T00:00:03.000Z',
+  },
+  {
+    id: 'system-example',
+    type: 'system',
+    value: '코어 시스템',
+    alias: 'SYSTEM_001',
+    enabled: true,
+    createdAt: '2026-09-06T00:00:04.000Z',
+    updatedAt: '2026-09-06T00:00:04.000Z',
+  },
+  {
+    id: 'disabled-client',
+    type: 'client',
+    value: '비활성 고객',
+    alias: 'CLIENT_999',
+    enabled: false,
+    createdAt: '2026-09-06T00:00:05.000Z',
+    updatedAt: '2026-09-06T00:00:05.000Z',
+  },
+];
+
+const responseUnmaskingA = unmaskExternalResponse(
+  '[CLIENT_001] 프로젝트입니다.',
+  responseUnmaskingEntries,
+);
+assert.equal(responseUnmaskingA.displayText, '셀트리온 프로젝트입니다.');
+assert.equal(responseUnmaskingA.replacementCount, 1);
+assert.doesNotMatch(JSON.stringify(responseUnmaskingA.replacements), /셀트리온/u);
+
+const responseUnmaskingB = unmaskExternalResponse(
+  '[PERSON_001]이 [CLIENT_001]을 담당합니다.',
+  responseUnmaskingEntries,
+);
+assert.equal(
+  responseUnmaskingB.displayText,
+  '이상익이 셀트리온을 담당합니다.',
+);
+
+const responseUnmaskingC = unmaskExternalResponse(
+  '**[CLIENT_001]**\n- 담당자: [PERSON_001]\n- 링크: [CLIENT_001](client.md)\n- 위키: [[CLIENT_001]]',
+  responseUnmaskingEntries,
+);
+assert.equal(
+  responseUnmaskingC.displayText,
+  '**셀트리온**\n- 담당자: 이상익\n- 링크: [셀트리온](client.md)\n- 위키: [[셀트리온]]',
+);
+
+const nonEntityAliases =
+  '[FILE_PATH_001] [INTERNAL_IP_001] [REDACTED_SECRET] CLIENT_001 [CLIENT_001_EXTRA]';
+const responseUnmaskingStructural = unmaskExternalResponse(
+  nonEntityAliases,
+  responseUnmaskingEntries,
+);
+assert.equal(responseUnmaskingStructural.displayText, nonEntityAliases);
+
+const allEntityTypes = unmaskExternalResponse(
+  '[ORGANIZATION_001] [PROJECT_001] [SYSTEM_001] [CLIENT_999]',
+  responseUnmaskingEntries,
+);
+assert.equal(
+  allEntityTypes.displayText,
+  '미모라 연구소 통합 프로젝트 코어 시스템 [CLIENT_999]',
+);
+
+assert.match(multiDocumentMaskingPreview.maskedQuestion, /\[CLIENT_001\]/u);
+assert.doesNotMatch(multiDocumentMaskingPreview.maskedQuestion, /셀트리온/u);
+
+const responseSnapshot = createResponseUnmaskingSnapshot(
+  responseUnmaskingEntries,
+  ['CLIENT_001', 'PERSON_001', 'FILE_PATH_001'],
+);
+assert.deepEqual(
+  responseSnapshot.map((mapping) => mapping.alias),
+  ['CLIENT_001', 'PERSON_001'],
+);
+const localResponse = applyResponseUnmasking({
+  provider: 'local',
+  text: '[CLIENT_001] Local 응답',
+  snapshot: responseSnapshot,
+});
+assert.equal(localResponse.displayText, '[CLIENT_001] Local 응답');
+assert.equal(localResponse.replacementCount, 0);
+
+const changedDictionary = responseUnmaskingEntries.map((entry) =>
+  entry.alias === 'CLIENT_001'
+    ? { ...entry, value: '변경된 고객명' }
+    : entry,
+);
+assert.equal(
+  unmaskExternalResponse('[CLIENT_001]', changedDictionary).displayText,
+  '변경된 고객명',
+);
+assert.equal(
+  unmaskExternalResponseFromSnapshot('[CLIENT_001]', responseSnapshot)
+    .displayText,
+  '셀트리온',
+);
+const unmaskedChatHtml = renderToStaticMarkup(
+  createElement(ChatMessages, {
+    messages: [
+      {
+        id: 'external-unmasked-response',
+        role: 'assistant',
+        content: responseUnmaskingA.displayText,
+        rawExternalResponse: responseUnmaskingA.maskedText,
+        responseUnmaskingSnapshot: responseSnapshot,
+        responseUnmasking: {
+          replacements: responseUnmaskingA.replacements,
+          replacementCount: responseUnmaskingA.replacementCount,
+        },
+        createdAt: '2026-09-06T00:00:00.000Z',
+        routingDecision: approvedRouting,
+        generationStatus: 'complete',
+      },
+    ],
+    workspaceId: 'all',
+    onApproveExternal: async () => ({ ok: true as const }),
+    onUseLocalAI: async () => undefined,
+  }),
+);
+assert.match(unmaskedChatHtml, /셀트리온 프로젝트입니다/u);
+assert.doesNotMatch(unmaskedChatHtml, /CLIENT_001/u);
+assert.match(unmaskedChatHtml, /로컬에서 익명화 명칭 복원/u);
+
 const deliberatelyUnmaskedPayload = buildExternalPayloadText({
   maskedQuestion: '셀트리온 프로젝트를 설명해줘.',
   maskedDocumentContents: ['이상익이 담당한다.'],
@@ -973,3 +1219,5 @@ console.info('[correctness-check] External review A-J state checks passed.');
 console.info('[correctness-check] Secret Detection A-L checks passed.');
 console.info('[correctness-check] Markdown Credential A-J checks passed.');
 console.info('[correctness-check] Consistent Masking A-F checks passed.');
+console.info('[correctness-check] Response Unmasking A-I checks passed.');
+console.info('[correctness-check] Recent Chats checks passed.');

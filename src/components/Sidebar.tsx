@@ -34,15 +34,19 @@ function NavSection({
 }
 
 export function Sidebar({
+  isRecentChatsActive,
   isVaultBrowserActive,
   isSettingsActive,
+  onOpenRecentChats,
   onOpenVaultBrowser,
   onOpenSettings,
   selectedWorkspaceId,
   onSelectWorkspace,
 }: {
+  isRecentChatsActive: boolean;
   isVaultBrowserActive: boolean;
   isSettingsActive: boolean;
+  onOpenRecentChats: () => void;
   onOpenVaultBrowser: () => void;
   onOpenSettings: () => void;
   selectedWorkspaceId: string;
@@ -64,7 +68,12 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-bottom">
-        <button className="nav-item" type="button">
+        <button
+          aria-pressed={isRecentChatsActive}
+          className={`nav-item${isRecentChatsActive ? ' active' : ''}`}
+          onClick={onOpenRecentChats}
+          type="button"
+        >
           최근 대화
         </button>
         <button

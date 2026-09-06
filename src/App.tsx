@@ -26,6 +26,7 @@ import { ChatInput } from './components/ChatInput';
 import { ChatMessages } from './components/ChatMessages';
 import { ContextPanel } from './components/ContextPanel';
 import { QuickPromptBar } from './components/QuickPromptBar';
+import { RecentChatsView } from './components/RecentChatsView';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
 import { VaultBrowserView } from './components/VaultBrowserView';
@@ -42,6 +43,11 @@ import {
   type ExternalPayloadPreview,
 } from './security/externalPayloadPreview';
 import { getSecretRules } from './security/secretDetector';
+import {
+  applyResponseUnmasking,
+  createResponseUnmaskingSnapshot,
+  type ResponseUnmaskingSnapshotEntry,
+} from './security/responseUnmasking';
 import type {
   ExternalAIPerformanceMetrics,
   ExternalAIChatResult,
@@ -57,6 +63,7 @@ type PendingExternalRequest = {
   manualContexts: AttachedContext[];
   autoContexts: AutoRetrievedContext[];
   preview: ExternalPayloadPreview;
+  responseUnmaskingSnapshot: ResponseUnmaskingSnapshotEntry[];
   routingDecision: RoutingDecision;
   retrievalMs: number;
   inFlight: boolean;
@@ -64,7 +71,7 @@ type PendingExternalRequest = {
 
 export function App() {
   const [activeView, setActiveView] = useState<
-    'chat' | 'vault-browser' | 'settings'
+    'chat' | 'recent-chats' | 'vault-browser' | 'settings'
   >('chat');
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
@@ -408,9 +415,34 @@ export function App() {
       totalElapsedMs:
         request.retrievalMs + response.performance.openAIRoundTripMs,
     };
+    const unmaskingResult = applyResponseUnmasking({
+      provider: 'openai',
+      text: response.content,
+      snapshot: request.responseUnmaskingSnapshot,
+    });
+
+    console.info('[Mimora Response Unmasking]', {
+      mappings: request.responseUnmaskingSnapshot.length,
+      replacements: unmaskingResult.replacementCount,
+      entityTypes: [
+        ...new Set(
+          unmaskingResult.replacements.map(
+            (replacement) => replacement.entityType,
+          ),
+        ),
+      ],
+    });
 
     completeAssistantMessage(request.workspaceId, request.assistantMessageId, {
-      content: response.content,
+      content: unmaskingResult.displayText,
+      rawExternalResponse: unmaskingResult.maskedText,
+      responseUnmaskingSnapshot: request.responseUnmaskingSnapshot.map(
+        (mapping) => ({ ...mapping }),
+      ),
+      responseUnmasking: {
+        replacements: unmaskingResult.replacements,
+        replacementCount: unmaskingResult.replacementCount,
+      },
       generationStatus: 'complete',
       requestStatus: 'completed',
       sources: getContextSources(
@@ -464,6 +496,7 @@ export function App() {
     );
 
     let preview: ExternalPayloadPreview | undefined;
+    let responseUnmaskingSnapshot: ResponseUnmaskingSnapshotEntry[] = [];
     let externalAvailable = false;
     let externalPreparationError: string | undefined;
 
@@ -489,6 +522,10 @@ export function App() {
             settings.secretDetection.customRules,
           ),
         });
+        responseUnmaskingSnapshot = createResponseUnmaskingSnapshot(
+          settings.masking.entries,
+          preview.replacements.map((replacement) => replacement.alias),
+        );
         logSecretDetection(preview);
         externalAvailable = Boolean(
           settings.externalAI.model && hasApiKey,
@@ -572,6 +609,7 @@ export function App() {
           manualContexts,
           autoContexts: autoContext,
           preview,
+          responseUnmaskingSnapshot,
           routingDecision,
           retrievalMs,
           inFlight: false,
@@ -660,14 +698,17 @@ export function App() {
 
   async function rebuildExternalPreview(
     request: PendingExternalRequest,
-  ): Promise<ExternalPayloadPreview> {
+  ): Promise<{
+    preview: ExternalPayloadPreview;
+    responseUnmaskingSnapshot: ResponseUnmaskingSnapshotEntry[];
+  }> {
     const settings = await window.mimora.getSettings();
     const effectiveSecurity = evaluateSecurity(
       request.workspaceType,
       [...request.manualContexts, ...request.autoContexts],
     ).security;
 
-    return createExternalPayloadPreview({
+    const preview = createExternalPayloadPreview({
       workspaceId: request.workspaceId,
       effectiveSecurity,
       question: request.query,
@@ -676,6 +717,14 @@ export function App() {
       maskingEntries: settings.masking.entries,
       secretRules: getSecretRules(settings.secretDetection.customRules),
     });
+
+    return {
+      preview,
+      responseUnmaskingSnapshot: createResponseUnmaskingSnapshot(
+        settings.masking.entries,
+        preview.replacements.map((replacement) => replacement.alias),
+      ),
+    };
   }
 
   async function handleApproveExternal(
@@ -723,10 +772,14 @@ export function App() {
     });
 
     try {
-      const revalidatedPreview = await rebuildExternalPreview(request);
+      const {
+        preview: revalidatedPreview,
+        responseUnmaskingSnapshot,
+      } = await rebuildExternalPreview(request);
       logSecretDetection(revalidatedPreview);
 
       request.preview = revalidatedPreview;
+      request.responseUnmaskingSnapshot = responseUnmaskingSnapshot;
       saveExternalPayloadPreviewForTurn(
         request.workspaceId,
         request.userMessageId,
@@ -917,6 +970,9 @@ export function App() {
       | 'externalApproval'
       | 'model'
       | 'usage'
+      | 'rawExternalResponse'
+      | 'responseUnmaskingSnapshot'
+      | 'responseUnmasking'
     >>,
   ): void {
     setChatSessions((currentSessions) => {
@@ -1122,8 +1178,13 @@ export function App() {
   return (
     <div className="app-layout">
       <Sidebar
+        isRecentChatsActive={activeView === 'recent-chats'}
         isVaultBrowserActive={activeView === 'vault-browser'}
         isSettingsActive={activeView === 'settings'}
+        onOpenRecentChats={() => {
+          setActiveView('recent-chats');
+          setMessage('');
+        }}
         onOpenVaultBrowser={() => {
           setActiveView('vault-browser');
           setMessage('');
@@ -1140,6 +1201,8 @@ export function App() {
         aria-label={
           activeView === 'settings'
             ? '설정'
+            : activeView === 'recent-chats'
+              ? '최근 대화'
             : activeView === 'vault-browser'
               ? 'Vault Browser'
               : `${selectedWorkspace.label} 채팅`
@@ -1147,6 +1210,11 @@ export function App() {
       >
         {activeView === 'settings' ? (
           <SettingsView />
+        ) : activeView === 'recent-chats' ? (
+          <RecentChatsView
+            chatSessions={chatSessions}
+            onOpenWorkspace={handleSelectWorkspace}
+          />
         ) : activeView === 'vault-browser' ? (
           <VaultBrowserView
             currentWorkspace={selectedWorkspace}

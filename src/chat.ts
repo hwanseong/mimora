@@ -10,6 +10,10 @@ import type {
 } from './externalAI';
 import type { ExternalPayloadPreview } from './security/externalPayloadPreview';
 import type { SecretDetection } from './security/secretDetector';
+import type {
+  ResponseUnmaskingSnapshotEntry,
+  UnmaskingReplacement,
+} from './security/responseUnmasking';
 import type { AIMode, RoutingDecision } from './security/securityRouter';
 
 export type ChatRequestStatus =
@@ -55,10 +59,18 @@ export type ExternalSafetyAction = {
   secretDetections?: SecretDetection[];
 };
 
+export type ResponseUnmaskingInfo = {
+  replacements: UnmaskingReplacement[];
+  replacementCount: number;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  rawExternalResponse?: string;
+  responseUnmaskingSnapshot?: ResponseUnmaskingSnapshotEntry[];
+  responseUnmasking?: ResponseUnmaskingInfo;
   createdAt: string;
   autoContext?: AutoRetrievedContext[];
   autoContextStatus?: 'loading' | 'complete' | 'error';
