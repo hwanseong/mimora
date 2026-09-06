@@ -50,6 +50,11 @@ import {
   type VaultDirectorySelection,
 } from '../src/settings';
 import type { AutoRetrievedContext } from '../src/autoContext';
+import type {
+  ChatHistoryLoadResult,
+  ChatHistorySaveResult,
+} from '../src/chatHistory';
+import { createChatHistoryStore } from './chatHistoryStore';
 import { createSettingsStore } from './settingsStore';
 import { createVaultFilesService } from './vaultFiles';
 import { createLLMProvider } from './llm/createLLMProvider';
@@ -65,6 +70,7 @@ import type {
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
 const openAICredentialFileName = 'openai-api-key.safe';
+const chatHistoryFileName = 'chat-history.dat';
 
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), settingsFileName);
@@ -76,6 +82,10 @@ const settingsStore = createSettingsStore({
 const openAICredentialStore = createOpenAICredentialStore({
   getCredentialPath: () =>
     path.join(app.getPath('userData'), openAICredentialFileName),
+  safeStorage,
+});
+const chatHistoryStore = createChatHistoryStore({
+  getHistoryPath: () => path.join(app.getPath('userData'), chatHistoryFileName),
   safeStorage,
 });
 const vaultFilesService = createVaultFilesService(settingsStore);
@@ -235,6 +245,30 @@ function registerSettingsHandlers(): void {
         suggestedName: path.basename(selectedPath),
       };
     },
+  );
+}
+
+function registerChatHistoryHandlers(): void {
+  ipcMain.handle(
+    'chatHistory:load',
+    async (): Promise<MimoraIpcResult<ChatHistoryLoadResult>> =>
+      toIpcResult(() => chatHistoryStore.loadChatHistory()),
+  );
+  ipcMain.handle(
+    'chatHistory:save',
+    async (
+      _event,
+      sessions: unknown,
+    ): Promise<MimoraIpcResult<ChatHistorySaveResult>> =>
+      toIpcResult(() => chatHistoryStore.saveChatHistory(sessions)),
+  );
+  ipcMain.handle(
+    'chatHistory:deleteWorkspace',
+    async (
+      _event,
+      workspaceId: unknown,
+    ): Promise<MimoraIpcResult<ChatHistorySaveResult>> =>
+      toIpcResult(() => chatHistoryStore.deleteWorkspaceChat(workspaceId)),
   );
 }
 
@@ -746,6 +780,7 @@ function createMainWindow(): void {
 }
 
 registerSettingsHandlers();
+registerChatHistoryHandlers();
 registerVaultFileHandlers();
 registerLocalAIHandlers();
 registerOpenAIHandlers();

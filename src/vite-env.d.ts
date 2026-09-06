@@ -5,6 +5,11 @@ import type {
   AutoRetrievedContext,
 } from './autoContext';
 import type {
+  ChatHistoryLoadResult,
+  ChatHistorySaveResult,
+  PersistedChatHistory,
+} from './chatHistory';
+import type {
   ConnectionTestResult,
   LLMModel,
   LocalAIConnectionInput,
@@ -40,6 +45,13 @@ import type {
 
 type MimoraApi = {
     appName: string;
+    loadChatHistory: () => Promise<ChatHistoryLoadResult>;
+    saveChatHistory: (
+      history: PersistedChatHistory,
+    ) => Promise<ChatHistorySaveResult>;
+    deleteWorkspaceChat: (
+      workspaceId: string,
+    ) => Promise<ChatHistorySaveResult>;
     getSettings: () => Promise<MimoraSettings>;
     addVault: (input: AddVaultInput) => Promise<MimoraSettings>;
     updateVault: (input: UpdateVaultInput) => Promise<MimoraSettings>;

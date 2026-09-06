@@ -9,6 +9,7 @@ import {
   type ExternalApprovalInfo,
 } from './chat';
 import type { AutoRetrievedContext } from './autoContext';
+import { createPersistedChatHistory } from './chatHistory';
 import {
   type AttachedContext,
   type WorkspaceContexts,
@@ -79,6 +80,11 @@ export function App() {
   const [aiMode, setAIMode] = useState<AIMode>('auto');
   const [isSavingAIMode, setIsSavingAIMode] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
+  const [chatHistoryStatus, setChatHistoryStatus] = useState<
+    'loading' | 'ready' | 'error'
+  >('loading');
+  const [chatHistoryError, setChatHistoryError] = useState<string | null>(null);
+  const skipNextChatHistorySaveRef = useRef(false);
   const [workspaceContexts, setWorkspaceContexts] =
     useState<WorkspaceContexts>({});
   const workspaceContextsRef = useRef<WorkspaceContexts>({});
@@ -130,6 +136,66 @@ export function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void window.mimora
+      .loadChatHistory()
+      .then((result) => {
+        if (!isMounted) {
+          return;
+        }
+
+        skipNextChatHistorySaveRef.current = result.status === 'ready';
+        setChatSessions(result.sessions);
+        setChatHistoryError(result.error ?? null);
+        setChatHistoryStatus(result.status === 'ready' ? 'ready' : 'error');
+      })
+      .catch((error: unknown) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setChatSessions({});
+        setChatHistoryError(
+          error instanceof Error
+            ? error.message
+            : '저장된 대화 기록을 불러오지 못했습니다.',
+        );
+        setChatHistoryStatus('error');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (chatHistoryStatus !== 'ready') {
+      return;
+    }
+
+    if (skipNextChatHistorySaveRef.current) {
+      skipNextChatHistorySaveRef.current = false;
+      return;
+    }
+
+    const persistedHistory = createPersistedChatHistory(chatSessions);
+
+    void window.mimora
+      .saveChatHistory(persistedHistory)
+      .then(() => {
+        setChatHistoryError(null);
+      })
+      .catch((error: unknown) => {
+        setChatHistoryError(
+          error instanceof Error
+            ? error.message
+            : '대화 기록을 안전하게 저장하지 못했습니다.',
+        );
+      });
+  }, [chatHistoryStatus, chatSessions]);
 
   function handleSelectPrompt(promptText: string): void {
     setMessage(promptText);
@@ -217,6 +283,39 @@ export function App() {
       manualContexts,
       endToEndStartedTime,
     );
+  }
+
+  async function handleDeleteWorkspaceChat(workspace: Workspace): Promise<void> {
+    if (chatHistoryStatus !== 'ready') {
+      throw new Error(
+        chatHistoryError ?? '안전한 대화 저장소를 사용할 수 없습니다.',
+      );
+    }
+
+    await window.mimora.deleteWorkspaceChat(workspace.id);
+
+    for (const [messageId, request] of pendingExternalRequestsRef.current) {
+      if (request.workspaceId === workspace.id) {
+        pendingExternalRequestsRef.current.delete(messageId);
+      }
+    }
+
+    workspaceRequestStatusesRef.current.delete(workspace.id);
+    setWorkspaceRequestStatuses((currentStatuses) => {
+      const nextStatuses = { ...currentStatuses };
+      delete nextStatuses[workspace.id];
+      return nextStatuses;
+    });
+    setChatSessions((currentSessions) => {
+      const nextSessions = { ...currentSessions };
+      delete nextSessions[workspace.id];
+      return nextSessions;
+    });
+
+    const nextContexts = { ...workspaceContextsRef.current };
+    delete nextContexts[workspace.id];
+    workspaceContextsRef.current = nextContexts;
+    setWorkspaceContexts(nextContexts);
   }
 
   function toLLMContextDocument(
@@ -1213,7 +1312,10 @@ export function App() {
         ) : activeView === 'recent-chats' ? (
           <RecentChatsView
             chatSessions={chatSessions}
+            isLoading={chatHistoryStatus === 'loading'}
+            onDeleteWorkspaceChat={handleDeleteWorkspaceChat}
             onOpenWorkspace={handleSelectWorkspace}
+            storageError={chatHistoryError}
           />
         ) : activeView === 'vault-browser' ? (
           <VaultBrowserView
@@ -1237,7 +1339,9 @@ export function App() {
               workspaceLabel={selectedWorkspace.label}
             />
             <div className="message-area">
-              {currentMessages.length === 0 ? (
+              {chatHistoryStatus === 'loading' ? (
+                <p className="chat-history-loading">대화 기록을 불러오는 중입니다...</p>
+              ) : currentMessages.length === 0 ? (
                 <WelcomePanel onSelectPrompt={handleSelectPrompt} />
               ) : (
                 <ChatMessages
@@ -1248,24 +1352,26 @@ export function App() {
                 />
               )}
             </div>
-            <div className="chat-composer">
-              <AttachedContextBar
-                contexts={currentContexts}
-                onRemove={(contextId) => {
-                  removeContextFromWorkspace(selectedWorkspace.id, contextId);
-                }}
-              />
-              {currentMessages.length > 0 ? (
-                <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
-              ) : null}
-              <ChatInput
-                requestStatus={currentWorkspaceRequestStatus}
-                ref={chatInputRef}
-                value={message}
-                onChange={setMessage}
-                onSubmit={handleSendMessage}
-              />
-            </div>
+            {chatHistoryStatus !== 'loading' ? (
+              <div className="chat-composer">
+                <AttachedContextBar
+                  contexts={currentContexts}
+                  onRemove={(contextId) => {
+                    removeContextFromWorkspace(selectedWorkspace.id, contextId);
+                  }}
+                />
+                {currentMessages.length > 0 ? (
+                  <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
+                ) : null}
+                <ChatInput
+                  requestStatus={currentWorkspaceRequestStatus}
+                  ref={chatInputRef}
+                  value={message}
+                  onChange={setMessage}
+                  onSubmit={handleSendMessage}
+                />
+              </div>
+            ) : null}
           </>
         )}
       </main>

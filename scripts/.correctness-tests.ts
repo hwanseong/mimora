@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createElement } from 'react';
@@ -11,11 +11,15 @@ import {
 } from '../electron/vaultFiles';
 import { createOpenAIResponsesRequest } from '../electron/llm/OpenAIProvider';
 import { createSettingsStore } from '../electron/settingsStore';
+import { createChatHistoryStore } from '../electron/chatHistoryStore';
 import {
   isChatRequestBusy,
   tryBeginExternalAction,
   type ChatSessions,
 } from '../src/chat';
+import {
+  createPersistedChatHistory,
+} from '../src/chatHistory';
 import { ChatInput } from '../src/components/ChatInput';
 import { ChatMessages } from '../src/components/ChatMessages';
 import { ExternalPayloadPreviewModal } from '../src/components/ExternalPayloadPreviewModal';
@@ -138,6 +142,7 @@ assert.equal(
 const emptyRecentChatsHtml = renderToStaticMarkup(
   createElement(RecentChatsView, {
     chatSessions: {},
+    onDeleteWorkspaceChat: async () => undefined,
     onOpenWorkspace: () => undefined,
   }),
 );
@@ -145,12 +150,185 @@ assert.match(emptyRecentChatsHtml, /아직 대화 기록이 없습니다/u);
 const populatedRecentChatsHtml = renderToStaticMarkup(
   createElement(RecentChatsView, {
     chatSessions: recentChatSessions,
+    onDeleteWorkspaceChat: async () => undefined,
     onOpenWorkspace: () => undefined,
   }),
 );
 assert.match(populatedRecentChatsHtml, /PJT-A/u);
 assert.match(populatedRecentChatsHtml, /PM Private/u);
 assert.match(populatedRecentChatsHtml, /2 messages/u);
+assert.match(populatedRecentChatsHtml, /대화 기록 삭제/u);
+
+const chatHistoryRoot = await mkdtemp(path.join(os.tmpdir(), 'mimora-chat-history-'));
+const chatHistoryPath = path.join(chatHistoryRoot, 'chat-history.dat');
+const protectedVaultFile = path.join(chatHistoryRoot, 'vault-document.md');
+const xorCipher = (input: Buffer) =>
+  Buffer.from(input.map((value) => value ^ 0xa5));
+const fakeSafeStorage = {
+  isAsyncEncryptionAvailable: async () => true,
+  encryptStringAsync: async (plainText: string) =>
+    xorCipher(Buffer.from(plainText, 'utf8')),
+  decryptStringAsync: async (encrypted: Buffer) => ({
+    result: xorCipher(encrypted).toString('utf8'),
+    shouldReEncrypt: false,
+  }),
+  getSelectedStorageBackend: () => 'test-encrypted',
+};
+
+try {
+  const persistenceSessions: ChatSessions = {
+    ...recentChatSessions,
+    'sys-a': [
+      {
+        id: 'system-user',
+        role: 'user',
+        content: 'SYS-A 운영 상태를 알려줘.',
+        createdAt: '2026-09-06T09:00:00.000Z',
+      },
+    ],
+  };
+  persistenceSessions['pjt-a'][0] = {
+    ...persistenceSessions['pjt-a'][0],
+    rawExternalResponse: 'raw-external-response-must-not-persist',
+    responseUnmaskingSnapshot: [
+      {
+        alias: 'PERSON_001',
+        original: 'snapshot-original-must-not-persist',
+        entityType: 'person',
+      },
+    ],
+    manualContext: [
+      {
+        id: 'manual-context',
+        vaultId: 'vault',
+        vaultName: 'Vault',
+        vaultType: 'work',
+        security: 'internal',
+        relativePath: 'manual.md',
+        fileName: 'manual.md',
+        content: 'manual-vault-content-must-not-persist',
+      },
+    ],
+    autoContext: [
+      {
+        documentId: 'auto-context',
+        vaultId: 'vault',
+        vaultName: 'Vault',
+        vaultType: 'work',
+        security: 'internal',
+        relativePath: 'auto.md',
+        fileName: 'auto.md',
+        score: 100,
+        snippet: 'snippet',
+        content: 'auto-vault-content-must-not-persist',
+      },
+    ],
+  };
+  const persistedHistory = createPersistedChatHistory(persistenceSessions);
+  const serializedHistory = JSON.stringify(persistedHistory);
+
+  assert.equal(persistedHistory.version, 1);
+  assert.doesNotMatch(
+    serializedHistory,
+    /manual-vault-content|auto-vault-content|raw-external-response|snapshot-original/u,
+  );
+
+  const chatHistoryStore = createChatHistoryStore({
+    getHistoryPath: () => chatHistoryPath,
+    safeStorage: fakeSafeStorage,
+    platform: 'win32',
+  });
+  await chatHistoryStore.saveChatHistory(persistedHistory);
+  const encryptedHistory = await readFile(chatHistoryPath);
+
+  assert.doesNotMatch(encryptedHistory.toString('utf8'), /셀트리온|리스크|개인 업무/u);
+  assert.deepEqual(
+    (await readdir(chatHistoryRoot)).filter((fileName) => fileName.endsWith('.tmp')),
+    [],
+  );
+
+  const restartedStore = createChatHistoryStore({
+    getHistoryPath: () => chatHistoryPath,
+    safeStorage: fakeSafeStorage,
+    platform: 'win32',
+  });
+  const restored = await restartedStore.loadChatHistory();
+
+  assert.equal(restored.status, 'ready');
+  assert.deepEqual(Object.keys(restored.sessions).sort(), [
+    'all',
+    'pjt-a',
+    'private',
+    'sys-a',
+  ]);
+  assert.equal(restored.sessions.all[0].content, recentChatSessions.all[0].content);
+  assert.equal(restored.sessions.private.length, 2);
+  assert.equal(restored.sessions['pjt-a'][0].manualContext, undefined);
+  assert.equal(restored.sessions['pjt-a'][0].autoContext, undefined);
+  assert.equal(restored.sessions['pjt-a'][0].rawExternalResponse, undefined);
+  assert.equal(restored.sessions['pjt-a'][0].responseUnmaskingSnapshot, undefined);
+
+  await writeFile(protectedVaultFile, '# Vault 문서는 유지되어야 한다.', 'utf8');
+  await restartedStore.deleteWorkspaceChat('pjt-a');
+  assert.equal(
+    await readFile(protectedVaultFile, 'utf8'),
+    '# Vault 문서는 유지되어야 한다.',
+  );
+
+  const afterDeleteRestart = createChatHistoryStore({
+    getHistoryPath: () => chatHistoryPath,
+    safeStorage: fakeSafeStorage,
+    platform: 'win32',
+  });
+  const afterDelete = await afterDeleteRestart.loadChatHistory();
+
+  assert.equal(afterDelete.status, 'ready');
+  assert.equal(afterDelete.sessions['pjt-a'], undefined);
+  assert.ok(afterDelete.sessions.all.length > 0);
+  assert.ok(afterDelete.sessions['sys-a'].length > 0);
+  assert.ok(afterDelete.sessions.private.length > 0);
+
+  const missingStore = createChatHistoryStore({
+    getHistoryPath: () => path.join(chatHistoryRoot, 'missing-history.dat'),
+    safeStorage: fakeSafeStorage,
+    platform: 'win32',
+  });
+  const missingResult = await missingStore.loadChatHistory();
+  assert.deepEqual(missingResult, { sessions: {}, status: 'ready' });
+
+  const corruptPath = path.join(chatHistoryRoot, 'corrupt-history.dat');
+  const corruptBytes = Buffer.from('not-valid-encrypted-chat-history', 'utf8');
+  await writeFile(corruptPath, corruptBytes);
+  const corruptStore = createChatHistoryStore({
+    getHistoryPath: () => corruptPath,
+    safeStorage: fakeSafeStorage,
+    platform: 'win32',
+  });
+  const corruptResult = await corruptStore.loadChatHistory();
+  assert.equal(corruptResult.status, 'corrupt');
+  assert.match(corruptResult.error ?? '', /기존 파일은 변경하지 않았습니다/u);
+  assert.deepEqual(await readFile(corruptPath), corruptBytes);
+
+  const unavailableStore = createChatHistoryStore({
+    getHistoryPath: () => path.join(chatHistoryRoot, 'unavailable.dat'),
+    safeStorage: {
+      ...fakeSafeStorage,
+      isAsyncEncryptionAvailable: async () => false,
+    },
+    platform: 'win32',
+  });
+  const unavailableResult = await unavailableStore.loadChatHistory();
+  assert.equal(unavailableResult.status, 'unavailable');
+  assert.match(unavailableResult.error ?? '', /안전한 대화 저장/u);
+  await assert.rejects(
+    unavailableStore.saveChatHistory(
+      createPersistedChatHistory(recentChatSessions),
+    ),
+    /안전한 대화 저장/u,
+  );
+} finally {
+  await rm(chatHistoryRoot, { recursive: true, force: true });
+}
 
 const boldHtml = renderMarkdown('**리스크**와 **이슈**');
 assert.match(boldHtml, /<strong>리스크<\/strong>/u);
@@ -1221,3 +1399,4 @@ console.info('[correctness-check] Markdown Credential A-J checks passed.');
 console.info('[correctness-check] Consistent Masking A-F checks passed.');
 console.info('[correctness-check] Response Unmasking A-I checks passed.');
 console.info('[correctness-check] Recent Chats checks passed.');
+console.info('[correctness-check] Encrypted Chat History A-J checks passed.');

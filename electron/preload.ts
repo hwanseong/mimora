@@ -4,6 +4,11 @@ import type {
   AutoRetrievedContext,
 } from '../src/autoContext';
 import type {
+  ChatHistoryLoadResult,
+  ChatHistorySaveResult,
+  PersistedChatHistory,
+} from '../src/chatHistory';
+import type {
   ConnectionTestResult,
   LLMModel,
   LocalAIConnectionInput,
@@ -51,6 +56,25 @@ function unwrapIpcResult<T>(result: MimoraIpcResult<T>): T {
 
 contextBridge.exposeInMainWorld('mimora', {
   appName: 'Mimora',
+  loadChatHistory: () =>
+    (
+      ipcRenderer.invoke('chatHistory:load') as Promise<
+        MimoraIpcResult<ChatHistoryLoadResult>
+      >
+    ).then(unwrapIpcResult),
+  saveChatHistory: (history: PersistedChatHistory) =>
+    (
+      ipcRenderer.invoke('chatHistory:save', history) as Promise<
+        MimoraIpcResult<ChatHistorySaveResult>
+      >
+    ).then(unwrapIpcResult),
+  deleteWorkspaceChat: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke(
+        'chatHistory:deleteWorkspace',
+        workspaceId,
+      ) as Promise<MimoraIpcResult<ChatHistorySaveResult>>
+    ).then(unwrapIpcResult),
   getSettings: () =>
     (
       ipcRenderer.invoke('settings:get') as Promise<

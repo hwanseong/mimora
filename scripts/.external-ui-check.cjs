@@ -424,7 +424,7 @@ function runElectronFixture() {
               throw new Error('Recent Chats summary was not rendered.');
             }
 
-            recentChatItem.click();
+            recentChatItem.querySelector('.recent-chat-open').click();
             const resumedMessageInput = await waitFor(() =>
               document.querySelector('textarea[aria-label="메시지"]'),
             );
@@ -512,6 +512,59 @@ function runElectronFixture() {
             );
             const secretLocalFallbackCompleted = true;
 
+            const finalRecentChatsButton = Array.from(
+              document.querySelectorAll('button'),
+            ).find((button) => button.textContent.trim() === '최근 대화');
+
+            if (!finalRecentChatsButton) {
+              throw new Error('Recent Chats navigation disappeared.');
+            }
+
+            finalRecentChatsButton.click();
+            const deleteChatButton = await waitFor(() =>
+              document.querySelector(
+                'button[aria-label="전체 업무 대화 기록 삭제"]',
+              ),
+            );
+            deleteChatButton.click();
+            const deleteConfirmation = await waitFor(() =>
+              document.querySelector('[role="alertdialog"]'),
+            );
+            const deleteConfirmationVisible =
+              deleteConfirmation.textContent.includes(
+                '전체 업무의 대화 기록을 삭제하시겠습니까?',
+              ) &&
+              deleteConfirmation.textContent.includes(
+                'Obsidian Vault와 프로젝트 문서는 삭제되지 않습니다.',
+              );
+            const confirmDeleteButton = Array.from(
+              deleteConfirmation.querySelectorAll('button'),
+            ).find((button) => button.textContent.trim() === '대화 삭제');
+
+            if (!deleteConfirmationVisible || !confirmDeleteButton) {
+              throw new Error('Chat deletion confirmation was not rendered.');
+            }
+
+            confirmDeleteButton.click();
+            const recentChatDeleted = Boolean(
+              await waitFor(() =>
+                !document.querySelector('.recent-chat-item') &&
+                document.body.textContent.includes(
+                  '아직 대화 기록이 없습니다.',
+                ),
+              ),
+            );
+            const returnToEmptyWorkspaceButton = Array.from(
+              document.querySelectorAll('button'),
+            ).find((button) => button.textContent.trim() === '전체 업무');
+
+            returnToEmptyWorkspaceButton.click();
+            const deletedWorkspaceIsEmpty = Boolean(
+              await waitFor(() =>
+                document.body.textContent.includes('무엇을 도와드릴까요?'),
+              ),
+            );
+
             return {
               hasExternalOption,
               recentChatsEmpty,
@@ -524,6 +577,9 @@ function runElectronFixture() {
               secretWasRedacted,
               blockHasNoApproval,
               secretLocalFallbackCompleted,
+              deleteConfirmationVisible,
+              recentChatDeleted,
+              deletedWorkspaceIsEmpty,
             };
           })()
         `);
@@ -539,7 +595,10 @@ function runElectronFixture() {
           !result.localFallbackCompleted ||
           !result.secretWasRedacted ||
           !result.blockHasNoApproval ||
-          !result.secretLocalFallbackCompleted
+          !result.secretLocalFallbackCompleted ||
+          !result.deleteConfirmationVisible ||
+          !result.recentChatDeleted ||
+          !result.deletedWorkspaceIsEmpty
         ) {
           throw new Error('External UI assertions did not pass.');
         }

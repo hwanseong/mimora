@@ -192,6 +192,35 @@ button {
   background: #fafbfc;
 }
 
+.recent-chat-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.recent-chat-delete {
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #8a5a57;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+
+.recent-chat-delete:hover {
+  border-color: #ead0ce;
+  background: #fff7f7;
+}
+
 .recent-chat-main {
   display: grid;
   min-width: 0;
@@ -229,6 +258,53 @@ button {
 
 .recent-chats-empty p {
   margin: 0;
+}
+
+.recent-chats-storage-error,
+.recent-chat-delete-confirmation {
+  width: min(760px, 100%);
+  margin: 0 auto 12px;
+  border: 1px solid #e6b4b1;
+  border-radius: 9px;
+  background: #fffafa;
+  color: #8d403c;
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+.recent-chat-delete-confirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.recent-chat-delete-confirmation strong,
+.recent-chat-delete-confirmation p {
+  margin: 0;
+}
+
+.recent-chat-delete-confirmation p {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 12px;
+}
+
+.recent-chat-delete-confirmation .recent-chat-delete-error {
+  color: #9b3b37;
+}
+
+.recent-chat-delete-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.chat-history-loading {
+  margin: 0;
+  padding: 28px 20px;
+  color: #667085;
+  text-align: center;
 }
 
 .vault-browser-view {
@@ -2545,6 +2621,17 @@ button {
     align-items: flex-start;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .recent-chat-open,
+  .recent-chat-delete-confirmation {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .recent-chat-delete {
+    align-self: flex-end;
   }
 
   .vault-browser-view {

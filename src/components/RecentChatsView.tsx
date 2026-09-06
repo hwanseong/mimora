@@ -125,13 +125,22 @@ export function createRecentChatItems(
 
 export function RecentChatsView({
   chatSessions,
+  isLoading = false,
+  onDeleteWorkspaceChat,
   onOpenWorkspace,
+  storageError,
 }: {
   chatSessions: ChatSessions;
+  isLoading?: boolean;
+  onDeleteWorkspaceChat: (workspace: Workspace) => Promise<void>;
   onOpenWorkspace: (workspace: Workspace) => void;
+  storageError?: string | null;
 }) {
   const recentChats = createRecentChatItems(chatSessions);
   const [now, setNow] = useState(() => Date.now());
+  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -143,6 +152,28 @@ export function RecentChatsView({
     };
   }, []);
 
+  async function confirmDelete(): Promise<void> {
+    if (!deleteTarget || isDeleting) {
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      await onDeleteWorkspaceChat(deleteTarget);
+      setDeleteTarget(null);
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : '대화 기록을 삭제하지 못했습니다.',
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   return (
     <section className="recent-chats-view" aria-labelledby="recent-chats-title">
       <header className="recent-chats-header">
@@ -151,30 +182,91 @@ export function RecentChatsView({
         <p>현재 실행 중인 Mimora의 Workspace별 대화입니다.</p>
       </header>
 
-      {recentChats.length === 0 ? (
+      {storageError ? (
+        <p className="recent-chats-storage-error" role="status">
+          {storageError}
+        </p>
+      ) : null}
+
+      {deleteTarget ? (
+        <div className="recent-chat-delete-confirmation" role="alertdialog">
+          <div>
+            <strong>{deleteTarget.label}의 대화 기록을 삭제하시겠습니까?</strong>
+            <p>
+              대화 기록만 삭제됩니다. Obsidian Vault와 프로젝트 문서는 삭제되지
+              않습니다.
+            </p>
+            {deleteError ? <p className="recent-chat-delete-error">{deleteError}</p> : null}
+          </div>
+          <div className="recent-chat-delete-actions">
+            <button
+              className="secondary-button"
+              disabled={isDeleting}
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteError(null);
+              }}
+              type="button"
+            >
+              취소
+            </button>
+            <button
+              className="danger-button"
+              disabled={isDeleting}
+              onClick={() => {
+                void confirmDelete();
+              }}
+              type="button"
+            >
+              {isDeleting ? '삭제 중…' : '대화 삭제'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {isLoading ? (
+        <div className="recent-chats-empty">
+          <p>대화 기록을 불러오는 중입니다...</p>
+        </div>
+      ) : recentChats.length === 0 ? (
         <div className="recent-chats-empty">
           <p>아직 대화 기록이 없습니다.</p>
         </div>
       ) : (
         <div className="recent-chats-list">
           {recentChats.map((item) => (
-            <button
+            <article
               className="recent-chat-item"
               key={item.workspace.id}
-              onClick={() => {
-                onOpenWorkspace(item.workspace);
-              }}
-              type="button"
             >
-              <span className="recent-chat-main">
-                <strong>{item.workspace.label}</strong>
-                <span>“{item.preview}”</span>
-              </span>
-              <span className="recent-chat-count">
-                {item.messageCount.toLocaleString()} messages ·{' '}
-                {formatRecentChatTime(item.lastUpdatedAt, now)}
-              </span>
-            </button>
+              <button
+                className="recent-chat-open"
+                onClick={() => {
+                  onOpenWorkspace(item.workspace);
+                }}
+                type="button"
+              >
+                <span className="recent-chat-main">
+                  <strong>{item.workspace.label}</strong>
+                  <span>“{item.preview}”</span>
+                </span>
+                <span className="recent-chat-count">
+                  {item.messageCount.toLocaleString()} messages ·{' '}
+                  {formatRecentChatTime(item.lastUpdatedAt, now)}
+                </span>
+              </button>
+              <button
+                aria-label={`${item.workspace.label} 대화 기록 삭제`}
+                className="recent-chat-delete"
+                onClick={() => {
+                  setDeleteTarget(item.workspace);
+                  setDeleteError(null);
+                }}
+                type="button"
+              >
+                삭제
+              </button>
+            </article>
           ))}
         </div>
       )}
