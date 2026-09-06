@@ -6,6 +6,18 @@ export type FilePathMaskingReplacement = {
   count: number;
 };
 
+export type InternalIpMaskingReplacement = {
+  entryId: string;
+  type: 'internal-ip';
+  original: string;
+  alias: string;
+  count: number;
+};
+
+export type StructuralMaskingReplacement =
+  | FilePathMaskingReplacement
+  | InternalIpMaskingReplacement;
+
 export type StructuralMaskingResult = {
   maskedText: string;
   replacementCount: number;
@@ -21,6 +33,8 @@ const windowsAbsolutePathMaskPattern =
 const unixHomeAbsolutePathMaskPattern =
   /(?<![\p{L}\p{N}._-])\/(?:Users|home)\/[^\s<>"'`|]+/gu;
 const trailingPathPunctuationPattern = /[),.;:!?\]}，。！？]+$/u;
+const internalIpv4Pattern =
+  /(?<!\d)(10\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)|172\.(?:1[6-9]|2\d|3[01])\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d)|192\.168\.(?:25[0-5]|2[0-4]\d|1?\d?\d)\.(?:25[0-5]|2[0-4]\d|1?\d?\d))(?::\d{1,5})?(?!\d)/gu;
 
 function splitTrailingPunctuation(value: string): {
   path: string;
@@ -48,12 +62,22 @@ export function containsAbsoluteFilesystemPath(text: string): boolean {
   );
 }
 
+export function containsInternalNetworkAddress(text: string): boolean {
+  internalIpv4Pattern.lastIndex = 0;
+  return internalIpv4Pattern.test(text);
+}
+
 export function createStructuralSensitiveDataMasker(): {
   maskText: (text: string) => StructuralMaskingResult;
-  getReplacements: () => FilePathMaskingReplacement[];
+  getReplacements: () => StructuralMaskingReplacement[];
 } {
   const aliasesByPath = new Map<string, string>();
   const replacementsByAlias = new Map<string, FilePathMaskingReplacement>();
+  const internalIpAliases = new Map<string, string>();
+  const internalIpReplacements = new Map<
+    string,
+    InternalIpMaskingReplacement
+  >();
 
   function replacePath(value: string): string {
     const { path, suffix } = splitTrailingPunctuation(value);
@@ -86,6 +110,31 @@ export function createStructuralSensitiveDataMasker(): {
     return `[${alias}]${suffix}`;
   }
 
+  function replaceInternalIp(value: string): string {
+    const ip = value.split(':', 1)[0];
+    let alias = internalIpAliases.get(ip);
+
+    if (!alias) {
+      alias = `INTERNAL_IP_${String(internalIpAliases.size + 1).padStart(3, '0')}`;
+      internalIpAliases.set(ip, alias);
+      internalIpReplacements.set(alias, {
+        entryId: `structural:${alias}`,
+        type: 'internal-ip',
+        original: ip,
+        alias,
+        count: 0,
+      });
+    }
+
+    const replacement = internalIpReplacements.get(alias);
+
+    if (replacement) {
+      replacement.count += 1;
+    }
+
+    return `[${alias}]`;
+  }
+
   return {
     maskText: (text) => {
       let replacementCount = 0;
@@ -102,16 +151,21 @@ export function createStructuralSensitiveDataMasker(): {
         windowsAbsolutePathMaskPattern,
         replaceMatch,
       );
-      const maskedText = maskedWindowsPaths.replace(
+      const maskedPaths = maskedWindowsPaths.replace(
         unixHomeAbsolutePathMaskPattern,
         replaceMatch,
       );
+      const maskedText = maskedPaths.replace(internalIpv4Pattern, (value) => {
+        replacementCount += 1;
+        return replaceInternalIp(value);
+      });
 
       return { maskedText, replacementCount };
     },
     getReplacements: () =>
-      [...replacementsByAlias.values()].map((replacement) => ({
-        ...replacement,
-      })),
+      [
+        ...replacementsByAlias.values(),
+        ...internalIpReplacements.values(),
+      ].map((replacement) => ({ ...replacement })),
   };
 }

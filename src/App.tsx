@@ -41,6 +41,7 @@ import {
   createExternalPayloadPreview,
   type ExternalPayloadPreview,
 } from './security/externalPayloadPreview';
+import { getSecretRules } from './security/secretDetector';
 import type {
   ExternalAIPerformanceMetrics,
   ExternalAIChatResult,
@@ -484,7 +485,11 @@ export function App() {
           manualContexts,
           autoContexts: autoContext,
           maskingEntries: settings.masking.entries,
+          secretRules: getSecretRules(
+            settings.secretDetection.customRules,
+          ),
         });
+        logSecretDetection(preview);
         externalAvailable = Boolean(
           settings.externalAI.model && hasApiKey,
         );
@@ -581,7 +586,9 @@ export function App() {
             { required: false, approved: false },
           );
           completeAssistantMessage(workspaceId, assistantMessageId, {
-            content: '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
+            content: preview.secretDetection.detected
+              ? '⛔ 외부 AI 전송 차단\n\nSecret / Credential 정보가 감지되었습니다.'
+              : '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
             generationStatus: 'complete',
             requestStatus: 'completed',
             sources: getContextSources(manualContexts, autoContext),
@@ -592,6 +599,7 @@ export function App() {
               reasons: preview.safety.checks
                 .filter((check) => check.status === 'fail')
                 .map((check) => check.message),
+              secretDetections: preview.secretDetection.detections,
             },
           });
           setWorkspaceRequestStatus(workspaceId, 'completed');
@@ -666,6 +674,7 @@ export function App() {
       manualContexts: request.manualContexts,
       autoContexts: request.autoContexts,
       maskingEntries: settings.masking.entries,
+      secretRules: getSecretRules(settings.secretDetection.customRules),
     });
   }
 
@@ -715,6 +724,7 @@ export function App() {
 
     try {
       const revalidatedPreview = await rebuildExternalPreview(request);
+      logSecretDetection(revalidatedPreview);
 
       request.preview = revalidatedPreview;
       saveExternalPayloadPreviewForTurn(
@@ -746,7 +756,9 @@ export function App() {
           { required: false, approved: false },
         );
         completeAssistantMessage(request.workspaceId, assistantMessageId, {
-          content: '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
+          content: revalidatedPreview.secretDetection.detected
+            ? '⛔ 외부 AI 전송 차단\n\nSecret / Credential 정보가 감지되었습니다.'
+            : '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
           generationStatus: 'complete',
           requestStatus: 'completed',
           sources: getContextSources(
@@ -760,6 +772,7 @@ export function App() {
             reasons: revalidatedPreview.safety.checks
               .filter((check) => check.status === 'fail')
               .map((check) => check.message),
+            secretDetections: revalidatedPreview.secretDetection.detections,
           },
         });
         setWorkspaceRequestStatus(request.workspaceId, 'completed');
@@ -936,6 +949,24 @@ export function App() {
             : chatMessage,
         ),
       };
+    });
+  }
+
+  function logSecretDetection(preview: ExternalPayloadPreview): void {
+    const matchedRuleIds = [
+      ...new Set(
+        preview.secretDetection.detections.map(
+          (detection) => detection.ruleId,
+        ),
+      ),
+    ];
+
+    console.info('[Mimora Secret Detection]', {
+      documents: preview.documentCount,
+      detected: preview.secretDetection.detected,
+      rulesMatched: matchedRuleIds.length,
+      totalMatches: preview.secretDetection.totalCount,
+      matchedRules: matchedRuleIds,
     });
   }
 

@@ -1,13 +1,14 @@
 import type { EffectiveSecurity } from './securityRouter';
 import type { VaultSecurity, VaultType } from '../settings';
 import {
+  findRemainingRegisteredEntityIds,
   maskText,
   type MaskingEntry,
   type MaskingReplacement,
 } from './maskingEngine';
 import {
   createStructuralSensitiveDataMasker,
-  type FilePathMaskingReplacement,
+  type StructuralMaskingReplacement,
 } from './structuralMasking';
 import { buildExternalPayloadText } from './externalPayloadBuilder';
 import {
@@ -15,6 +16,12 @@ import {
   type PayloadSafetyResult,
   type PayloadSafetyStatus,
 } from './outboundPayloadSafety';
+import {
+  builtInSecretRules,
+  scanSecrets,
+  type SecretDetectionResult,
+  type SecretRule,
+} from './secretDetector';
 
 export type ExternalPreviewDocument = {
   documentId: string;
@@ -31,12 +38,11 @@ export type ExternalPreviewDocument = {
 
 export type ExternalMaskingReplacement =
   | MaskingReplacement
-  | FilePathMaskingReplacement;
+  | StructuralMaskingReplacement;
 
 export type ExternalPayloadPreview = {
   workspaceId: string;
   effectiveSecurity: EffectiveSecurity;
-  originalQuestion: string;
   maskedQuestion: string;
   originalContextChars: number;
   maskedContextChars: number;
@@ -49,6 +55,7 @@ export type ExternalPayloadPreview = {
   status: PayloadSafetyStatus;
   blockers: string[];
   safety: PayloadSafetyResult;
+  secretDetection: SecretDetectionResult;
 };
 
 export type ExternalPreviewContextInput = {
@@ -99,6 +106,41 @@ function mergeReplacements(
   return [...replacements.values()];
 }
 
+export function applyExternalSafeTextPipeline(input: {
+  text: string;
+  documentId?: string;
+  secretRules: SecretRule[];
+  maskingEntries: MaskingEntry[];
+  structuralMasker: ReturnType<typeof createStructuralSensitiveDataMasker>;
+}): {
+  maskedText: string;
+  secretScan: ReturnType<typeof scanSecrets>;
+  dictionaryReplacements: MaskingReplacement[];
+  replacementCount: number;
+} {
+  const secretScan = scanSecrets(
+    input.text,
+    input.secretRules,
+    input.documentId,
+  );
+  const dictionaryResult = maskText(
+    secretScan.redactedText,
+    input.maskingEntries,
+  );
+  const structuralResult = input.structuralMasker.maskText(
+    dictionaryResult.maskedText,
+  );
+
+  return {
+    maskedText: structuralResult.maskedText,
+    secretScan,
+    dictionaryReplacements: dictionaryResult.replacements,
+    replacementCount:
+      dictionaryResult.totalReplacementCount +
+      structuralResult.replacementCount,
+  };
+}
+
 export function createExternalPayloadPreview(input: {
   workspaceId: string;
   effectiveSecurity: EffectiveSecurity;
@@ -106,30 +148,33 @@ export function createExternalPayloadPreview(input: {
   manualContexts: ExternalPreviewContextInput[];
   autoContexts: ExternalPreviewContextInput[];
   maskingEntries: MaskingEntry[];
+  secretRules?: SecretRule[];
 }): ExternalPayloadPreview {
   const contextDocuments = deduplicateContextDocuments(
     input.manualContexts,
     input.autoContexts,
   );
+  const secretRules = input.secretRules ?? [...builtInSecretRules];
   const structuralMasker = createStructuralSensitiveDataMasker();
-  const dictionaryQuestionResult = maskText(
-    input.question,
-    input.maskingEntries,
-  );
-  const questionResult = structuralMasker.maskText(
-    dictionaryQuestionResult.maskedText,
-  );
-  const documentResults = contextDocuments.map((document) => {
-    const dictionaryMaskingResult = maskText(
-      document.content,
-      input.maskingEntries,
-    );
-    const structuralMaskingResult = structuralMasker.maskText(
-      dictionaryMaskingResult.maskedText,
-    );
+  const questionResult = applyExternalSafeTextPipeline({
+    text: input.question,
+    secretRules,
+    maskingEntries: input.maskingEntries,
+    structuralMasker,
+  });
+  const documentResults = contextDocuments.map((document, index) => {
+    const documentId = `DOCUMENT_${index + 1}`;
+    const pipelineResult = applyExternalSafeTextPipeline({
+      text: document.content,
+      documentId,
+      secretRules,
+      maskingEntries: input.maskingEntries,
+      structuralMasker,
+    });
 
     return {
       document: {
+        documentId,
         vaultId: document.vaultId,
         vaultName: document.vaultName,
         vaultType: document.vaultType,
@@ -137,40 +182,37 @@ export function createExternalPayloadPreview(input: {
         relativePath: document.relativePath,
         fileName: document.fileName,
         originalChars: document.content.length,
-        maskedContent: structuralMaskingResult.maskedText,
-        replacementCount:
-          dictionaryMaskingResult.totalReplacementCount +
-          structuralMaskingResult.replacementCount,
+        maskedContent: pipelineResult.maskedText,
+        replacementCount: pipelineResult.replacementCount,
       },
-      replacements: dictionaryMaskingResult.replacements,
+      pipelineResult,
     };
   });
-  const builtPayload = buildExternalPayloadText({
-    maskedQuestion: questionResult.maskedText,
-    maskedDocumentContents: documentResults.map(
-      (result) => result.document.maskedContent,
+  const secretDetections = [
+    ...questionResult.secretScan.detections,
+    ...documentResults.flatMap(
+      ({ pipelineResult }) => pipelineResult.secretScan.detections,
     ),
-  });
-  const documents = documentResults.map((result, index) => ({
-    ...result.document,
-    documentId: builtPayload.documents[index].documentId,
-  }));
+  ];
+  const secretDetection: SecretDetectionResult = {
+    detected: secretDetections.length > 0,
+    detections: secretDetections,
+    totalCount: secretDetections.reduce(
+      (total, detection) => total + detection.count,
+      0,
+    ),
+  };
+  const documents = documentResults.map(({ document }) => document);
   const replacements = mergeReplacements([
-    dictionaryQuestionResult.replacements,
-    ...documentResults.map((result) => result.replacements),
+    questionResult.dictionaryReplacements,
+    ...documentResults.map(
+      ({ pipelineResult }) => pipelineResult.dictionaryReplacements,
+    ),
     structuralMasker.getReplacements(),
   ]);
-  const safety = evaluateOutboundPayload({
-    externalText: builtPayload.text,
-    documents,
-    maskingEntries: input.maskingEntries,
-    effectiveSecurity: input.effectiveSecurity,
-  });
-
-  return {
+  const commonPreview = {
     workspaceId: input.workspaceId,
     effectiveSecurity: input.effectiveSecurity,
-    originalQuestion: input.question,
     maskedQuestion: questionResult.maskedText,
     originalContextChars: contextDocuments.reduce(
       (total, document) => total + document.content.length,
@@ -187,10 +229,70 @@ export function createExternalPayloadPreview(input: {
       (total, replacement) => total + replacement.count,
       0,
     ),
+    secretDetection,
+  };
+
+  if (secretDetection.detected) {
+    const remainingEntityIds = findRemainingRegisteredEntityIds(
+      [questionResult.maskedText, ...documents.map((document) => document.maskedContent)],
+      input.maskingEntries,
+    );
+    const registeredEntityCheck = {
+      id: 'registered-entities',
+      label: 'Registered entities masked',
+      status: remainingEntityIds.length > 0 ? 'fail' as const : 'pass' as const,
+      message:
+        remainingEntityIds.length > 0
+          ? `Registered entity remains in outbound payload (${remainingEntityIds.length}).`
+          : '활성화된 등록 Entity의 원문이 남아 있지 않습니다.',
+    };
+    const safety: PayloadSafetyResult = {
+      status: 'block',
+      checks: [
+        {
+          id: 'secret-detected',
+          label: 'Secret / Credential Detection',
+          status: 'fail',
+          message: 'Secret 또는 Credential 정보가 감지되어 외부 전송을 차단했습니다.',
+        },
+        registeredEntityCheck,
+      ],
+      blockers: [
+        'secret-detected',
+        ...(remainingEntityIds.length > 0 ? ['registered-entities'] : []),
+      ],
+      warnings: [],
+    };
+
+    return {
+      ...commonPreview,
+      externalText: '',
+      safeToSend: false,
+      status: 'block',
+      blockers: safety.blockers,
+      safety,
+      secretDetection,
+    };
+  }
+
+  const builtPayload = buildExternalPayloadText({
+    maskedQuestion: questionResult.maskedText,
+    maskedDocumentContents: documents.map((document) => document.maskedContent),
+  });
+  const safety = evaluateOutboundPayload({
+    externalText: builtPayload.text,
+    documents,
+    maskingEntries: input.maskingEntries,
+    effectiveSecurity: input.effectiveSecurity,
+  });
+
+  return {
+    ...commonPreview,
     externalText: builtPayload.text,
     safeToSend: safety.status === 'pass',
     status: safety.status,
     blockers: safety.blockers,
     safety,
+    secretDetection,
   };
 }

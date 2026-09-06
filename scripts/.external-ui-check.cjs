@@ -122,6 +122,11 @@ async function runTestRunner() {
       '# 검토대상 고객계획\n\n검토대상 고객계획의 범위와 담당 업무를 정리한다.',
       'utf8',
     );
+    await writeFile(
+      path.join(reviewVaultPath, '보안자격증명-점검문서.md'),
+      '# 보안자격증명 점검문서\n\n---\nclient: 셀트리온\ntags:\n- 셀트리온\n- 이상익\n---\n**기본 로그인 패스워드**: `TestOnlyCredential123!`\n운영 토큰: INTERNAL-ABCD1234\n내부 서버: 10.20.30.40:12400\n이 값들은 Secret Detection 통합 테스트 전용이다.',
+      'utf8',
+    );
     const electronExecutable = require('electron');
     const childEnvironment = {
       ...process.env,
@@ -273,6 +278,20 @@ function runElectronFixture() {
               endpoint: 'http://127.0.0.1:11434',
               model: 'qwen3:4b-instruct',
             });
+            await window.mimora.addSecretRule({
+              name: 'UI Custom Secret Rule',
+              kind: 'regex',
+              pattern: 'INTERNAL-[A-Z0-9]{8}',
+              enabled: true,
+            });
+            await window.mimora.addMaskingEntry({
+              type: 'client',
+              value: '셀트리온',
+            });
+            await window.mimora.addMaskingEntry({
+              type: 'person',
+              value: '이상익',
+            });
             await window.mimora.addVault({
               name: 'Review Test Vault',
               type: 'work',
@@ -365,12 +384,93 @@ function runElectronFixture() {
             );
             const localFallbackCompleted = Boolean(completedLocalFooter);
 
+            valueSetter.call(messageInput, '보안자격증명 점검문서 설명해줘');
+            messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+            messageInput.form.requestSubmit();
+
+            await waitFor(() =>
+              document.body.textContent.includes(
+                'Secret / Credential 정보가 감지되었습니다.',
+              ),
+            );
+            const secretPreviewButton = Array.from(
+              document.querySelectorAll('button'),
+            ).filter(
+              (button) => button.textContent.trim() === 'External Preview 확인',
+            ).at(-1);
+
+            if (!secretPreviewButton) {
+              throw new Error('Secret BLOCK Preview action was not available.');
+            }
+
+            secretPreviewButton.click();
+            const secretPreviewDialog = await waitFor(() =>
+              document.querySelector('[role="dialog"]'),
+            );
+            const secretPreviewText = secretPreviewDialog.textContent;
+            const secretPreviewContent = Array.from(
+              secretPreviewDialog.querySelectorAll('pre'),
+            ).map((element) => element.textContent).join('\\n');
+            const secretWasRedacted =
+              secretPreviewContent.includes('[REDACTED_SECRET]') &&
+              !secretPreviewContent.includes('TestOnlyCredential123!') &&
+              !secretPreviewContent.includes('INTERNAL-ABCD1234') &&
+              !secretPreviewContent.includes('10.20.30.40') &&
+              !secretPreviewContent.includes('12400') &&
+              !secretPreviewContent.includes('셀트리온') &&
+              !secretPreviewContent.includes('이상익') &&
+              secretPreviewContent.includes('[INTERNAL_IP_001]') &&
+              secretPreviewContent.includes('client: [CLIENT_001]') &&
+              secretPreviewContent.includes('- [PERSON_001]') &&
+              secretPreviewText.includes('Password / 비밀번호 / 패스워드') &&
+              secretPreviewText.includes('Custom Rule: UI Custom Secret Rule');
+            const blockHasNoApproval = !Array.from(
+              secretPreviewDialog.querySelectorAll('button'),
+            ).some(
+              (button) => button.textContent.includes('승인 후 OpenAI 전송'),
+            );
+
+            if (!secretWasRedacted || !blockHasNoApproval) {
+              throw new Error('Secret BLOCK Preview policy did not pass.');
+            }
+
+            secretPreviewDialog
+              .querySelector('button[aria-label="External Payload Preview 닫기"]')
+              .click();
+            await waitFor(() => !document.querySelector('[role="dialog"]'));
+            const secretLocalFallbackButton = Array.from(
+              document.querySelectorAll('button'),
+            ).filter(
+              (button) => button.textContent.trim() === 'Local AI로 처리',
+            ).at(-1);
+
+            if (!secretLocalFallbackButton) {
+              throw new Error('Secret BLOCK Local fallback was not available.');
+            }
+
+            secretLocalFallbackButton.click();
+            await waitFor(
+              () =>
+                Array.from(document.querySelectorAll('.message-routing')).filter(
+                  (footer) =>
+                    footer.textContent.includes(
+                      'Local AI · External · Local fallback',
+                    ) &&
+                    footer.textContent.includes('Model: qwen3:4b-instruct'),
+                ).length >= 2,
+              120_000,
+            );
+            const secretLocalFallbackCompleted = true;
+
             return {
               hasExternalOption,
               composerIsReviewPending,
               reviewActionsVisible,
               reviewPersistedAfterClose,
               localFallbackCompleted,
+              secretWasRedacted,
+              blockHasNoApproval,
+              secretLocalFallbackCompleted,
             };
           })()
         `);
@@ -380,7 +480,10 @@ function runElectronFixture() {
           !result.composerIsReviewPending ||
           !result.reviewActionsVisible ||
           !result.reviewPersistedAfterClose ||
-          !result.localFallbackCompleted
+          !result.localFallbackCompleted ||
+          !result.secretWasRedacted ||
+          !result.blockHasNoApproval ||
+          !result.secretLocalFallbackCompleted
         ) {
           throw new Error('External UI assertions did not pass.');
         }

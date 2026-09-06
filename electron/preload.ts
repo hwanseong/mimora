@@ -31,6 +31,10 @@ import type {
   UpdateMaskingEntryInput,
 } from '../src/security/maskingEngine';
 import type {
+  AddSecretRuleInput,
+  UpdateSecretRuleInput,
+} from '../src/security/secretDetector';
+import type {
   VaultFile,
   VaultFileContent,
   VaultSearchInput,
@@ -156,6 +160,24 @@ contextBridge.exposeInMainWorld('mimora', {
   deleteMaskingEntry: (id: string) =>
     (
       ipcRenderer.invoke('settings:deleteMaskingEntry', id) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  addSecretRule: (input: AddSecretRuleInput) =>
+    (
+      ipcRenderer.invoke('settings:addSecretRule', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  updateSecretRule: (input: UpdateSecretRuleInput) =>
+    (
+      ipcRenderer.invoke('settings:updateSecretRule', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  deleteSecretRule: (id: string) =>
+    (
+      ipcRenderer.invoke('settings:deleteSecretRule', id) as Promise<
         MimoraIpcResult<MimoraSettings>
       >
     ).then(unwrapIpcResult),

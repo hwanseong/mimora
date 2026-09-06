@@ -417,10 +417,15 @@ const retrievalStopWords = new Set([
 ]);
 
 export const AUTO_CONTEXT_MIN_SCORE = 40;
+export const EXACT_MATCH_MIN_SCORE = AUTO_CONTEXT_MIN_SCORE;
 
 type ScoredAutoContext = AutoRetrievedContext & {
   matchedTokenCount: number;
   phraseMatched: boolean;
+  exactMeaningfulTokenMatch: boolean;
+  exactMatchedTokenCount: number;
+  scoreBeforeExactBoost: number;
+  exactMatchBonus: number;
 };
 
 type VaultRetrieval = {
@@ -458,7 +463,7 @@ function normalizeRetrievalText(value: string): string {
   return value
     .normalize('NFKC')
     .toLocaleLowerCase()
-    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .replace(/[^\p{L}\p{N}_-]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -515,6 +520,68 @@ function getMarkdownHeadings(content: string): string {
     .join(' ');
 }
 
+function getMarkdownFrontmatter(content: string): {
+  frontmatter: string;
+  body: string;
+} {
+  const match = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/u.exec(
+    content,
+  );
+
+  if (!match) {
+    return { frontmatter: '', body: content };
+  }
+
+  return {
+    frontmatter: match[1],
+    body: content.slice(match[0].length),
+  };
+}
+
+function getMarkdownTagValues(frontmatter: string): string {
+  const tagValues: string[] = [];
+  const lines = frontmatter.split(/\r?\n/u);
+  let collectingTags = false;
+
+  for (const line of lines) {
+    const tagsField = /^\s*tags?\s*:\s*(.*)$/iu.exec(line);
+
+    if (tagsField) {
+      collectingTags = true;
+      if (tagsField[1]) {
+        tagValues.push(tagsField[1]);
+      }
+      continue;
+    }
+
+    if (!collectingTags) {
+      continue;
+    }
+
+    const listItem = /^\s*-\s+(.+)$/u.exec(line);
+
+    if (listItem) {
+      tagValues.push(listItem[1]);
+      continue;
+    }
+
+    if (/^\s*[\p{L}\p{N}_-]+\s*:/u.test(line) || line.trim()) {
+      collectingTags = false;
+    }
+  }
+
+  return tagValues.join(' ');
+}
+
+function getExactTokens(value: string): Set<string> {
+  return new Set(
+    normalizeRetrievalText(value)
+      .split(' ')
+      .map(stripKoreanParticle)
+      .filter((token) => token.length >= 2),
+  );
+}
+
 function calculateRetrievalScore(
   file: VaultFile,
   content: string,
@@ -524,11 +591,25 @@ function calculateRetrievalScore(
   matchedTokenCount: number;
   phraseMatched: boolean;
   score: number;
+  exactMeaningfulTokenMatch: boolean;
+  exactMatchedTokenCount: number;
+  scoreBeforeExactBoost: number;
+  exactMatchBonus: number;
 } {
   const fileName = normalizeRetrievalText(file.name);
   const folderPath = normalizeRetrievalText(file.folder);
   const headings = normalizeRetrievalText(getMarkdownHeadings(content));
   const body = normalizeRetrievalText(content);
+  const markdownSections = getMarkdownFrontmatter(content);
+  const tagValues = getMarkdownTagValues(markdownSections.frontmatter);
+  const exactTokens = {
+    tags: getExactTokens(tagValues),
+    frontmatter: getExactTokens(markdownSections.frontmatter),
+    headings: getExactTokens(headings),
+    fileName: getExactTokens(fileName),
+    folderPath: getExactTokens(folderPath),
+    body: getExactTokens(markdownSections.body),
+  };
   let score = 0;
   let phraseMatched = false;
 
@@ -552,6 +633,8 @@ function calculateRetrievalScore(
   }
 
   let matchedTokenCount = 0;
+  let exactMatchedTokenCount = 0;
+  let exactMatchBonusTotal = 0;
 
   for (const token of tokens) {
     let tokenMatched = false;
@@ -581,6 +664,22 @@ function calculateRetrievalScore(
     if (tokenMatched) {
       matchedTokenCount += 1;
     }
+
+    const exactMatchBonuses = [
+      exactTokens.tags.has(token) ? 36 : 0,
+      exactTokens.frontmatter.has(token) ? 30 : 0,
+      exactTokens.headings.has(token) ? 26 : 0,
+      exactTokens.fileName.has(token) ? 24 : 0,
+      exactTokens.folderPath.has(token) ? 20 : 0,
+      exactTokens.body.has(token) ? 16 : 0,
+    ];
+    const exactMatchBonus = Math.max(...exactMatchBonuses);
+
+    if (exactMatchBonus > 0) {
+      score += exactMatchBonus;
+      exactMatchBonusTotal += exactMatchBonus;
+      exactMatchedTokenCount += 1;
+    }
   }
 
   if (matchedTokenCount >= 2) {
@@ -591,7 +690,22 @@ function calculateRetrievalScore(
     score += 12;
   }
 
-  return { matchedTokenCount, phraseMatched, score };
+  const exactMeaningfulTokenMatch = exactMatchedTokenCount > 0;
+  const scoreBeforeExactBoost = score - exactMatchBonusTotal;
+
+  if (exactMeaningfulTokenMatch) {
+    score = Math.max(score, EXACT_MATCH_MIN_SCORE);
+  }
+
+  return {
+    matchedTokenCount,
+    phraseMatched,
+    score,
+    exactMeaningfulTokenMatch,
+    exactMatchedTokenCount,
+    scoreBeforeExactBoost,
+    exactMatchBonus: exactMatchBonusTotal,
+  };
 }
 
 function createAutoContextSnippet(
@@ -638,7 +752,15 @@ async function retrieveFromVault(
   for (const file of files) {
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
-      const { matchedTokenCount, phraseMatched, score } =
+      const {
+        matchedTokenCount,
+        phraseMatched,
+        score,
+        exactMeaningfulTokenMatch,
+        exactMatchedTokenCount,
+        scoreBeforeExactBoost,
+        exactMatchBonus,
+      } =
         calculateRetrievalScore(file, content, phrase, tokens);
 
       if (score <= 0) {
@@ -656,6 +778,10 @@ async function retrieveFromVault(
         score,
         matchedTokenCount,
         phraseMatched,
+        exactMeaningfulTokenMatch,
+        exactMatchedTokenCount,
+        scoreBeforeExactBoost,
+        exactMatchBonus,
         snippet: createAutoContextSnippet(content, query, tokens),
         content,
       });
@@ -676,7 +802,12 @@ function meetsAutoContextThreshold(
     result.matchedTokenCount >= 2 ||
     result.phraseMatched;
 
-  return result.score >= AUTO_CONTEXT_MIN_SCORE && hasEnoughTokenCoverage;
+  const meetsScoreThreshold =
+    result.score >= AUTO_CONTEXT_MIN_SCORE ||
+    (result.exactMeaningfulTokenMatch &&
+      result.score >= EXACT_MATCH_MIN_SCORE);
+
+  return meetsScoreThreshold && hasEnoughTokenCoverage;
 }
 
 function logRetrievalDiagnostics(input: {
@@ -684,6 +815,7 @@ function logRetrievalDiagnostics(input: {
   candidateCount: number;
   results: ScoredAutoContext[];
   queryTokenCount: number;
+  queryTokens: string[];
 }): void {
   if (
     process.env.NODE_ENV !== 'development' &&
@@ -694,7 +826,14 @@ function logRetrievalDiagnostics(input: {
 
   const topResults = input.results.slice(0, 5).map((result, index) => ({
     rank: index + 1,
+    scoreBeforeExactBoost: result.scoreBeforeExactBoost,
+    exactMatchBonus: result.exactMatchBonus,
     score: result.score,
+    matchedTokens: result.matchedTokenCount,
+    exactMatchedTokens: result.exactMatchedTokenCount,
+    exactMeaningfulTokenMatch: result.exactMeaningfulTokenMatch,
+    previouslyBelowScoreThreshold:
+      result.scoreBeforeExactBoost < AUTO_CONTEXT_MIN_SCORE,
     status: meetsAutoContextThreshold(result, input.queryTokenCount)
       ? 'accepted'
       : 'rejected',
@@ -702,9 +841,20 @@ function logRetrievalDiagnostics(input: {
 
   console.info('[Mimora Retrieval]', {
     queryChars: input.queryChars,
-    candidates: input.candidateCount,
+    queryTokens: input.queryTokens,
+    scannedCandidates: input.candidateCount,
+    matchedCandidates: input.results.length,
+    exactMatchCandidates: input.results.filter(
+      (result) => result.exactMeaningfulTokenMatch,
+    ).length,
+    autoContextMinScore: AUTO_CONTEXT_MIN_SCORE,
+    exactMatchMinScore: EXACT_MATCH_MIN_SCORE,
+    source: 'raw-markdown',
     aboveThreshold: input.results.filter((result) =>
       meetsAutoContextThreshold(result, input.queryTokenCount),
+    ).length,
+    rejectedByThreshold: input.results.filter(
+      (result) => !meetsAutoContextThreshold(result, input.queryTokenCount),
     ).length,
     topResults,
   });
@@ -849,13 +999,22 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
         ),
         results: scoredResults,
         queryTokenCount: tokens.length,
+        queryTokens: tokens,
       });
 
       return scoredResults
         .filter((result) => meetsAutoContextThreshold(result, tokens.length))
         .slice(0, retrievalInput.limit)
         .map(
-          ({ matchedTokenCount: _matchedTokenCount, phraseMatched: _phraseMatched, ...result }) =>
+          ({
+            matchedTokenCount: _matchedTokenCount,
+            phraseMatched: _phraseMatched,
+            exactMeaningfulTokenMatch: _exactMeaningfulTokenMatch,
+            exactMatchedTokenCount: _exactMatchedTokenCount,
+            scoreBeforeExactBoost: _scoreBeforeExactBoost,
+            exactMatchBonus: _exactMatchBonus,
+            ...result
+          }) =>
             result,
         );
     },

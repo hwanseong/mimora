@@ -33,6 +33,14 @@ import {
   type MaskingSettings,
   type UpdateMaskingEntryInput,
 } from '../src/security/maskingEngine';
+import {
+  createDefaultSecretDetectionSettings,
+  validateCustomSecretRuleInput,
+  type AddSecretRuleInput,
+  type CustomSecretRule,
+  type SecretDetectionSettings,
+  type UpdateSecretRuleInput,
+} from '../src/security/secretDetector';
 
 type LegacyVaultSettings = {
   workVaultPath?: unknown;
@@ -56,6 +64,90 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
       entries: settings.masking.entries.map((entry) => ({ ...entry })),
       sequences: { ...settings.masking.sequences },
     },
+    secretDetection: {
+      customRules: settings.secretDetection.customRules.map((rule) => ({
+        ...rule,
+        ...(rule.keywords ? { keywords: [...rule.keywords] } : {}),
+      })),
+    },
+  };
+}
+
+function parseSecretDetectionSettings(value: unknown): {
+  secretDetection: SecretDetectionSettings;
+  migrated: boolean;
+} {
+  if (typeof value !== 'object' || value === null) {
+    return {
+      secretDetection: createDefaultSecretDetectionSettings(),
+      migrated: true,
+    };
+  }
+
+  const rawRules = Array.isArray(
+    (value as { customRules?: unknown }).customRules,
+  )
+    ? ((value as { customRules: unknown[] }).customRules)
+    : [];
+  const customRules: CustomSecretRule[] = [];
+  const seenIds = new Set<string>();
+  let migrated = !Array.isArray(
+    (value as { customRules?: unknown }).customRules,
+  );
+
+  for (const rawRule of rawRules) {
+    try {
+      if (
+        typeof rawRule !== 'object' ||
+        rawRule === null ||
+        (rawRule as Partial<CustomSecretRule>).source !== 'custom' ||
+        typeof (rawRule as Partial<CustomSecretRule>).id !== 'string' ||
+        typeof (rawRule as Partial<CustomSecretRule>).createdAt !== 'string' ||
+        typeof (rawRule as Partial<CustomSecretRule>).updatedAt !== 'string'
+      ) {
+        migrated = true;
+        continue;
+      }
+
+      const candidate = rawRule as CustomSecretRule;
+
+      if (seenIds.has(candidate.id)) {
+        migrated = true;
+        continue;
+      }
+
+      const validated = validateCustomSecretRuleInput({
+        id: candidate.id,
+        name: candidate.name,
+        kind: candidate.kind,
+        enabled: candidate.enabled,
+        keywords: candidate.keywords,
+        pattern: candidate.pattern,
+      }) as UpdateSecretRuleInput;
+
+      seenIds.add(candidate.id);
+      customRules.push({
+        id: candidate.id,
+        name: validated.name,
+        source: 'custom',
+        kind: validated.kind,
+        enabled: validated.enabled ?? true,
+        severity: 'hard-block',
+        category: 'custom-secret',
+        ...(validated.kind === 'keyword-value'
+          ? { keywords: validated.keywords }
+          : { pattern: validated.pattern }),
+        createdAt: candidate.createdAt,
+        updatedAt: candidate.updatedAt,
+      });
+    } catch {
+      migrated = true;
+    }
+  }
+
+  return {
+    secretDetection: { customRules },
+    migrated: migrated || customRules.length !== rawRules.length,
   };
 }
 
@@ -450,6 +542,7 @@ function migrateLegacySettings(
     externalAI: { ...defaultExternalAISettings },
     aiMode: 'auto',
     masking: createDefaultMaskingSettings(),
+    secretDetection: createDefaultSecretDetectionSettings(),
   };
 }
 
@@ -487,6 +580,9 @@ function parseSettings(
     const parsedMasking = parseMaskingSettings(
       (parsedSettings as Partial<MimoraSettings>).masking,
     );
+    const parsedSecretDetection = parseSecretDetectionSettings(
+      (parsedSettings as Partial<MimoraSettings>).secretDetection,
+    );
 
     return {
       settings: {
@@ -506,12 +602,14 @@ function parseSettings(
         externalAI: externalAI ?? { ...defaultExternalAISettings },
         aiMode,
         masking: parsedMasking.masking,
+        secretDetection: parsedSecretDetection.secretDetection,
       },
       migrated:
         localAI === null ||
         externalAI === null ||
         !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode) ||
-        parsedMasking.migrated,
+        parsedMasking.migrated ||
+        parsedSecretDetection.migrated,
     };
   }
 
@@ -629,6 +727,7 @@ export function createSettingsStore({
           externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
+          secretDetection: settings.secretDetection,
           vaults: [
             ...settings.vaults,
             {
@@ -662,6 +761,7 @@ export function createSettingsStore({
           externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
+          secretDetection: settings.secretDetection,
           vaults: settings.vaults.map((vault) =>
             vault.id === input.id
               ? {
@@ -690,6 +790,7 @@ export function createSettingsStore({
           externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
+          secretDetection: settings.secretDetection,
           vaults: settings.vaults.filter((vault) => vault.id !== id),
         };
 
@@ -707,6 +808,7 @@ export function createSettingsStore({
           externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
+          secretDetection: settings.secretDetection,
         });
       }),
 
@@ -847,6 +949,122 @@ export function createSettingsStore({
               (entry) => entry.id !== id,
             ),
             sequences: settings.masking.sequences,
+          },
+        });
+      }),
+
+    addSecretRule: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const ruleInput = validateCustomSecretRuleInput(
+          input,
+        ) as AddSecretRuleInput;
+
+        if (
+          settings.secretDetection.customRules.some(
+            (rule) =>
+              rule.name.toLocaleLowerCase('en-US') ===
+              ruleInput.name.toLocaleLowerCase('en-US'),
+          )
+        ) {
+          throw new Error('동일한 이름의 Custom Secret Rule이 이미 있습니다.');
+        }
+
+        const now = getNow();
+        const rule: CustomSecretRule = {
+          id: createId(),
+          name: ruleInput.name,
+          source: 'custom',
+          kind: ruleInput.kind,
+          enabled: ruleInput.enabled ?? true,
+          severity: 'hard-block',
+          category: 'custom-secret',
+          ...(ruleInput.kind === 'keyword-value'
+            ? { keywords: ruleInput.keywords }
+            : { pattern: ruleInput.pattern }),
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        return persistSettings({
+          ...settings,
+          secretDetection: {
+            customRules: [...settings.secretDetection.customRules, rule],
+          },
+        });
+      }),
+
+    updateSecretRule: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const ruleInput = validateCustomSecretRuleInput(
+          input,
+        ) as UpdateSecretRuleInput;
+        const existingRule = settings.secretDetection.customRules.find(
+          (rule) => rule.id === ruleInput.id,
+        );
+
+        if (!existingRule) {
+          throw new Error('수정할 Custom Secret Rule을 찾을 수 없습니다.');
+        }
+
+        if (
+          settings.secretDetection.customRules.some(
+            (rule) =>
+              rule.id !== ruleInput.id &&
+              rule.name.toLocaleLowerCase('en-US') ===
+                ruleInput.name.toLocaleLowerCase('en-US'),
+          )
+        ) {
+          throw new Error('동일한 이름의 Custom Secret Rule이 이미 있습니다.');
+        }
+
+        return persistSettings({
+          ...settings,
+          secretDetection: {
+            customRules: settings.secretDetection.customRules.map((rule) =>
+              rule.id === ruleInput.id
+                ? {
+                    ...rule,
+                    name: ruleInput.name,
+                    kind: ruleInput.kind,
+                    enabled: ruleInput.enabled ?? true,
+                    keywords:
+                      ruleInput.kind === 'keyword-value'
+                        ? ruleInput.keywords
+                        : undefined,
+                    pattern:
+                      ruleInput.kind === 'regex'
+                        ? ruleInput.pattern
+                        : undefined,
+                    updatedAt: getNow(),
+                  }
+                : rule,
+            ),
+          },
+        });
+      }),
+
+    deleteSecretRule: (id: unknown) =>
+      runExclusive(async () => {
+        if (typeof id !== 'string') {
+          throw new Error('삭제할 Custom Secret Rule 정보가 올바르지 않습니다.');
+        }
+
+        const settings = await loadSettings();
+
+        if (
+          !settings.secretDetection.customRules.some((rule) => rule.id === id)
+        ) {
+          throw new Error('삭제할 Custom Secret Rule을 찾을 수 없습니다.');
+        }
+
+        return persistSettings({
+          ...settings,
+          secretDetection: {
+            customRules: settings.secretDetection.customRules.filter(
+              (rule) => rule.id !== id,
+            ),
           },
         });
       }),

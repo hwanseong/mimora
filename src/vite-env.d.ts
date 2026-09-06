@@ -22,6 +22,10 @@ import type {
   UpdateMaskingEntryInput,
 } from './security/maskingEngine';
 import type {
+  AddSecretRuleInput,
+  UpdateSecretRuleInput,
+} from './security/secretDetector';
+import type {
   AddVaultInput,
   MimoraSettings,
   UpdateVaultInput,
@@ -63,6 +67,13 @@ type MimoraApi = {
       input: UpdateMaskingEntryInput,
     ) => Promise<MimoraSettings>;
     deleteMaskingEntry: (id: string) => Promise<MimoraSettings>;
+    addSecretRule: (
+      input: AddSecretRuleInput,
+    ) => Promise<MimoraSettings>;
+    updateSecretRule: (
+      input: UpdateSecretRuleInput,
+    ) => Promise<MimoraSettings>;
+    deleteSecretRule: (id: string) => Promise<MimoraSettings>;
     listLocalAIModels: (
       input: LocalAIConnectionInput,
     ) => Promise<LLMModel[]>;

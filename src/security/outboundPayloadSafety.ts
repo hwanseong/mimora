@@ -1,7 +1,13 @@
 import type { VaultSecurity, VaultType } from '../settings';
-import type { MaskingEntry } from './maskingEngine';
+import {
+  findRemainingRegisteredEntityIds,
+  type MaskingEntry,
+} from './maskingEngine';
 import type { EffectiveSecurity } from './securityRouter';
-import { containsAbsoluteFilesystemPath } from './structuralMasking';
+import {
+  containsAbsoluteFilesystemPath,
+  containsInternalNetworkAddress,
+} from './structuralMasking';
 
 export type PayloadSafetyStatus = 'pass' | 'review-required' | 'block';
 export type PayloadSafetyCheckStatus = 'pass' | 'warn' | 'fail';
@@ -108,14 +114,16 @@ export function evaluateOutboundPayload(input: {
   const { externalText, documents, maskingEntries, effectiveSecurity } = input;
   const enabledEntries = maskingEntries.filter((entry) => entry.enabled);
   const hasAbsolutePath = containsAbsoluteFilesystemPath(externalText);
+  const hasInternalNetworkAddress = containsInternalNetworkAddress(externalText);
   const leakedMetadata = documents.some((document) =>
     [document.vaultName, document.relativePath, document.fileName]
       .filter(Boolean)
       .some((metadataValue) => containsValue(externalText, metadataValue)),
   );
   const hasMappingTable = containsMappingTable(externalText, enabledEntries);
-  const remainingEntities = enabledEntries.filter((entry) =>
-    containsValue(externalText, entry.value),
+  const remainingEntityIds = findRemainingRegisteredEntityIds(
+    [externalText],
+    enabledEntries,
   );
   const expectedDocumentIds = documents.map((document) => document.documentId);
   const openingDocumentIds = [
@@ -170,6 +178,14 @@ export function evaluateOutboundPayload(input: {
         : 'Windows 및 사용자 홈 absolute path가 없습니다.',
     ),
     check(
+      'internal-network-address',
+      'Internal network addresses removed',
+      hasInternalNetworkAddress ? 'fail' : 'pass',
+      hasInternalNetworkAddress
+        ? 'Private IPv4 address 또는 연결 Port가 Payload에 남아 있습니다.'
+        : 'Private IPv4 address와 연결 Port가 Payload에 없습니다.',
+    ),
+    check(
       'vault-metadata',
       'Vault metadata excluded',
       leakedMetadata ? 'fail' : 'pass',
@@ -188,9 +204,9 @@ export function evaluateOutboundPayload(input: {
     check(
       'registered-entities',
       'Registered entities masked',
-      remainingEntities.length > 0 ? 'fail' : 'pass',
-      remainingEntities.length > 0
-        ? `등록된 원본 Entity ${remainingEntities.length}개가 남아 있습니다.`
+      remainingEntityIds.length > 0 ? 'fail' : 'pass',
+      remainingEntityIds.length > 0
+        ? `Registered entity remains in outbound payload (${remainingEntityIds.length}).`
         : '활성화된 등록 Entity의 원문이 남아 있지 않습니다.',
     ),
     check(

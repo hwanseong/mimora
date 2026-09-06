@@ -9,6 +9,7 @@ import type {
   OpenAIUsage,
 } from './externalAI';
 import type { ExternalPayloadPreview } from './security/externalPayloadPreview';
+import type { SecretDetection } from './security/secretDetector';
 import type { AIMode, RoutingDecision } from './security/securityRouter';
 
 export type ChatRequestStatus =
@@ -51,6 +52,7 @@ export type ExternalSafetyAction = {
   status: 'review-required' | 'block';
   requestMessageId: string;
   reasons: string[];
+  secretDetections?: SecretDetection[];
 };
 
 export type ChatMessage = {

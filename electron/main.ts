@@ -37,6 +37,12 @@ import type {
   UpdateMaskingEntryInput,
 } from '../src/security/maskingEngine';
 import {
+  detectSecrets,
+  getSecretRules,
+  type AddSecretRuleInput,
+  type UpdateSecretRuleInput,
+} from '../src/security/secretDetector';
+import {
   type AddVaultInput,
   type MimoraIpcResult,
   type MimoraSettings,
@@ -184,6 +190,33 @@ function registerSettingsHandlers(): void {
   );
 
   ipcMain.handle(
+    'settings:addSecretRule',
+    async (
+      _event,
+      input: AddSecretRuleInput,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.addSecretRule(input)),
+  );
+
+  ipcMain.handle(
+    'settings:updateSecretRule',
+    async (
+      _event,
+      input: UpdateSecretRuleInput,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateSecretRule(input)),
+  );
+
+  ipcMain.handle(
+    'settings:deleteSecretRule',
+    async (
+      _event,
+      id: string,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.deleteSecretRule(id)),
+  );
+
+  ipcMain.handle(
     'settings:selectVaultDirectory',
     async (): Promise<VaultDirectorySelection | null> => {
     const result = await dialog.showOpenDialog({
@@ -297,12 +330,47 @@ function registerOpenAIHandlers(): void {
             security: document.security,
           })),
         ).security;
-        const safety = evaluateOutboundPayload({
-          externalText: input.externalText,
-          documents: input.documents,
-          maskingEntries: settings.masking.entries,
-          effectiveSecurity,
+        const secretDetection = detectSecrets(
+          input.externalText,
+          getSecretRules(settings.secretDetection.customRules),
+        );
+        const matchedRuleIds = [
+          ...new Set(
+            secretDetection.detections.map(
+              (detection) => detection.ruleId,
+            ),
+          ),
+        ];
+
+        console.info('[Mimora Secret Detection]', {
+          documents: input.documents.length,
+          detected: secretDetection.detected,
+          rulesMatched: matchedRuleIds.length,
+          totalMatches: secretDetection.totalCount,
+          matchedRules: matchedRuleIds,
         });
+
+        const safety = secretDetection.detected
+          ? {
+              status: 'block' as const,
+              checks: [
+                {
+                  id: 'secret-detected',
+                  label: 'Secret / Credential Detection',
+                  status: 'fail' as const,
+                  message:
+                    'Secret 또는 Credential 정보가 감지되어 외부 전송을 차단했습니다.',
+                },
+              ],
+              blockers: ['secret-detected'],
+              warnings: [],
+            }
+          : evaluateOutboundPayload({
+              externalText: input.externalText,
+              documents: input.documents,
+              maskingEntries: settings.masking.entries,
+              effectiveSecurity,
+            });
         const model = settings.externalAI.model;
         const authorization = authorizeExternalSend({
           status: safety.status,

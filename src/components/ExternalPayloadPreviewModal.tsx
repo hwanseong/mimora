@@ -75,6 +75,30 @@ export function ExternalPayloadPreviewModal({
           </span>
         </div>
 
+        {preview.secretDetection.detected ? (
+          <section className="external-preview-section secret-detection-block">
+            <h3>⛔ Secret / Credential detected</h3>
+            <p>
+              외부 Payload는 생성되지 않았으며 실제 Secret 값은 Preview에서
+              숨겼습니다.
+            </p>
+            <ul>
+              {preview.secretDetection.detections.map((detection) => (
+                <li
+                  key={`${detection.ruleId}-${detection.documentId ?? 'question'}`}
+                >
+                  <strong>
+                    {detection.source === 'custom' ? 'Custom Rule: ' : ''}
+                    {detection.ruleName}
+                  </strong>
+                  <span>{detection.documentId ?? 'User Question'}</span>
+                  <span>{detection.count} match</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
         <section className="external-preview-section">
           <h3>Masked Question</h3>
           <pre>{preview.maskedQuestion}</pre>
@@ -117,9 +141,15 @@ export function ExternalPayloadPreviewModal({
                 <li key={replacement.entryId}>
                   <strong>[{replacement.alias}]</strong>
                   <span>
-                    ← {replacement.original} ·{' '}
+                    ←{' '}
+                    {replacement.type === 'internal-ip'
+                      ? 'Internal network address'
+                      : replacement.original}{' '}
+                    ·{' '}
                     {replacement.type === 'file-path'
                       ? 'File path'
+                      : replacement.type === 'internal-ip'
+                        ? 'Internal IP'
                       : maskingEntityTypeLabels[replacement.type]}{' '}
                     ·{' '}
                     {replacement.count} occurrences
@@ -152,13 +182,19 @@ export function ExternalPayloadPreviewModal({
         </section>
 
         <section className="external-preview-section external-text-section">
-          <details>
-            <summary>
-              <strong>Final External Payload</strong>
-              <span>Alias-only document boundaries</span>
-            </summary>
-            <pre>{preview.externalText}</pre>
-          </details>
+          {preview.secretDetection.detected ? (
+            <p className="external-preview-empty">
+              Secret HARD BLOCK · External Payload를 생성하지 않았습니다.
+            </p>
+          ) : (
+            <details>
+              <summary>
+                <strong>Final External Payload</strong>
+                <span>Alias-only document boundaries</span>
+              </summary>
+              <pre>{preview.externalText}</pre>
+            </details>
+          )}
         </section>
         </div>
 

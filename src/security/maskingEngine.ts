@@ -79,6 +79,23 @@ function normalizeMatch(value: string): string {
   return value.toLocaleLowerCase('en-US');
 }
 
+function isInsideMarkdownLinkLabel(
+  text: string,
+  start: number,
+  end: number,
+): boolean {
+  const lastOpeningBracket = text.lastIndexOf('[', start);
+  const lastClosingBracket = text.lastIndexOf(']', start);
+  const nextClosingBracket = text.indexOf(']', end);
+  const nextLineBreak = text.indexOf('\n', end);
+
+  return (
+    lastOpeningBracket > lastClosingBracket &&
+    nextClosingBracket >= end &&
+    (nextLineBreak < 0 || nextClosingBracket < nextLineBreak)
+  );
+}
+
 export function maskText(
   text: string,
   entries: MaskingEntry[],
@@ -117,7 +134,7 @@ export function maskText(
     enabledEntries.map((entry) => escapeRegularExpression(entry.value)).join('|'),
     'giu',
   );
-  const maskedText = text.replace(matcher, (matchedValue) => {
+  const maskedText = text.replace(matcher, (matchedValue, offset: number) => {
     const entry = entriesByValue.get(normalizeMatch(matchedValue));
 
     if (!entry) {
@@ -125,7 +142,13 @@ export function maskText(
     }
 
     counts.set(entry.id, (counts.get(entry.id) ?? 0) + 1);
-    return `[${entry.alias}]`;
+    const isInsideMarkdownLinkText = isInsideMarkdownLinkLabel(
+      text,
+      offset,
+      offset + matchedValue.length,
+    );
+
+    return isInsideMarkdownLinkText ? entry.alias : `[${entry.alias}]`;
   });
   const replacements = enabledEntries.flatMap((entry) => {
     const count = counts.get(entry.id) ?? 0;
@@ -152,4 +175,17 @@ export function maskText(
       0,
     ),
   };
+}
+
+export function findRemainingRegisteredEntityIds(
+  texts: string[],
+  entries: MaskingEntry[],
+): string[] {
+  return entries
+    .filter((entry) => entry.enabled && Boolean(entry.value.trim()))
+    .filter((entry) => {
+      const matcher = new RegExp(escapeRegularExpression(entry.value), 'iu');
+      return texts.some((text) => matcher.test(text));
+    })
+    .map((entry) => entry.id);
 }

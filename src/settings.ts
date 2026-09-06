@@ -11,6 +11,10 @@ import {
   createDefaultMaskingSettings,
   type MaskingSettings,
 } from './security/maskingEngine';
+import {
+  createDefaultSecretDetectionSettings,
+  type SecretDetectionSettings,
+} from './security/secretDetector';
 
 export const vaultTypeOptions = ['work', 'private', 'knowledge'] as const;
 export const vaultSecurityOptions = [
@@ -38,6 +42,7 @@ export type MimoraSettings = {
   externalAI: ExternalAISettings;
   aiMode: AIMode;
   masking: MaskingSettings;
+  secretDetection: SecretDetectionSettings;
 };
 
 export type AddVaultInput = {
@@ -72,6 +77,7 @@ export const defaultSettings: MimoraSettings = {
   externalAI: { ...defaultExternalAISettings },
   aiMode: 'auto',
   masking: createDefaultMaskingSettings(),
+  secretDetection: createDefaultSecretDetectionSettings(),
 };
 
 export const vaultTypeLabels: Record<VaultType, string> = {

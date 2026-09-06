@@ -9,6 +9,7 @@ import {
   type ExternalPayloadPreview,
 } from '../security/externalPayloadPreview';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { getSecretRules } from '../security/secretDetector';
 
 export function ChatMessages({
   messages,
@@ -69,6 +70,7 @@ export function ChatMessages({
     setPreviewError(null);
 
     try {
+      const settings = await window.mimora.getSettings();
       const nextPreview = message.externalPayloadPreview ??
         createExternalPayloadPreview({
           workspaceId,
@@ -76,7 +78,10 @@ export function ChatMessages({
           question: message.content,
           manualContexts: message.manualContext ?? [],
           autoContexts: message.autoContext ?? [],
-          maskingEntries: (await window.mimora.getSettings()).masking.entries,
+          maskingEntries: settings.masking.entries,
+          secretRules: getSecretRules(
+            settings.secretDetection.customRules,
+          ),
         });
 
       console.info('[Mimora External Preview]', {
@@ -175,6 +180,18 @@ export function ChatMessages({
                       : '사용자 검토 필요'}
                   </strong>
                   <ul>
+                    {message.externalSafetyAction.secretDetections?.map(
+                      (detection) => (
+                        <li
+                          key={`${detection.ruleId}-${detection.documentId ?? 'question'}`}
+                        >
+                          {detection.source === 'custom' ? 'Custom Rule: ' : ''}
+                          {detection.ruleName} ·{' '}
+                          {detection.documentId ?? 'User Question'} ·{' '}
+                          {detection.count} match
+                        </li>
+                      ),
+                    )}
                     {message.externalSafetyAction.reasons.map((reason) => (
                       <li key={reason}>{reason}</li>
                     ))}
