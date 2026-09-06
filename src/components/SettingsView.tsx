@@ -18,6 +18,7 @@ import {
   type VaultType,
 } from '../settings';
 import { MaskingSettingsSection } from './MaskingSettingsSection';
+import { ExternalAISettingsSection } from './ExternalAISettingsSection';
 
 type VaultFormState = {
   id?: string;
@@ -421,6 +422,11 @@ export function SettingsView() {
           ) : null}
         </div>
       </section>
+
+      <ExternalAISettingsSection
+        onSettingsChange={setSettings}
+        settings={settings}
+      />
 
       <MaskingSettingsSection
         onSettingsChange={setSettings}

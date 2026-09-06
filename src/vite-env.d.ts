@@ -10,6 +10,7 @@ import type {
   LocalAIConnectionInput,
   LocalAISettings,
 } from './localAI';
+import type { ExternalAISettings } from './externalAI';
 import type { LocalAIChatInput, LocalAIChatResult } from './llmChat';
 import type { AIMode } from './security/securityRouter';
 import type {
@@ -38,6 +39,15 @@ type MimoraApi = {
     updateLocalAISettings: (
       input: LocalAISettings,
     ) => Promise<MimoraSettings>;
+    getExternalAISettings: () => Promise<ExternalAISettings>;
+    updateExternalAISettings: (
+      input: ExternalAISettings,
+    ) => Promise<MimoraSettings>;
+    hasOpenAIApiKey: () => Promise<boolean>;
+    saveOpenAIApiKey: (apiKey: string) => Promise<boolean>;
+    deleteOpenAIApiKey: () => Promise<boolean>;
+    listOpenAIModels: () => Promise<LLMModel[]>;
+    testOpenAIConnection: () => Promise<ConnectionTestResult>;
     updateAIMode: (aiMode: AIMode) => Promise<MimoraSettings>;
     addMaskingEntry: (
       input: AddMaskingEntryInput,

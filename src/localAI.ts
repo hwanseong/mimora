@@ -1,9 +1,10 @@
-export const llmProviderOptions = ['ollama'] as const;
+export const llmProviderOptions = ['ollama', 'openai'] as const;
 
 export type LLMProviderType = (typeof llmProviderOptions)[number];
+export type LocalAIProviderType = Extract<LLMProviderType, 'ollama'>;
 
 export type LocalAISettings = {
-  provider: LLMProviderType;
+  provider: LocalAIProviderType;
   endpoint: string;
   model: string | null;
 };

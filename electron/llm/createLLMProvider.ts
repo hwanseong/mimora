@@ -1,5 +1,5 @@
 import type { LocalAIConnectionInput } from '../../src/localAI';
-import type { LLMProvider } from './LLMProvider';
+import type { ChatLLMProvider } from './LLMProvider';
 import { OllamaProvider } from './OllamaProvider';
 
 function isLocalAIConnectionInput(
@@ -13,7 +13,7 @@ function isLocalAIConnectionInput(
   );
 }
 
-export function createLLMProvider(input: unknown): LLMProvider {
+export function createLLMProvider(input: unknown): ChatLLMProvider {
   if (!isLocalAIConnectionInput(input)) {
     throw new Error('지원하지 않는 Local AI Provider 설정입니다.');
   }

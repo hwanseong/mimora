@@ -10,5 +10,8 @@ import type {
 export interface LLMProvider {
   listModels(): Promise<LLMModel[]>;
   testConnection(): Promise<ConnectionTestResult>;
+}
+
+export interface ChatLLMProvider extends LLMProvider {
   chat(request: LLMChatRequest): Promise<LLMChatResponse>;
 }

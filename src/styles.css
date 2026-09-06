@@ -1843,6 +1843,46 @@ button {
   color: #9a6700;
 }
 
+.external-api-key-field {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 7px;
+}
+
+.external-api-key-field label {
+  min-width: 0;
+}
+
+.external-api-key-field button:disabled,
+.external-key-confirmation button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.external-key-confirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #e6b4b1;
+  border-radius: 8px;
+  background: #fffafa;
+  color: #9b3b37;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
+.external-key-confirmation p {
+  margin: 0;
+}
+
+.external-key-confirmation > div {
+  display: flex;
+  gap: 6px;
+}
+
 .empty-vaults {
   border: 1px dashed #d9dde5;
   border-radius: 8px;
@@ -2236,6 +2276,15 @@ button {
 
   .local-ai-form {
     grid-template-columns: 1fr;
+  }
+
+  .external-api-key-field {
+    grid-template-columns: 1fr;
+  }
+
+  .external-key-confirmation {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .attached-context-bar {

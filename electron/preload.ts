@@ -9,6 +9,7 @@ import type {
   LocalAIConnectionInput,
   LocalAISettings,
 } from '../src/localAI';
+import type { ExternalAISettings } from '../src/externalAI';
 import type {
   LocalAIChatInput,
   LocalAIChatResult,
@@ -80,6 +81,48 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('settings:updateLocalAI', input) as Promise<
         MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  getExternalAISettings: () =>
+    (
+      ipcRenderer.invoke('settings:getExternalAI') as Promise<
+        MimoraIpcResult<ExternalAISettings>
+      >
+    ).then(unwrapIpcResult),
+  updateExternalAISettings: (input: ExternalAISettings) =>
+    (
+      ipcRenderer.invoke('settings:updateExternalAI', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  hasOpenAIApiKey: () =>
+    (
+      ipcRenderer.invoke('openAI:hasApiKey') as Promise<
+        MimoraIpcResult<boolean>
+      >
+    ).then(unwrapIpcResult),
+  saveOpenAIApiKey: (apiKey: string) =>
+    (
+      ipcRenderer.invoke('openAI:saveApiKey', apiKey) as Promise<
+        MimoraIpcResult<boolean>
+      >
+    ).then(unwrapIpcResult),
+  deleteOpenAIApiKey: () =>
+    (
+      ipcRenderer.invoke('openAI:deleteApiKey') as Promise<
+        MimoraIpcResult<boolean>
+      >
+    ).then(unwrapIpcResult),
+  listOpenAIModels: () =>
+    (
+      ipcRenderer.invoke('openAI:listModels') as Promise<
+        MimoraIpcResult<LLMModel[]>
+      >
+    ).then(unwrapIpcResult),
+  testOpenAIConnection: () =>
+    (
+      ipcRenderer.invoke('openAI:testConnection') as Promise<
+        MimoraIpcResult<ConnectionTestResult>
       >
     ).then(unwrapIpcResult),
   updateAIMode: (aiMode: AIMode) =>

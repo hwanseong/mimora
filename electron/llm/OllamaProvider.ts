@@ -6,7 +6,7 @@ import type {
   LLMChatRequest,
   LLMChatResponse,
 } from '../../src/llmChat';
-import type { LLMProvider } from './LLMProvider';
+import type { ChatLLMProvider } from './LLMProvider';
 
 const defaultTimeoutMs = 5_000;
 export const CHAT_TIMEOUT_MS = 120_000;
@@ -240,7 +240,7 @@ function isContextLimitError(errorMessage: string | undefined): boolean {
   );
 }
 
-export class OllamaProvider implements LLMProvider {
+export class OllamaProvider implements ChatLLMProvider {
   constructor(
     private readonly endpoint: string,
     private readonly model: string | null = null,

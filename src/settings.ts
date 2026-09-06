@@ -2,6 +2,10 @@ import {
   defaultLocalAISettings,
   type LocalAISettings,
 } from './localAI';
+import {
+  defaultExternalAISettings,
+  type ExternalAISettings,
+} from './externalAI';
 import type { AIMode } from './security/securityRouter';
 import {
   createDefaultMaskingSettings,
@@ -31,6 +35,7 @@ export type VaultConfig = {
 export type MimoraSettings = {
   vaults: VaultConfig[];
   localAI: LocalAISettings;
+  externalAI: ExternalAISettings;
   aiMode: AIMode;
   masking: MaskingSettings;
 };
@@ -64,6 +69,7 @@ export type MimoraIpcResult<T> =
 export const defaultSettings: MimoraSettings = {
   vaults: [],
   localAI: { ...defaultLocalAISettings },
+  externalAI: { ...defaultExternalAISettings },
   aiMode: 'auto',
   masking: createDefaultMaskingSettings(),
 };

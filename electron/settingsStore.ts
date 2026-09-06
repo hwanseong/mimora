@@ -6,6 +6,10 @@ import {
   type LocalAISettings,
 } from '../src/localAI';
 import {
+  defaultExternalAISettings,
+  type ExternalAISettings,
+} from '../src/externalAI';
+import {
   defaultSettings,
   vaultSecurityOptions,
   vaultTypeOptions,
@@ -46,6 +50,7 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
   return {
     vaults: settings.vaults.map((vault) => ({ ...vault })),
     localAI: { ...settings.localAI },
+    externalAI: { ...settings.externalAI },
     aiMode: settings.aiMode,
     masking: {
       entries: settings.masking.entries.map((entry) => ({ ...entry })),
@@ -273,6 +278,37 @@ function validateLocalAISettings(value: unknown): LocalAISettings {
   return parsedSettings;
 }
 
+function parseExternalAISettings(value: unknown): ExternalAISettings | null {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    (value as ExternalAISettings).provider !== 'openai' ||
+    !(
+      (value as ExternalAISettings).model === null ||
+      typeof (value as ExternalAISettings).model === 'string'
+    )
+  ) {
+    return null;
+  }
+
+  const model = (value as ExternalAISettings).model;
+
+  return {
+    provider: 'openai',
+    model: typeof model === 'string' && model.trim() ? model.trim() : null,
+  };
+}
+
+function validateExternalAISettings(value: unknown): ExternalAISettings {
+  const parsedSettings = parseExternalAISettings(value);
+
+  if (!parsedSettings) {
+    throw new Error('지원하지 않는 External AI Provider 설정입니다.');
+  }
+
+  return parsedSettings;
+}
+
 function isVaultType(value: unknown): value is VaultType {
   return (
     typeof value === 'string' &&
@@ -411,6 +447,7 @@ function migrateLegacySettings(
   return {
     vaults,
     localAI: { ...defaultLocalAISettings },
+    externalAI: { ...defaultExternalAISettings },
     aiMode: 'auto',
     masking: createDefaultMaskingSettings(),
   };
@@ -439,6 +476,9 @@ function parseSettings(
     const localAI = parseLocalAISettings(
       (parsedSettings as Partial<MimoraSettings>).localAI,
     );
+    const externalAI = parseExternalAISettings(
+      (parsedSettings as Partial<MimoraSettings>).externalAI,
+    );
     const aiMode = isAIMode(
       (parsedSettings as Partial<MimoraSettings>).aiMode,
     )
@@ -463,11 +503,13 @@ function parseSettings(
             typeof vault.updatedAt === 'string',
         ),
         localAI: localAI ?? { ...defaultLocalAISettings },
+        externalAI: externalAI ?? { ...defaultExternalAISettings },
         aiMode,
         masking: parsedMasking.masking,
       },
       migrated:
         localAI === null ||
+        externalAI === null ||
         !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode) ||
         parsedMasking.migrated,
     };
@@ -584,6 +626,7 @@ export function createSettingsStore({
         const now = getNow();
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
+          externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
           vaults: [
@@ -616,6 +659,7 @@ export function createSettingsStore({
 
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
+          externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
           vaults: settings.vaults.map((vault) =>
@@ -643,6 +687,7 @@ export function createSettingsStore({
 
         const nextSettings: MimoraSettings = {
           localAI: settings.localAI,
+          externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
           vaults: settings.vaults.filter((vault) => vault.id !== id),
@@ -659,8 +704,20 @@ export function createSettingsStore({
         return persistSettings({
           vaults: settings.vaults,
           localAI,
+          externalAI: settings.externalAI,
           aiMode: settings.aiMode,
           masking: settings.masking,
+        });
+      }),
+
+    updateExternalAISettings: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const externalAI = validateExternalAISettings(input);
+
+        return persistSettings({
+          ...settings,
+          externalAI,
         });
       }),
 

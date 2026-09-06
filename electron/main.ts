@@ -1,10 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  safeStorage,
+  shell,
+} from 'electron';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type {
   ConnectionTestResult,
   LLMModel,
 } from '../src/localAI';
+import type { ExternalAISettings } from '../src/externalAI';
 import type {
   LocalAIChatResult,
   OllamaPerformanceMetrics,
@@ -26,7 +34,9 @@ import type { AutoRetrievedContext } from '../src/autoContext';
 import { createSettingsStore } from './settingsStore';
 import { createVaultFilesService } from './vaultFiles';
 import { createLLMProvider } from './llm/createLLMProvider';
+import { OpenAIProvider } from './llm/OpenAIProvider';
 import { buildLocalAIChatRequest } from './llm/promptBuilder';
+import { createOpenAICredentialStore } from './openAICredentialStore';
 import type {
   VaultFile,
   VaultFileContent,
@@ -35,6 +45,7 @@ import type {
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
+const openAICredentialFileName = 'openai-api-key.safe';
 
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), settingsFileName);
@@ -42,6 +53,11 @@ function getSettingsPath(): string {
 
 const settingsStore = createSettingsStore({
   getSettingsPath,
+});
+const openAICredentialStore = createOpenAICredentialStore({
+  getCredentialPath: () =>
+    path.join(app.getPath('userData'), openAICredentialFileName),
+  safeStorage,
 });
 const vaultFilesService = createVaultFilesService(settingsStore);
 
@@ -104,6 +120,21 @@ function registerSettingsHandlers(): void {
   );
 
   ipcMain.handle(
+    'settings:getExternalAI',
+    async (): Promise<MimoraIpcResult<ExternalAISettings>> =>
+      toIpcResult(async () => (await settingsStore.getSettings()).externalAI),
+  );
+
+  ipcMain.handle(
+    'settings:updateExternalAI',
+    async (
+      _event,
+      input: unknown,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateExternalAISettings(input)),
+  );
+
+  ipcMain.handle(
     'settings:updateAIMode',
     async (
       _event,
@@ -158,6 +189,71 @@ function registerSettingsHandlers(): void {
         suggestedName: path.basename(selectedPath),
       };
     },
+  );
+}
+
+function registerOpenAIHandlers(): void {
+  ipcMain.handle(
+    'openAI:hasApiKey',
+    async (): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(() => openAICredentialStore.hasApiKey()),
+  );
+
+  ipcMain.handle(
+    'openAI:saveApiKey',
+    async (_event, apiKey: unknown): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(async () => {
+        await openAICredentialStore.saveApiKey(apiKey);
+        return true;
+      }),
+  );
+
+  ipcMain.handle(
+    'openAI:deleteApiKey',
+    async (): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(async () => {
+        await openAICredentialStore.deleteApiKey();
+        return false;
+      }),
+  );
+
+  ipcMain.handle(
+    'openAI:listModels',
+    async (): Promise<MimoraIpcResult<LLMModel[]>> =>
+      toIpcResult(async () => {
+        const apiKey = await openAICredentialStore.readApiKeyForMainProcess();
+        return new OpenAIProvider(apiKey).listModels();
+      }),
+  );
+
+  ipcMain.handle(
+    'openAI:testConnection',
+    async (): Promise<MimoraIpcResult<ConnectionTestResult>> =>
+      toIpcResult(async () => {
+        const startedAt = performance.now();
+        let result: ConnectionTestResult;
+
+        try {
+          const apiKey = await openAICredentialStore.readApiKeyForMainProcess();
+          result = await new OpenAIProvider(apiKey).testConnection();
+        } catch (error) {
+          result = {
+            connected: false,
+            message:
+              error instanceof Error
+                ? error.message
+                : 'OpenAI에 연결할 수 없습니다.',
+          };
+        }
+
+        console.info('[Mimora External AI] Connection test.', {
+          provider: 'openai',
+          status: result.connected ? 'success' : 'failure',
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+
+        return result;
+      }),
   );
 }
 
@@ -404,6 +500,7 @@ function createMainWindow(): void {
 registerSettingsHandlers();
 registerVaultFileHandlers();
 registerLocalAIHandlers();
+registerOpenAIHandlers();
 
 void app.whenReady().then(() => {
   createMainWindow();
