@@ -1,5 +1,7 @@
 import type { VaultSecurity, VaultType } from '../settings';
 import type { MaskingEntry } from './maskingEngine';
+import type { EffectiveSecurity } from './securityRouter';
+import { containsAbsoluteFilesystemPath } from './structuralMasking';
 
 export type PayloadSafetyStatus = 'pass' | 'review-required' | 'block';
 export type PayloadSafetyCheckStatus = 'pass' | 'warn' | 'fail';
@@ -18,6 +20,35 @@ export type PayloadSafetyResult = {
   warnings: string[];
 };
 
+export type ExternalSendAuthorization =
+  | { allowed: true }
+  | { allowed: false; message: string };
+
+export function authorizeExternalSend(input: {
+  status: PayloadSafetyStatus;
+  mode: 'auto' | 'external';
+  approved: boolean;
+}): ExternalSendAuthorization {
+  if (input.status === 'block') {
+    return {
+      allowed: false,
+      message: '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
+    };
+  }
+
+  if (
+    input.status === 'review-required' &&
+    (input.mode !== 'external' || !input.approved)
+  ) {
+    return {
+      allowed: false,
+      message: '외부 AI 전송 전 검토와 승인이 필요합니다.',
+    };
+  }
+
+  return { allowed: true };
+}
+
 export type OutboundPayloadDocumentMetadata = {
   documentId: string;
   vaultName: string;
@@ -26,9 +57,6 @@ export type OutboundPayloadDocumentMetadata = {
   relativePath: string;
   fileName: string;
 };
-
-const windowsAbsolutePathPattern = /\b[A-Za-z]:\\/u;
-const unixHomeAbsolutePathPattern = /\/(?:Users|home)\/[\p{L}\p{N}._-]+/u;
 
 function escapeRegularExpression(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -73,12 +101,11 @@ export function evaluateOutboundPayload(input: {
   externalText: string;
   documents: OutboundPayloadDocumentMetadata[];
   maskingEntries: MaskingEntry[];
+  effectiveSecurity?: EffectiveSecurity;
 }): PayloadSafetyResult {
-  const { externalText, documents, maskingEntries } = input;
+  const { externalText, documents, maskingEntries, effectiveSecurity } = input;
   const enabledEntries = maskingEntries.filter((entry) => entry.enabled);
-  const hasAbsolutePath =
-    windowsAbsolutePathPattern.test(externalText) ||
-    unixHomeAbsolutePathPattern.test(externalText);
+  const hasAbsolutePath = containsAbsoluteFilesystemPath(externalText);
   const leakedMetadata = documents.some((document) =>
     [document.vaultName, document.relativePath, document.fileName]
       .filter(Boolean)
@@ -100,21 +127,27 @@ export function evaluateOutboundPayload(input: {
       JSON.stringify(expectedDocumentIds) &&
     JSON.stringify(closingDocumentIds) ===
       JSON.stringify(expectedDocumentIds);
+  const emptyContextMarkerValid =
+    documents.length > 0 ||
+    externalText.includes(
+      '<Project Context>\nNo project context was provided.\n</Project Context>',
+    );
   const payloadStructureValid =
     externalText.includes('<Project Context>') &&
     externalText.includes('</Project Context>') &&
     externalText.includes('<User Question>') &&
     externalText.includes('</User Question>') &&
-    documentBoundariesValid;
+    documentBoundariesValid &&
+    emptyContextMarkerValid;
   const hasPrivateContext = documents.some(
     (document) => document.vaultType === 'private',
   );
   const hasSensitiveContext = documents.some(
     (document) => document.security === 'sensitive',
-  );
+  ) || effectiveSecurity === 'sensitive';
   const hasPersonalContext = documents.some(
     (document) => document.security === 'personal',
-  );
+  ) || effectiveSecurity === 'personal';
   const hasContextWithoutDictionary =
     documents.length > 0 && enabledEntries.length === 0;
   const checks: PayloadSafetyCheck[] = [

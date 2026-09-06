@@ -4,7 +4,18 @@ import type {
   LLMContextSource,
   LocalAIPerformanceMetrics,
 } from './llmChat';
+import type {
+  ExternalAIPerformanceMetrics,
+  OpenAIUsage,
+} from './externalAI';
+import type { ExternalPayloadPreview } from './security/externalPayloadPreview';
 import type { RoutingDecision } from './security/securityRouter';
+
+export type ExternalSafetyAction = {
+  status: 'review-required' | 'block';
+  requestMessageId: string;
+  reasons: string[];
+};
 
 export type ChatMessage = {
   id: string;
@@ -18,8 +29,13 @@ export type ChatMessage = {
   generationErrorDetail?: string;
   sources?: LLMContextSource[];
   performance?: LocalAIPerformanceMetrics;
+  externalPerformance?: ExternalAIPerformanceMetrics;
   routingDecision?: RoutingDecision;
   manualContext?: AttachedContext[];
+  externalPayloadPreview?: ExternalPayloadPreview;
+  externalSafetyAction?: ExternalSafetyAction;
+  model?: string;
+  usage?: OpenAIUsage;
 };
 
 export type ChatSessions = Record<string, ChatMessage[]>;

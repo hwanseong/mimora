@@ -1,6 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import {
   createAttachedContextId,
   type AttachedContext,
@@ -18,6 +16,7 @@ import type {
   VaultSearchScope,
 } from '../vaultFiles';
 import type { Workspace } from '../workspaces';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -623,28 +622,10 @@ export function VaultBrowserView({
               </p>
             ) : null}
             {selectedFile && !isLoadingPreview && !previewError && fileContent ? (
-              <div className="vault-preview-markdown">
-                <ReactMarkdown
-                  components={{
-                    a: ({ node: _node, ...props }) => (
-                      <a {...props} rel="noreferrer noopener" target="_blank" />
-                    ),
-                    img: ({ node: _node, alt }) => (
-                      <span className="markdown-image-placeholder">
-                        {alt ? `[이미지: ${alt}]` : '[이미지]'}
-                      </span>
-                    ),
-                    table: ({ node: _node, ...props }) => (
-                      <div className="markdown-table-scroll">
-                        <table {...props} />
-                      </div>
-                    ),
-                  }}
-                  remarkPlugins={[remarkGfm]}
-                >
-                  {fileContent.content}
-                </ReactMarkdown>
-              </div>
+              <MarkdownRenderer
+                className="vault-preview-markdown"
+                content={fileContent.content}
+              />
             ) : null}
           </div>
         </section>

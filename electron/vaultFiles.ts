@@ -392,6 +392,8 @@ async function searchVault(
 }
 
 const retrievalStopWords = new Set([
+  '프로젝트',
+  '관리',
   '관련',
   '관련된',
   '관련한',
@@ -406,7 +408,25 @@ const retrievalStopWords = new Set([
   '정리해줘',
   '알려줘',
   '보여줘',
+  '설명',
+  '설명해줘',
+  '질문',
+  '뭐야',
+  '무슨',
+  '차이',
 ]);
+
+export const AUTO_CONTEXT_MIN_SCORE = 40;
+
+type ScoredAutoContext = AutoRetrievedContext & {
+  matchedTokenCount: number;
+  phraseMatched: boolean;
+};
+
+type VaultRetrieval = {
+  candidateCount: number;
+  results: ScoredAutoContext[];
+};
 
 const koreanParticles = [
   '에게서',
@@ -465,7 +485,7 @@ function preprocessRetrievalQuery(query: string): {
 
   return {
     phrase,
-    tokens: [...new Set(meaningfulTokens.length > 0 ? meaningfulTokens : rawTokens)],
+    tokens: [...new Set(meaningfulTokens)],
   };
 }
 
@@ -608,10 +628,10 @@ async function retrieveFromVault(
   query: string,
   phrase: string,
   tokens: string[],
-): Promise<AutoRetrievedContext[]> {
+): Promise<VaultRetrieval> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
-  const results: AutoRetrievedContext[] = [];
+  const results: ScoredAutoContext[] = [];
 
   await walkMarkdownFiles(rootPath, rootPath, [], files);
 
@@ -621,10 +641,7 @@ async function retrieveFromVault(
       const { matchedTokenCount, phraseMatched, score } =
         calculateRetrievalScore(file, content, phrase, tokens);
 
-      if (
-        score <= 0 ||
-        (tokens.length >= 3 && matchedTokenCount < 2 && !phraseMatched)
-      ) {
+      if (score <= 0) {
         continue;
       }
 
@@ -637,6 +654,8 @@ async function retrieveFromVault(
         relativePath: file.relativePath,
         fileName: file.name,
         score,
+        matchedTokenCount,
+        phraseMatched,
         snippet: createAutoContextSnippet(content, query, tokens),
         content,
       });
@@ -645,7 +664,50 @@ async function retrieveFromVault(
     }
   }
 
-  return results;
+  return { candidateCount: files.length, results };
+}
+
+function meetsAutoContextThreshold(
+  result: ScoredAutoContext,
+  queryTokenCount: number,
+): boolean {
+  const hasEnoughTokenCoverage =
+    queryTokenCount < 3 ||
+    result.matchedTokenCount >= 2 ||
+    result.phraseMatched;
+
+  return result.score >= AUTO_CONTEXT_MIN_SCORE && hasEnoughTokenCoverage;
+}
+
+function logRetrievalDiagnostics(input: {
+  queryChars: number;
+  candidateCount: number;
+  results: ScoredAutoContext[];
+  queryTokenCount: number;
+}): void {
+  if (
+    process.env.NODE_ENV !== 'development' &&
+    !process.env.VITE_DEV_SERVER_URL
+  ) {
+    return;
+  }
+
+  const topResults = input.results.slice(0, 5).map((result, index) => ({
+    rank: index + 1,
+    score: result.score,
+    status: meetsAutoContextThreshold(result, input.queryTokenCount)
+      ? 'accepted'
+      : 'rejected',
+  }));
+
+  console.info('[Mimora Retrieval]', {
+    queryChars: input.queryChars,
+    candidates: input.candidateCount,
+    aboveThreshold: input.results.filter((result) =>
+      meetsAutoContextThreshold(result, input.queryTokenCount),
+    ).length,
+    topResults,
+  });
 }
 
 function validateAutoContextInput(input: unknown): Required<AutoContextRetrievalInput> {
@@ -744,7 +806,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
           try {
             return {
               searched: true,
-              results: await retrieveFromVault(
+              retrieval: await retrieveFromVault(
                 vault,
                 retrievalInput.query,
                 phrase,
@@ -753,7 +815,13 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
             };
           } catch (error) {
             console.warn('Skipped an unavailable Vault during retrieval.', error);
-            return { searched: false, results: [] as AutoRetrievedContext[] };
+            return {
+              searched: false,
+              retrieval: {
+                candidateCount: 0,
+                results: [] as ScoredAutoContext[],
+              },
+            };
           }
         }),
       );
@@ -764,15 +832,32 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
         );
       }
 
-      return vaultRetrievals
-        .flatMap((result) => result.results)
+      const scoredResults = vaultRetrievals
+        .flatMap((result) => result.retrieval.results)
         .sort(
           (left, right) =>
             right.score - left.score ||
             left.vaultName.localeCompare(right.vaultName) ||
             left.relativePath.localeCompare(right.relativePath),
-        )
-        .slice(0, retrievalInput.limit);
+        );
+
+      logRetrievalDiagnostics({
+        queryChars: retrievalInput.query.length,
+        candidateCount: vaultRetrievals.reduce(
+          (total, result) => total + result.retrieval.candidateCount,
+          0,
+        ),
+        results: scoredResults,
+        queryTokenCount: tokens.length,
+      });
+
+      return scoredResults
+        .filter((result) => meetsAutoContextThreshold(result, tokens.length))
+        .slice(0, retrievalInput.limit)
+        .map(
+          ({ matchedTokenCount: _matchedTokenCount, phraseMatched: _phraseMatched, ...result }) =>
+            result,
+        );
     },
   };
 }

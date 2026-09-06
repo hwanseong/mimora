@@ -9,7 +9,11 @@ import type {
   LocalAIConnectionInput,
   LocalAISettings,
 } from '../src/localAI';
-import type { ExternalAISettings } from '../src/externalAI';
+import type {
+  ExternalAIChatInput,
+  ExternalAIChatResult,
+  ExternalAISettings,
+} from '../src/externalAI';
 import type {
   LocalAIChatInput,
   LocalAIChatResult,
@@ -123,6 +127,12 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('openAI:testConnection') as Promise<
         MimoraIpcResult<ConnectionTestResult>
+      >
+    ).then(unwrapIpcResult),
+  chatWithOpenAI: (input: ExternalAIChatInput) =>
+    (
+      ipcRenderer.invoke('openAI:chat', input) as Promise<
+        MimoraIpcResult<ExternalAIChatResult>
       >
     ).then(unwrapIpcResult),
   updateAIMode: (aiMode: AIMode) =>

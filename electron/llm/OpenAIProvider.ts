@@ -2,6 +2,8 @@ import OpenAI, {
   APIConnectionError,
   APIConnectionTimeoutError,
   AuthenticationError,
+  BadRequestError,
+  NotFoundError,
   PermissionDeniedError,
   RateLimitError,
 } from 'openai';
@@ -9,18 +11,32 @@ import type {
   ConnectionTestResult,
   LLMModel,
 } from '../../src/localAI';
+import type {
+  OpenAIChatRequest,
+  OpenAIChatResponse,
+} from '../../src/externalAI';
 import type { LLMProvider } from './LLMProvider';
 
 export const OPENAI_CONNECTION_TIMEOUT_MS = 10_000;
-// External inference is intentionally not connected yet. Future Responses API
-// requests must use this policy value instead of relying on the API default.
+export const OPENAI_CHAT_TIMEOUT_MS = 60_000;
+// Every Responses API request must use this policy value instead of relying on
+// the API default. Callers cannot supply or override the storage policy.
 export const OPENAI_STORE_RESPONSES = false;
 
 export type OpenAIResponsesRequest = {
   model: string;
   input: string;
+  instructions: string;
   store: false;
+  stream: false;
 };
+
+export const MIMORA_OPENAI_INSTRUCTIONS = `You are Mimora, an AI assistant for IT project managers.
+Analyze only the information provided in the project context.
+Do not infer the real identities behind anonymized placeholders such as [PERSON_001] or [CLIENT_001].
+Do not invent missing project facts.
+If the provided context is insufficient, state that clearly.
+Answer in the same language as the user's question.`;
 
 type OpenAIModelRecord = {
   id: string;
@@ -29,6 +45,20 @@ type OpenAIModelRecord = {
 type OpenAIModelsClient = {
   models: {
     list: () => Promise<{ data: OpenAIModelRecord[] }>;
+  };
+  responses: {
+    create: (
+      request: OpenAIResponsesRequest,
+      options: { timeout: number },
+    ) => Promise<{
+      output_text?: string;
+      model?: string;
+      usage?: {
+        input_tokens: number;
+        output_tokens: number;
+        total_tokens: number;
+      } | null;
+    }>;
   };
 };
 
@@ -105,6 +135,58 @@ export function getOpenAIConnectionErrorMessage(error: unknown): string {
   return 'OpenAI에 연결할 수 없습니다.';
 }
 
+function getOpenAIErrorCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return undefined;
+  }
+
+  return typeof error.code === 'string' ? error.code : undefined;
+}
+
+export function getOpenAIChatErrorMessage(error: unknown): string {
+  const errorCode = getOpenAIErrorCode(error);
+
+  if (
+    errorCode === 'insufficient_quota' ||
+    errorCode === 'billing_hard_limit_reached'
+  ) {
+    return 'OpenAI 사용 한도 또는 결제 상태를 확인하세요.';
+  }
+
+  if (
+    error instanceof AuthenticationError ||
+    (typeof error === 'object' && error !== null && 'status' in error && error.status === 401)
+  ) {
+    return 'OpenAI API Key를 확인하세요.';
+  }
+
+  if (error instanceof PermissionDeniedError) {
+    return '이 API Key에는 선택한 OpenAI 모델을 사용할 권한이 없습니다.';
+  }
+
+  if (error instanceof RateLimitError) {
+    return 'OpenAI 요청 한도에 도달했습니다. 잠시 후 다시 시도하세요.';
+  }
+
+  if (error instanceof APIConnectionTimeoutError) {
+    return 'OpenAI 응답 시간이 초과되었습니다.';
+  }
+
+  if (error instanceof APIConnectionError) {
+    return 'OpenAI에 연결할 수 없습니다. 네트워크 상태를 확인하세요.';
+  }
+
+  if (error instanceof NotFoundError || errorCode === 'model_not_found') {
+    return '선택된 OpenAI 모델을 사용할 수 없습니다.';
+  }
+
+  if (error instanceof BadRequestError) {
+    return 'OpenAI 요청을 처리할 수 없습니다. 모델 설정을 확인하세요.';
+  }
+
+  return 'OpenAI API 요청을 처리하지 못했습니다.';
+}
+
 export function createOpenAIResponsesRequest(
   model: string,
   input: string,
@@ -118,7 +200,9 @@ export function createOpenAIResponsesRequest(
   return {
     model: normalizedModel,
     input,
+    instructions: MIMORA_OPENAI_INSTRUCTIONS,
     store: OPENAI_STORE_RESPONSES,
+    stream: false,
   };
 }
 
@@ -187,5 +271,37 @@ export class OpenAIProvider implements LLMProvider {
 
   prepareResponseRequest(model: string, input: string): OpenAIResponsesRequest {
     return createOpenAIResponsesRequest(model, input);
+  }
+
+  async chat(request: OpenAIChatRequest): Promise<OpenAIChatResponse> {
+    try {
+      const response = await this.client.responses.create(
+        this.prepareResponseRequest(request.model, request.input),
+        { timeout: OPENAI_CHAT_TIMEOUT_MS },
+      );
+      const content = response.output_text?.trim();
+
+      if (!content) {
+        throw new Error('empty_openai_response');
+      }
+
+      const usage = response.usage
+        ? {
+            inputTokens: response.usage.input_tokens,
+            outputTokens: response.usage.output_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+        : undefined;
+
+      return {
+        content,
+        ...(typeof response.model === 'string' && response.model.trim()
+          ? { model: response.model.trim() }
+          : {}),
+        ...(usage ? { usage } : {}),
+      };
+    } catch (error) {
+      throw new Error(getOpenAIChatErrorMessage(error));
+    }
   }
 }

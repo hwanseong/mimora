@@ -12,13 +12,26 @@ import type {
   ConnectionTestResult,
   LLMModel,
 } from '../src/localAI';
-import type { ExternalAISettings } from '../src/externalAI';
+import type {
+  ExternalAIChatInput,
+  ExternalAIChatResult,
+  ExternalAISettings,
+} from '../src/externalAI';
 import type {
   LocalAIChatResult,
   OllamaPerformanceMetrics,
   OllamaResponsePerformance,
 } from '../src/llmChat';
-import type { AIMode } from '../src/security/securityRouter';
+import {
+  evaluateSecurity,
+  type AIMode,
+} from '../src/security/securityRouter';
+import { workspaceSections } from '../src/workspaces';
+import {
+  authorizeExternalSend,
+  evaluateOutboundPayload,
+  type OutboundPayloadDocumentMetadata,
+} from '../src/security/outboundPayloadSafety';
 import type {
   AddMaskingEntryInput,
   UpdateMaskingEntryInput,
@@ -255,6 +268,173 @@ function registerOpenAIHandlers(): void {
         return result;
       }),
   );
+
+  ipcMain.handle(
+    'openAI:chat',
+    async (
+      _event,
+      rawInput: unknown,
+    ): Promise<MimoraIpcResult<ExternalAIChatResult>> =>
+      toIpcResult(async () => {
+        const input = validateExternalAIChatInput(rawInput);
+        const startedTime = performance.now();
+        const requestStartedAt = new Date();
+        const settings = await settingsStore.getSettings();
+        const workspace = workspaceSections
+          .flatMap((section) => section.items)
+          .find((item) => item.id === input.workspaceId);
+
+        if (!workspace) {
+          throw new Error('External AI 요청의 Workspace를 확인할 수 없습니다.');
+        }
+
+        const effectiveSecurity = evaluateSecurity(
+          workspace.type,
+          input.documents.map((document) => ({
+            vaultId: document.documentId,
+            relativePath: document.relativePath,
+            vaultType: document.vaultType,
+            security: document.security,
+          })),
+        ).security;
+        const safety = evaluateOutboundPayload({
+          externalText: input.externalText,
+          documents: input.documents,
+          maskingEntries: settings.masking.entries,
+          effectiveSecurity,
+        });
+        const model = settings.externalAI.model;
+        const authorization = authorizeExternalSend({
+          status: safety.status,
+          mode: input.mode,
+          approved: input.approved,
+        });
+        let status: 'success' | 'failure' = 'failure';
+
+        try {
+          if (!authorization.allowed) {
+            throw new Error(authorization.message);
+          }
+
+          if (!model) {
+            throw new Error(
+              'OpenAI 모델이 선택되지 않았습니다. Settings에서 모델을 선택하세요.',
+            );
+          }
+
+          let apiKey: string;
+
+          try {
+            apiKey = await openAICredentialStore.readApiKeyForMainProcess();
+          } catch {
+            throw new Error(
+              'OpenAI API Key가 설정되지 않았습니다. Settings에서 API Key를 저장하세요.',
+            );
+          }
+
+          const response = await new OpenAIProvider(apiKey).chat({
+            model,
+            input: input.externalText,
+          });
+          const responseCompletedAt = new Date();
+          const openAIRoundTripMs = performance.now() - startedTime;
+
+          status = 'success';
+
+          return {
+            ...response,
+            model: response.model ?? model,
+            safetyStatus: safety.status,
+            performance: {
+              openAIRoundTripMs,
+              payloadChars: input.externalText.length,
+              documentCount: input.documents.length,
+              responseChars: response.content.length,
+              requestStartedAt: requestStartedAt.toISOString(),
+              responseCompletedAt: responseCompletedAt.toISOString(),
+            },
+          };
+        } finally {
+          console.info('[Mimora External Request]', {
+            workspace: input.workspaceId,
+            mode: input.mode,
+            safety: safety.status,
+            documents: input.documents.length,
+            maskedPayloadChars: input.externalText.length,
+            model: model ?? 'not-selected',
+            approved: input.approved,
+            status,
+            elapsedMs: Math.round(performance.now() - startedTime),
+          });
+        }
+      }),
+  );
+}
+
+function isExternalDocumentMetadata(
+  value: unknown,
+): value is OutboundPayloadDocumentMetadata {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const document = value as Partial<OutboundPayloadDocumentMetadata>;
+  const allowedKeys = new Set([
+    'documentId',
+    'vaultName',
+    'vaultType',
+    'security',
+    'relativePath',
+    'fileName',
+  ]);
+
+  return (
+    Object.keys(value).every((key) => allowedKeys.has(key)) &&
+    typeof document.documentId === 'string' &&
+    /^DOCUMENT_\d+$/u.test(document.documentId) &&
+    typeof document.vaultName === 'string' &&
+    ['work', 'private', 'knowledge'].includes(document.vaultType ?? '') &&
+    ['internal', 'sensitive', 'personal'].includes(document.security ?? '') &&
+    typeof document.relativePath === 'string' &&
+    typeof document.fileName === 'string'
+  );
+}
+
+function validateExternalAIChatInput(value: unknown): ExternalAIChatInput {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('External AI 요청 형식이 올바르지 않습니다.');
+  }
+
+  const input = value as Partial<ExternalAIChatInput>;
+  const allowedKeys = new Set([
+    'workspaceId',
+    'mode',
+    'externalText',
+    'documents',
+    'approved',
+  ]);
+
+  if (
+    !Object.keys(value).every((key) => allowedKeys.has(key)) ||
+    typeof input.workspaceId !== 'string' ||
+    !input.workspaceId.trim() ||
+    (input.mode !== 'auto' && input.mode !== 'external') ||
+    typeof input.externalText !== 'string' ||
+    !input.externalText.trim() ||
+    !Array.isArray(input.documents) ||
+    !input.documents.every(isExternalDocumentMetadata) ||
+    typeof input.approved !== 'boolean'
+  ) {
+    throw new Error('External AI 요청 형식이 올바르지 않습니다.');
+  }
+
+  return {
+    workspaceId: input.workspaceId.trim(),
+    mode: input.mode,
+    externalText: input.externalText,
+    documents: input.documents.map((document) => ({ ...document })),
+    approved: input.approved,
+  };
 }
 
 function nanosecondsToMilliseconds(value: number | undefined): number | undefined {

@@ -37,6 +37,7 @@ export function ChatHeader({
           >
             <option value="auto">Auto</option>
             <option value="local">Local</option>
+            <option value="external">External</option>
           </select>
         </label>
         <span className={`security-badge ${effectiveSecurity}`}>

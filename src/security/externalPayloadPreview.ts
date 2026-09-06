@@ -5,6 +5,10 @@ import {
   type MaskingEntry,
   type MaskingReplacement,
 } from './maskingEngine';
+import {
+  createStructuralSensitiveDataMasker,
+  type FilePathMaskingReplacement,
+} from './structuralMasking';
 import { buildExternalPayloadText } from './externalPayloadBuilder';
 import {
   evaluateOutboundPayload,
@@ -25,6 +29,10 @@ export type ExternalPreviewDocument = {
   replacementCount: number;
 };
 
+export type ExternalMaskingReplacement =
+  | MaskingReplacement
+  | FilePathMaskingReplacement;
+
 export type ExternalPayloadPreview = {
   workspaceId: string;
   effectiveSecurity: EffectiveSecurity;
@@ -34,7 +42,7 @@ export type ExternalPayloadPreview = {
   maskedContextChars: number;
   documentCount: number;
   documents: ExternalPreviewDocument[];
-  replacements: MaskingReplacement[];
+  replacements: ExternalMaskingReplacement[];
   totalReplacementCount: number;
   externalText: string;
   safeToSend: boolean;
@@ -75,9 +83,9 @@ function deduplicateContextDocuments(
 }
 
 function mergeReplacements(
-  replacementGroups: MaskingReplacement[][],
-): MaskingReplacement[] {
-  const replacements = new Map<string, MaskingReplacement>();
+  replacementGroups: ExternalMaskingReplacement[][],
+): ExternalMaskingReplacement[] {
+  const replacements = new Map<string, ExternalMaskingReplacement>();
 
   for (const replacement of replacementGroups.flat()) {
     const existingReplacement = replacements.get(replacement.entryId);
@@ -103,9 +111,22 @@ export function createExternalPayloadPreview(input: {
     input.manualContexts,
     input.autoContexts,
   );
-  const questionResult = maskText(input.question, input.maskingEntries);
+  const structuralMasker = createStructuralSensitiveDataMasker();
+  const dictionaryQuestionResult = maskText(
+    input.question,
+    input.maskingEntries,
+  );
+  const questionResult = structuralMasker.maskText(
+    dictionaryQuestionResult.maskedText,
+  );
   const documentResults = contextDocuments.map((document) => {
-    const maskingResult = maskText(document.content, input.maskingEntries);
+    const dictionaryMaskingResult = maskText(
+      document.content,
+      input.maskingEntries,
+    );
+    const structuralMaskingResult = structuralMasker.maskText(
+      dictionaryMaskingResult.maskedText,
+    );
 
     return {
       document: {
@@ -116,10 +137,12 @@ export function createExternalPayloadPreview(input: {
         relativePath: document.relativePath,
         fileName: document.fileName,
         originalChars: document.content.length,
-        maskedContent: maskingResult.maskedText,
-        replacementCount: maskingResult.totalReplacementCount,
+        maskedContent: structuralMaskingResult.maskedText,
+        replacementCount:
+          dictionaryMaskingResult.totalReplacementCount +
+          structuralMaskingResult.replacementCount,
       },
-      replacements: maskingResult.replacements,
+      replacements: dictionaryMaskingResult.replacements,
     };
   });
   const builtPayload = buildExternalPayloadText({
@@ -133,13 +156,15 @@ export function createExternalPayloadPreview(input: {
     documentId: builtPayload.documents[index].documentId,
   }));
   const replacements = mergeReplacements([
-    questionResult.replacements,
+    dictionaryQuestionResult.replacements,
     ...documentResults.map((result) => result.replacements),
+    structuralMasker.getReplacements(),
   ]);
   const safety = evaluateOutboundPayload({
     externalText: builtPayload.text,
     documents,
     maskingEntries: input.maskingEntries,
+    effectiveSecurity: input.effectiveSecurity,
   });
 
   return {

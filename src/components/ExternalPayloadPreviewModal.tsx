@@ -19,9 +19,11 @@ const safetyStatusLabels = {
 export function ExternalPayloadPreviewModal({
   preview,
   onClose,
+  onApprove,
 }: {
   preview: ExternalPayloadPreview;
   onClose: () => void;
+  onApprove?: () => Promise<void>;
 }) {
   return (
     <div className="external-preview-backdrop" role="presentation">
@@ -33,7 +35,11 @@ export function ExternalPayloadPreviewModal({
       >
         <header className="external-preview-header">
           <div>
-            <p className="eyebrow">Dry Run · No external transmission</p>
+            <p className="eyebrow">
+              {onApprove
+                ? 'Review required · 승인 전에는 전송되지 않음'
+                : 'External Payload Safety Review'}
+            </p>
             <h2 id="external-preview-heading">External Payload Preview</h2>
           </div>
           <button
@@ -104,7 +110,10 @@ export function ExternalPayloadPreviewModal({
                   <strong>[{replacement.alias}]</strong>
                   <span>
                     ← {replacement.original} ·{' '}
-                    {maskingEntityTypeLabels[replacement.type]} ·{' '}
+                    {replacement.type === 'file-path'
+                      ? 'File path'
+                      : maskingEntityTypeLabels[replacement.type]}{' '}
+                    ·{' '}
                     {replacement.count} occurrences
                   </span>
                 </li>
@@ -149,7 +158,23 @@ export function ExternalPayloadPreviewModal({
             {preview.totalReplacementCount} replacements ·{' '}
             {preview.maskedContextChars} masked context chars
           </span>
-          <strong>Preview only · 전송 기능 없음</strong>
+          {onApprove ? (
+            <button
+              className="primary-button"
+              onClick={() => {
+                void onApprove();
+              }}
+              type="button"
+            >
+              승인 후 OpenAI 전송
+            </button>
+          ) : (
+            <strong>
+              {preview.status === 'block'
+                ? 'Safety BLOCK · 전송 불가'
+                : 'External Payload Preview'}
+            </strong>
+          )}
         </footer>
       </section>
     </div>

@@ -8,24 +8,35 @@ import {
   createExternalPayloadPreview,
   type ExternalPayloadPreview,
 } from '../security/externalPayloadPreview';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 export function ChatMessages({
   messages,
   workspaceId,
+  onApproveExternal,
+  onUseLocalAI,
 }: {
   messages: ChatMessage[];
   workspaceId: string;
+  onApproveExternal: (assistantMessageId: string) => Promise<void>;
+  onUseLocalAI: (assistantMessageId: string) => Promise<void>;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<ExternalPayloadPreview | null>(null);
   const [loadingMessageId, setLoadingMessageId] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [approvalMessageId, setApprovalMessageId] = useState<string | null>(null);
+  const [processingActionMessageId, setProcessingActionMessageId] =
+    useState<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
-  async function openExternalPreview(message: ChatMessage): Promise<void> {
+  async function openExternalPreview(
+    message: ChatMessage,
+    assistantMessageId?: string,
+  ): Promise<void> {
     if (!message.routingDecision) {
       return;
     }
@@ -34,15 +45,15 @@ export function ChatMessages({
     setPreviewError(null);
 
     try {
-      const settings = await window.mimora.getSettings();
-      const nextPreview = createExternalPayloadPreview({
-        workspaceId,
-        effectiveSecurity: message.routingDecision.security,
-        question: message.content,
-        manualContexts: message.manualContext ?? [],
-        autoContexts: message.autoContext ?? [],
-        maskingEntries: settings.masking.entries,
-      });
+      const nextPreview = message.externalPayloadPreview ??
+        createExternalPayloadPreview({
+          workspaceId,
+          effectiveSecurity: message.routingDecision.security,
+          question: message.content,
+          manualContexts: message.manualContext ?? [],
+          autoContexts: message.autoContext ?? [],
+          maskingEntries: (await window.mimora.getSettings()).masking.entries,
+        });
 
       console.info('[Mimora External Preview]', {
         workspace: nextPreview.workspaceId,
@@ -53,6 +64,11 @@ export function ChatMessages({
         maskedContextChars: nextPreview.maskedContextChars,
         status: nextPreview.status,
       });
+      setApprovalMessageId(
+        assistantMessageId && nextPreview.status === 'review-required'
+          ? assistantMessageId
+          : null,
+      );
       setPreview(nextPreview);
     } catch (error) {
       setPreviewError(
@@ -81,7 +97,14 @@ export function ChatMessages({
               {message.role === 'assistant' ? (
                 <span className="message-label">Mimora</span>
               ) : null}
-              <p>{message.content}</p>
+              {message.role === 'assistant' ? (
+                <MarkdownRenderer
+                  className="chat-markdown"
+                  content={message.content}
+                />
+              ) : (
+                <p>{message.content}</p>
+              )}
               {message.generationErrorDetail ? (
                 <small className="message-error-detail">
                   {message.generationErrorDetail}
@@ -112,7 +135,73 @@ export function ChatMessages({
                 <SourcesList sources={message.sources} />
               ) : null}
               {message.role === 'assistant' && message.routingDecision ? (
-                <RoutingStatus decision={message.routingDecision} />
+                <RoutingStatus
+                  decision={message.routingDecision}
+                  model={message.model}
+                />
+              ) : null}
+              {message.role === 'assistant' && message.externalSafetyAction ? (
+                <div className={`external-safety-action ${message.externalSafetyAction.status}`}>
+                  <strong>
+                    {message.externalSafetyAction.status === 'block'
+                      ? '외부 전송 차단 사유'
+                      : '사용자 검토 필요'}
+                  </strong>
+                  <ul>
+                    {message.externalSafetyAction.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                  <div>
+                    <button
+                      className="secondary-button"
+                      disabled={processingActionMessageId !== null}
+                      onClick={() => {
+                        const requestMessage = messages.find(
+                          (candidate) =>
+                            candidate.id ===
+                            message.externalSafetyAction?.requestMessageId,
+                        );
+
+                        if (requestMessage) {
+                          void openExternalPreview(requestMessage, message.id);
+                        }
+                      }}
+                      type="button"
+                    >
+                      External Preview 확인
+                    </button>
+                    <button
+                      className="secondary-button"
+                      disabled={processingActionMessageId !== null}
+                      onClick={() => {
+                        setProcessingActionMessageId(message.id);
+                        void onUseLocalAI(message.id).finally(() => {
+                          setProcessingActionMessageId(null);
+                        });
+                      }}
+                      type="button"
+                    >
+                      {processingActionMessageId === message.id
+                        ? '처리 중…'
+                        : 'Local AI로 처리'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {message.role === 'assistant' && message.externalPerformance ? (
+                <small className="message-performance external">
+                  <strong>OpenAI</strong>
+                  <span>
+                    {(message.externalPerformance.openAIRoundTripMs / 1_000).toFixed(1)}s
+                    {message.usage?.inputTokens === undefined
+                      ? ''
+                      : ` · Input ${message.usage.inputTokens.toLocaleString()} tokens`}
+                    {message.usage?.outputTokens === undefined
+                      ? ''
+                      : ` · Output ${message.usage.outputTokens.toLocaleString()} tokens`}
+                  </span>
+                </small>
               ) : null}
               {import.meta.env.DEV &&
               message.role === 'assistant' &&
@@ -150,7 +239,24 @@ export function ChatMessages({
         <ExternalPayloadPreviewModal
           onClose={() => {
             setPreview(null);
+            setApprovalMessageId(null);
           }}
+          onApprove={
+            approvalMessageId
+              ? async () => {
+                  const messageId = approvalMessageId;
+                  setProcessingActionMessageId(messageId);
+                  setPreview(null);
+                  setApprovalMessageId(null);
+
+                  try {
+                    await onApproveExternal(messageId);
+                  } finally {
+                    setProcessingActionMessageId(null);
+                  }
+                }
+              : undefined
+          }
           preview={preview}
         />
       ) : null}
