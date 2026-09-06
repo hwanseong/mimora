@@ -1112,15 +1112,24 @@ button {
 
 .external-preview-modal {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 13px;
   width: min(820px, 100%);
   max-height: min(860px, calc(100vh - 44px));
-  overflow-y: auto;
+  overflow: hidden;
   border: 1px solid #d9dde5;
   border-radius: 12px;
   background: #ffffff;
   padding: 16px;
   box-shadow: 0 22px 60px rgb(15 23 42 / 20%);
+}
+
+.external-preview-body {
+  display: grid;
+  gap: 13px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 3px;
 }
 
 .external-preview-header,
@@ -1321,12 +1330,37 @@ button {
 }
 
 .external-preview-footer {
+  flex-wrap: wrap;
   border-top: 1px solid #eceef2;
   padding-top: 11px;
+  background: #ffffff;
 }
 
 .external-preview-footer strong {
   color: #805338;
+}
+
+.external-preview-footer-summary {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.external-preview-footer-summary small {
+  color: #9b3b37;
+  line-height: 1.35;
+}
+
+.external-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.external-preview-actions button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .auto-context-details summary span:first-of-type {

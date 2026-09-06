@@ -8,10 +8,22 @@ import {
   AUTO_CONTEXT_MIN_SCORE,
   createVaultFilesService,
 } from '../electron/vaultFiles';
+import { createOpenAIResponsesRequest } from '../electron/llm/OpenAIProvider';
+import {
+  isChatRequestBusy,
+  tryBeginExternalAction,
+} from '../src/chat';
+import { ChatInput } from '../src/components/ChatInput';
+import { ExternalPayloadPreviewModal } from '../src/components/ExternalPayloadPreviewModal';
 import { MarkdownRenderer } from '../src/components/MarkdownRenderer';
+import { RoutingStatus } from '../src/components/RoutingStatus';
 import { buildExternalPayloadText } from '../src/security/externalPayloadBuilder';
 import { createExternalPayloadPreview } from '../src/security/externalPayloadPreview';
-import { evaluateOutboundPayload } from '../src/security/outboundPayloadSafety';
+import {
+  authorizeExternalSend,
+  evaluateOutboundPayload,
+} from '../src/security/outboundPayloadSafety';
+import { routeAIRequest } from '../src/security/securityRouter';
 
 function renderMarkdown(content: string): string {
   return renderToStaticMarkup(
@@ -199,5 +211,167 @@ const unmaskedSafety = evaluateOutboundPayload({
 assert.equal(unmaskedSafety.status, 'block');
 assert.ok(unmaskedSafety.blockers.includes('absolute-filesystem-path'));
 
+const passAuthorization = authorizeExternalSend({
+  status: 'pass',
+  mode: 'external',
+  approved: false,
+});
+assert.equal(passAuthorization.allowed, true);
+const responsesRequest = createOpenAIResponsesRequest(
+  'gpt-test',
+  'masked payload only',
+);
+assert.equal(responsesRequest.model, 'gpt-test');
+assert.equal(responsesRequest.input, 'masked payload only');
+assert.equal(responsesRequest.store, false);
+
+const reviewPreview = createExternalPayloadPreview({
+  workspaceId: 'all',
+  effectiveSecurity: 'personal',
+  question: 'Review question',
+  manualContexts: [],
+  autoContexts: [],
+  maskingEntries: [],
+});
+assert.equal(reviewPreview.status, 'review-required');
+const reviewWithoutApproval = authorizeExternalSend({
+  status: reviewPreview.status,
+  mode: 'external',
+  approved: false,
+});
+assert.equal(reviewWithoutApproval.allowed, false);
+
+const reviewComposerHtml = renderToStaticMarkup(
+  createElement(ChatInput, {
+    requestStatus: 'review-required',
+    value: '',
+    onChange: () => undefined,
+    onSubmit: () => undefined,
+  }),
+);
+assert.doesNotMatch(reviewComposerHtml, /<textarea[^>]+disabled/u);
+assert.match(reviewComposerHtml, /외부 전송 검토가 필요합니다/u);
+assert.doesNotMatch(reviewComposerHtml, /분석 중/u);
+assert.equal(isChatRequestBusy('review-required'), false);
+assert.equal(isChatRequestBusy('calling-external'), true);
+
+let previewCloseCount = 0;
+const reviewModalHtml = renderToStaticMarkup(
+  createElement(ExternalPayloadPreviewModal, {
+    preview: reviewPreview,
+    onClose: () => {
+      previewCloseCount += 1;
+    },
+    onApprove: async () => undefined,
+    onUseLocalAI: async () => undefined,
+  }),
+);
+assert.match(reviewModalHtml, /Masked Question/u);
+assert.match(reviewModalHtml, /External Payload Safety/u);
+assert.match(reviewModalHtml, /승인 후 OpenAI 전송/u);
+assert.match(reviewModalHtml, /Local AI로 처리/u);
+assert.equal(previewCloseCount, 0);
+
+const reviewWithApproval = authorizeExternalSend({
+  status: reviewPreview.status,
+  mode: 'external',
+  approved: true,
+});
+assert.equal(reviewWithApproval.allowed, true);
+
+const pendingAction = { inFlight: false };
+assert.equal(tryBeginExternalAction(pendingAction), true);
+assert.equal(tryBeginExternalAction(pendingAction), false);
+
+const blockedPreview = {
+  ...reviewPreview,
+  status: 'block' as const,
+  safeToSend: false,
+  blockers: ['absolute-filesystem-path'],
+  safety: {
+    status: 'block' as const,
+    checks: reviewPreview.safety.checks,
+    blockers: ['absolute-filesystem-path'],
+    warnings: reviewPreview.safety.warnings,
+  },
+};
+const blockedModalHtml = renderToStaticMarkup(
+  createElement(ExternalPayloadPreviewModal, {
+    preview: blockedPreview,
+    onClose: () => undefined,
+    onUseLocalAI: async () => undefined,
+  }),
+);
+assert.doesNotMatch(blockedModalHtml, /승인 후 OpenAI 전송/u);
+assert.match(blockedModalHtml, /Local AI로 처리/u);
+const blockedApproval = authorizeExternalSend({
+  status: 'block',
+  mode: 'external',
+  approved: true,
+});
+assert.deepEqual(blockedApproval, {
+  allowed: false,
+  message: '보안 검사에 실패한 요청은 승인할 수 없습니다.',
+});
+
+const questionAApproval = authorizeExternalSend({
+  status: 'review-required',
+  mode: 'external',
+  approved: true,
+});
+const questionBApproval = authorizeExternalSend({
+  status: 'review-required',
+  mode: 'external',
+  approved: false,
+});
+assert.equal(questionAApproval.allowed, true);
+assert.equal(questionBApproval.allowed, false);
+
+const approvedRouting = {
+  ...routeAIRequest({
+    mode: 'external',
+    workspaceType: 'work',
+    manualContexts: [],
+    autoContexts: [],
+    safetyStatus: 'review-required',
+    externalAvailable: true,
+  }),
+  reason: 'user-approved' as const,
+  approved: true,
+};
+const approvedFooterHtml = renderToStaticMarkup(
+  createElement(RoutingStatus, {
+    decision: approvedRouting,
+    externalApproval: {
+      required: true,
+      approved: true,
+      approvedAt: '2026-09-06T00:00:00.000Z',
+    },
+    model: 'gpt-test',
+  }),
+);
+assert.match(approvedFooterHtml, /OpenAI · External · User Approved/u);
+assert.match(approvedFooterHtml, /Safety REVIEW REQUIRED/u);
+assert.match(approvedFooterHtml, /Model: gpt-test/u);
+
+const localFallbackFooterHtml = renderToStaticMarkup(
+  createElement(RoutingStatus, {
+    decision: {
+      ...approvedRouting,
+      provider: 'local',
+      reason: 'user-selected-local-fallback',
+      approved: false,
+    },
+    externalApproval: {
+      required: true,
+      approved: false,
+    },
+    model: 'qwen-local',
+  }),
+);
+assert.match(localFallbackFooterHtml, /Local AI · External · Local fallback/u);
+assert.match(localFallbackFooterHtml, /User selected Local fallback/u);
+
 console.info('[correctness-check] Markdown M1-M3 passed.');
 console.info('[correctness-check] Path P1-P5 passed.');
+console.info('[correctness-check] External review A-J state checks passed.');

@@ -20,10 +20,16 @@ export function ExternalPayloadPreviewModal({
   preview,
   onClose,
   onApprove,
+  onUseLocalAI,
+  isProcessing = false,
+  actionError,
 }: {
   preview: ExternalPayloadPreview;
   onClose: () => void;
   onApprove?: () => Promise<void>;
+  onUseLocalAI?: () => Promise<void>;
+  isProcessing?: boolean;
+  actionError?: string | null;
 }) {
   return (
     <div className="external-preview-backdrop" role="presentation">
@@ -36,7 +42,7 @@ export function ExternalPayloadPreviewModal({
         <header className="external-preview-header">
           <div>
             <p className="eyebrow">
-              {onApprove
+              {preview.status === 'review-required'
                 ? 'Review required · 승인 전에는 전송되지 않음'
                 : 'External Payload Safety Review'}
             </p>
@@ -45,6 +51,7 @@ export function ExternalPayloadPreviewModal({
           <button
             aria-label="External Payload Preview 닫기"
             className="secondary-button"
+            disabled={isProcessing}
             onClick={onClose}
             type="button"
           >
@@ -52,6 +59,7 @@ export function ExternalPayloadPreviewModal({
           </button>
         </header>
 
+        <div className="external-preview-body">
         <div className={`external-preview-status ${preview.status}`}>
           <strong>
             {preview.status === 'pass'
@@ -152,29 +160,52 @@ export function ExternalPayloadPreviewModal({
             <pre>{preview.externalText}</pre>
           </details>
         </section>
+        </div>
 
         <footer className="external-preview-footer">
-          <span>
-            {preview.totalReplacementCount} replacements ·{' '}
-            {preview.maskedContextChars} masked context chars
-          </span>
-          {onApprove ? (
+          <div className="external-preview-footer-summary">
+            <span>
+              {preview.totalReplacementCount} replacements ·{' '}
+              {preview.maskedContextChars} masked context chars
+            </span>
+            {actionError ? <small role="alert">{actionError}</small> : null}
+          </div>
+          <div className="external-preview-actions">
             <button
-              className="primary-button"
-              onClick={() => {
-                void onApprove();
-              }}
+              className="secondary-button"
+              disabled={isProcessing}
+              onClick={onClose}
               type="button"
             >
-              승인 후 OpenAI 전송
+              닫기
             </button>
-          ) : (
-            <strong>
-              {preview.status === 'block'
-                ? 'Safety BLOCK · 전송 불가'
-                : 'External Payload Preview'}
-            </strong>
-          )}
+            {onUseLocalAI &&
+            (preview.status === 'review-required' ||
+              preview.status === 'block') ? (
+              <button
+                className="secondary-button"
+                disabled={isProcessing}
+                onClick={() => {
+                  void onUseLocalAI();
+                }}
+                type="button"
+              >
+                {isProcessing ? '처리 중…' : 'Local AI로 처리'}
+              </button>
+            ) : null}
+            {preview.status === 'review-required' && onApprove ? (
+              <button
+                className="primary-button"
+                disabled={isProcessing}
+                onClick={() => {
+                  void onApprove();
+                }}
+                type="button"
+              >
+                {isProcessing ? '전송 준비 중…' : '승인 후 OpenAI 전송'}
+              </button>
+            ) : null}
+          </div>
         </footer>
       </section>
     </div>

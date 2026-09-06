@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChatMessage } from '../chat';
+import type { ChatMessage, ExternalActionResult } from '../chat';
 import { AutoContextPanel } from './AutoContextPanel';
 import { SourcesList } from './SourcesList';
 import { RoutingStatus } from './RoutingStatus';
@@ -18,20 +18,44 @@ export function ChatMessages({
 }: {
   messages: ChatMessage[];
   workspaceId: string;
-  onApproveExternal: (assistantMessageId: string) => Promise<void>;
+  onApproveExternal: (
+    assistantMessageId: string,
+  ) => Promise<ExternalActionResult>;
   onUseLocalAI: (assistantMessageId: string) => Promise<void>;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<ExternalPayloadPreview | null>(null);
   const [loadingMessageId, setLoadingMessageId] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [approvalMessageId, setApprovalMessageId] = useState<string | null>(null);
+  const [previewActionMessageId, setPreviewActionMessageId] = useState<
+    string | null
+  >(null);
   const [processingActionMessageId, setProcessingActionMessageId] =
     useState<string | null>(null);
+  const processingActionMessageIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
+
+  function beginProcessingAction(messageId: string): boolean {
+    if (processingActionMessageIdRef.current) {
+      return false;
+    }
+
+    processingActionMessageIdRef.current = messageId;
+    setProcessingActionMessageId(messageId);
+    return true;
+  }
+
+  function finishProcessingAction(messageId: string): void {
+    if (processingActionMessageIdRef.current !== messageId) {
+      return;
+    }
+
+    processingActionMessageIdRef.current = null;
+    setProcessingActionMessageId(null);
+  }
 
   async function openExternalPreview(
     message: ChatMessage,
@@ -64,8 +88,10 @@ export function ChatMessages({
         maskedContextChars: nextPreview.maskedContextChars,
         status: nextPreview.status,
       });
-      setApprovalMessageId(
-        assistantMessageId && nextPreview.status === 'review-required'
+      setPreviewActionMessageId(
+        assistantMessageId &&
+          (nextPreview.status === 'review-required' ||
+            nextPreview.status === 'block')
           ? assistantMessageId
           : null,
       );
@@ -137,6 +163,7 @@ export function ChatMessages({
               {message.role === 'assistant' && message.routingDecision ? (
                 <RoutingStatus
                   decision={message.routingDecision}
+                  externalApproval={message.externalApproval}
                   model={message.model}
                 />
               ) : null}
@@ -175,9 +202,12 @@ export function ChatMessages({
                       className="secondary-button"
                       disabled={processingActionMessageId !== null}
                       onClick={() => {
-                        setProcessingActionMessageId(message.id);
+                        if (!beginProcessingAction(message.id)) {
+                          return;
+                        }
+
                         void onUseLocalAI(message.id).finally(() => {
-                          setProcessingActionMessageId(null);
+                          finishProcessingAction(message.id);
                         });
                       }}
                       type="button"
@@ -228,7 +258,7 @@ export function ChatMessages({
             </div>
           </article>
         ))}
-        {previewError ? (
+        {previewError && !preview ? (
           <p className="external-preview-error" role="alert">
             {previewError}
           </p>
@@ -239,24 +269,62 @@ export function ChatMessages({
         <ExternalPayloadPreviewModal
           onClose={() => {
             setPreview(null);
-            setApprovalMessageId(null);
+            setPreviewActionMessageId(null);
+            setPreviewError(null);
           }}
           onApprove={
-            approvalMessageId
+            previewActionMessageId && preview.status === 'review-required'
               ? async () => {
-                  const messageId = approvalMessageId;
-                  setProcessingActionMessageId(messageId);
-                  setPreview(null);
-                  setApprovalMessageId(null);
+                  const messageId = previewActionMessageId;
+
+                  if (!beginProcessingAction(messageId)) {
+                    return;
+                  }
+
+                  setPreviewError(null);
 
                   try {
-                    await onApproveExternal(messageId);
+                    const result = await onApproveExternal(messageId);
+
+                    if (result.ok) {
+                      setPreview(null);
+                      setPreviewActionMessageId(null);
+                    } else {
+                      setPreviewError(result.error);
+                      if (result.preview) {
+                        setPreview(result.preview);
+                      }
+                    }
                   } finally {
-                    setProcessingActionMessageId(null);
+                    finishProcessingAction(messageId);
                   }
                 }
               : undefined
           }
+          onUseLocalAI={
+            previewActionMessageId &&
+            (preview.status === 'review-required' || preview.status === 'block')
+              ? async () => {
+                  const messageId = previewActionMessageId;
+
+                  if (!beginProcessingAction(messageId)) {
+                    return;
+                  }
+
+                  setPreviewError(null);
+
+                  try {
+                    await onUseLocalAI(messageId);
+                    setPreview(null);
+                    setPreviewActionMessageId(null);
+                  } finally {
+                    finishProcessingAction(messageId);
+                  }
+                }
+              : undefined
+          }
+          actionError={previewError}
+          isProcessing={processingActionMessageId !== null}
           preview={preview}
         />
       ) : null}

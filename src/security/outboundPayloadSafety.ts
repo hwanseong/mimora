@@ -32,7 +32,9 @@ export function authorizeExternalSend(input: {
   if (input.status === 'block') {
     return {
       allowed: false,
-      message: '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
+      message: input.approved
+        ? '보안 검사에 실패한 요청은 승인할 수 없습니다.'
+        : '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
     };
   }
 

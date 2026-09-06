@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { type ChatMessage, type ChatSessions } from './chat';
+import {
+  isChatRequestBusy,
+  tryBeginExternalAction,
+  type ChatMessage,
+  type ChatRequestStatus,
+  type ChatSessions,
+  type ExternalActionResult,
+  type ExternalApprovalInfo,
+} from './chat';
 import type { AutoRetrievedContext } from './autoContext';
 import {
   type AttachedContext,
@@ -40,6 +48,7 @@ import type {
 
 type PendingExternalRequest = {
   workspaceId: Workspace['id'];
+  workspaceType: Workspace['type'];
   userMessageId: string;
   assistantMessageId: string;
   query: string;
@@ -68,15 +77,19 @@ export function App() {
   const pendingExternalRequestsRef = useRef<
     Map<string, PendingExternalRequest>
   >(new Map());
-  const generatingWorkspaceIdsRef = useRef<Set<string>>(new Set());
-  const [generatingWorkspaceIds, setGeneratingWorkspaceIds] = useState<
-    Set<string>
-  >(new Set());
+  const workspaceRequestStatusesRef = useRef<Map<string, ChatRequestStatus>>(
+    new Map(),
+  );
+  const [workspaceRequestStatuses, setWorkspaceRequestStatuses] = useState<
+    Record<string, ChatRequestStatus>
+  >({});
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
   const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
-  const isCurrentWorkspaceGenerating = generatingWorkspaceIds.has(
-    selectedWorkspace.id,
+  const currentWorkspaceRequestStatus =
+    workspaceRequestStatuses[selectedWorkspace.id] ?? 'idle';
+  const isCurrentWorkspaceBusy = isChatRequestBusy(
+    currentWorkspaceRequestStatus,
   );
   const latestRoutingDecision = currentMessages.reduce<
     RoutingDecision | undefined
@@ -150,7 +163,10 @@ export function App() {
 
     if (
       !trimmedMessage ||
-      generatingWorkspaceIdsRef.current.has(selectedWorkspace.id)
+      isChatRequestBusy(
+        workspaceRequestStatusesRef.current.get(selectedWorkspace.id) ??
+          'idle',
+      )
     ) {
       return;
     }
@@ -169,13 +185,16 @@ export function App() {
       autoContext: [],
       autoContextStatus: 'loading',
       manualContext: manualContexts,
+      requestedMode: targetAIMode,
     };
     const assistantMessage: ChatMessage = {
-      ...createMessage('assistant', 'Mimora가 분석 중입니다...'),
+      ...createMessage('assistant', '참고 문서를 찾는 중입니다...'),
+      requestStatus: 'retrieving-context',
+      requestedMode: targetAIMode,
       generationStatus: 'loading',
     };
 
-    setWorkspaceGenerating(targetWorkspaceId, true);
+    setWorkspaceRequestStatus(targetWorkspaceId, 'retrieving-context');
     appendMessagesToSession(targetWorkspaceId, [userMessage, assistantMessage]);
     setMessage('');
 
@@ -280,6 +299,16 @@ export function App() {
     retrievalMs: number;
     totalElapsedMs: () => number;
   }): Promise<void> {
+    setWorkspaceRequestStatus(input.workspaceId, 'calling-local');
+    completeAssistantMessage(input.workspaceId, input.assistantMessageId, {
+      content: 'Local AI가 분석 중입니다...',
+      generationStatus: 'loading',
+      requestStatus: 'calling-local',
+      generationErrorDetail: undefined,
+      externalSafetyAction: undefined,
+      routingDecision: input.routingDecision,
+    });
+
     const history: LLMChatMessage[] = input.previousMessages.map(
       (previousMessage) => ({
         role: previousMessage.role,
@@ -332,6 +361,7 @@ export function App() {
     completeAssistantMessage(input.workspaceId, input.assistantMessageId, {
       content: response.content,
       generationStatus: 'complete',
+      requestStatus: 'completed',
       generationErrorDetail: undefined,
       sources: response.sources,
       performance: metrics,
@@ -339,15 +369,18 @@ export function App() {
       externalSafetyAction: undefined,
       model: response.model,
     });
+    setWorkspaceRequestStatus(input.workspaceId, 'completed');
   }
 
   async function executeOpenAIRequest(
     request: PendingExternalRequest,
     routingDecision: RoutingDecision,
   ): Promise<void> {
+    setWorkspaceRequestStatus(request.workspaceId, 'calling-external');
     completeAssistantMessage(request.workspaceId, request.assistantMessageId, {
       content: 'OpenAI가 분석 중입니다...',
       generationStatus: 'loading',
+      requestStatus: 'calling-external',
       generationErrorDetail: undefined,
       externalSafetyAction: undefined,
       routingDecision,
@@ -378,6 +411,7 @@ export function App() {
     completeAssistantMessage(request.workspaceId, request.assistantMessageId, {
       content: response.content,
       generationStatus: 'complete',
+      requestStatus: 'completed',
       sources: getContextSources(
         request.manualContexts,
         request.autoContexts,
@@ -390,6 +424,7 @@ export function App() {
       model: response.model,
       usage: response.usage,
     });
+    setWorkspaceRequestStatus(request.workspaceId, 'completed');
   }
 
   async function completeChatRequest(
@@ -482,6 +517,15 @@ export function App() {
       routingDecision,
     );
 
+    if (preview && routingDecision.provider === 'local') {
+      saveExternalApprovalForTurn(
+        workspaceId,
+        userMessageId,
+        assistantMessageId,
+        { required: false, approved: false },
+      );
+    }
+
     console.info('[Mimora Routing]', {
       mode: routingDecision.mode,
       workspace: workspaceId,
@@ -491,8 +535,6 @@ export function App() {
       manualContext: routingDecision.manualContextCount,
       autoContext: routingDecision.autoContextCount,
     });
-
-    let isWaitingForExternalAction = false;
 
     try {
       if (routingDecision.provider === 'local') {
@@ -517,6 +559,7 @@ export function App() {
 
         const request: PendingExternalRequest = {
           workspaceId,
+          workspaceType,
           userMessageId,
           assistantMessageId,
           query,
@@ -531,10 +574,16 @@ export function App() {
 
         if (preview.status === 'block') {
           pendingExternalRequestsRef.current.set(assistantMessageId, request);
-          isWaitingForExternalAction = true;
+          saveExternalApprovalForTurn(
+            workspaceId,
+            userMessageId,
+            assistantMessageId,
+            { required: false, approved: false },
+          );
           completeAssistantMessage(workspaceId, assistantMessageId, {
             content: '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
             generationStatus: 'complete',
+            requestStatus: 'completed',
             sources: getContextSources(manualContexts, autoContext),
             routingDecision,
             externalSafetyAction: {
@@ -545,12 +594,19 @@ export function App() {
                 .map((check) => check.message),
             },
           });
+          setWorkspaceRequestStatus(workspaceId, 'completed');
         } else if (preview.status === 'review-required') {
           pendingExternalRequestsRef.current.set(assistantMessageId, request);
-          isWaitingForExternalAction = true;
+          saveExternalApprovalForTurn(
+            workspaceId,
+            userMessageId,
+            assistantMessageId,
+            { required: true, approved: false },
+          );
           completeAssistantMessage(workspaceId, assistantMessageId, {
             content: '외부 AI 전송 전 검토가 필요합니다.',
             generationStatus: 'complete',
+            requestStatus: 'review-required',
             sources: getContextSources(manualContexts, autoContext),
             routingDecision,
             externalSafetyAction: {
@@ -561,7 +617,14 @@ export function App() {
                 .map((check) => check.message),
             },
           });
+          setWorkspaceRequestStatus(workspaceId, 'review-required');
         } else {
+          saveExternalApprovalForTurn(
+            workspaceId,
+            userMessageId,
+            assistantMessageId,
+            { required: false, approved: false },
+          );
           await executeOpenAIRequest(request, routingDecision);
         }
       }
@@ -574,6 +637,7 @@ export function App() {
       completeAssistantMessage(workspaceId, assistantMessageId, {
         content: errorMessage,
         generationStatus: 'error',
+        requestStatus: 'error',
         routingDecision,
         ...(errorMessage === 'Local AI 응답 시간이 초과되었습니다.'
           ? {
@@ -582,69 +646,195 @@ export function App() {
             }
           : {}),
       });
-    } finally {
-      if (!isWaitingForExternalAction) {
-        setWorkspaceGenerating(workspaceId, false);
-      }
+      setWorkspaceRequestStatus(workspaceId, 'error');
     }
+  }
+
+  async function rebuildExternalPreview(
+    request: PendingExternalRequest,
+  ): Promise<ExternalPayloadPreview> {
+    const settings = await window.mimora.getSettings();
+    const effectiveSecurity = evaluateSecurity(
+      request.workspaceType,
+      [...request.manualContexts, ...request.autoContexts],
+    ).security;
+
+    return createExternalPayloadPreview({
+      workspaceId: request.workspaceId,
+      effectiveSecurity,
+      question: request.query,
+      manualContexts: request.manualContexts,
+      autoContexts: request.autoContexts,
+      maskingEntries: settings.masking.entries,
+    });
   }
 
   async function handleApproveExternal(
     assistantMessageId: string,
-  ): Promise<void> {
+  ): Promise<ExternalActionResult> {
     const request = pendingExternalRequestsRef.current.get(assistantMessageId);
 
-    if (
-      !request ||
-      request.inFlight ||
-      request.preview.status !== 'review-required'
-    ) {
-      return;
+    if (!request) {
+      return { ok: false, error: '승인할 External 요청을 찾을 수 없습니다.' };
     }
 
-    request.inFlight = true;
-    const routingDecision: RoutingDecision = {
-      ...request.routingDecision,
-      provider: 'openai',
-      reason: 'user-approved',
-      approved: true,
-    };
+    if (request.preview.status === 'block') {
+      return {
+        ok: false,
+        error: '보안 검사에 실패한 요청은 승인할 수 없습니다.',
+        preview: request.preview,
+      };
+    }
 
-    saveRoutingDecisionForTurn(
-      request.workspaceId,
-      request.userMessageId,
-      request.assistantMessageId,
-      routingDecision,
-    );
+    if (request.preview.status !== 'review-required') {
+      return {
+        ok: false,
+        error: '사용자 승인이 필요한 요청이 아닙니다.',
+        preview: request.preview,
+      };
+    }
+
+    if (
+      isChatRequestBusy(
+        workspaceRequestStatusesRef.current.get(request.workspaceId) ?? 'idle',
+      )
+    ) {
+      return { ok: false, error: '이미 처리 중인 요청입니다.' };
+    }
+
+    if (!tryBeginExternalAction(request)) {
+      return { ok: false, error: '이미 처리 중인 요청입니다.' };
+    }
+    setWorkspaceRequestStatus(request.workspaceId, 'calling-external');
+    completeAssistantMessage(request.workspaceId, assistantMessageId, {
+      content: '외부 전송을 다시 확인하는 중입니다...',
+      generationStatus: 'loading',
+      requestStatus: 'calling-external',
+      externalSafetyAction: undefined,
+    });
 
     try {
-      await executeOpenAIRequest(request, routingDecision);
-    } catch (error) {
-      completeAssistantMessage(request.workspaceId, assistantMessageId, {
-        content: getExternalChatErrorMessage(error),
-        generationStatus: 'error',
+      const revalidatedPreview = await rebuildExternalPreview(request);
+
+      request.preview = revalidatedPreview;
+      saveExternalPayloadPreviewForTurn(
+        request.workspaceId,
+        request.userMessageId,
+        revalidatedPreview,
+      );
+
+      if (revalidatedPreview.status === 'block') {
+        const blockedRoutingDecision: RoutingDecision = {
+          ...request.routingDecision,
+          provider: 'openai',
+          reason: 'external-safety-block',
+          safetyStatus: 'block',
+          approved: false,
+        };
+
+        request.routingDecision = blockedRoutingDecision;
+        saveRoutingDecisionForTurn(
+          request.workspaceId,
+          request.userMessageId,
+          request.assistantMessageId,
+          blockedRoutingDecision,
+        );
+        saveExternalApprovalForTurn(
+          request.workspaceId,
+          request.userMessageId,
+          request.assistantMessageId,
+          { required: false, approved: false },
+        );
+        completeAssistantMessage(request.workspaceId, assistantMessageId, {
+          content: '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
+          generationStatus: 'complete',
+          requestStatus: 'completed',
+          sources: getContextSources(
+            request.manualContexts,
+            request.autoContexts,
+          ),
+          routingDecision: blockedRoutingDecision,
+          externalSafetyAction: {
+            status: 'block',
+            requestMessageId: request.userMessageId,
+            reasons: revalidatedPreview.safety.checks
+              .filter((check) => check.status === 'fail')
+              .map((check) => check.message),
+          },
+        });
+        setWorkspaceRequestStatus(request.workspaceId, 'completed');
+
+        return {
+          ok: false,
+          error: '보안 검사에 실패한 요청은 승인할 수 없습니다.',
+          preview: revalidatedPreview,
+        };
+      }
+
+      const approvedAt = new Date().toISOString();
+      const routingDecision: RoutingDecision = {
+        ...request.routingDecision,
+        provider: 'openai',
+        reason: 'user-approved',
+        safetyStatus: revalidatedPreview.status,
+        approved: true,
+      };
+
+      request.routingDecision = routingDecision;
+      saveRoutingDecisionForTurn(
+        request.workspaceId,
+        request.userMessageId,
+        request.assistantMessageId,
         routingDecision,
+      );
+      saveExternalApprovalForTurn(
+        request.workspaceId,
+        request.userMessageId,
+        request.assistantMessageId,
+        { required: true, approved: true, approvedAt },
+      );
+
+      await executeOpenAIRequest(request, routingDecision);
+      pendingExternalRequestsRef.current.delete(assistantMessageId);
+      return { ok: true };
+    } catch (error) {
+      const errorMessage = getExternalChatErrorMessage(error);
+
+      completeAssistantMessage(request.workspaceId, assistantMessageId, {
+        content: errorMessage,
+        generationStatus: 'error',
+        requestStatus: 'error',
+        routingDecision: request.routingDecision,
         externalSafetyAction: undefined,
       });
-    } finally {
+      setWorkspaceRequestStatus(request.workspaceId, 'error');
       pendingExternalRequestsRef.current.delete(assistantMessageId);
-      setWorkspaceGenerating(request.workspaceId, false);
+      return { ok: false, error: errorMessage };
+    } finally {
+      request.inFlight = false;
     }
   }
 
   async function handleUseLocalAI(assistantMessageId: string): Promise<void> {
     const request = pendingExternalRequestsRef.current.get(assistantMessageId);
 
-    if (!request || request.inFlight) {
+    if (
+      !request ||
+      isChatRequestBusy(
+        workspaceRequestStatusesRef.current.get(request.workspaceId) ?? 'idle',
+      )
+    ) {
       return;
     }
 
-    request.inFlight = true;
+    if (!tryBeginExternalAction(request)) {
+      return;
+    }
     const fallbackStartedTime = performance.now();
     const routingDecision: RoutingDecision = {
       ...request.routingDecision,
       provider: 'local',
-      reason: 'user-selected-local',
+      reason: 'user-selected-local-fallback',
       approved: false,
     };
 
@@ -655,8 +845,9 @@ export function App() {
       routingDecision,
     );
     completeAssistantMessage(request.workspaceId, assistantMessageId, {
-      content: 'Mimora가 분석 중입니다...',
+      content: 'Local AI가 분석 중입니다...',
       generationStatus: 'loading',
+      requestStatus: 'calling-local',
       externalSafetyAction: undefined,
       routingDecision,
     });
@@ -680,6 +871,7 @@ export function App() {
       completeAssistantMessage(request.workspaceId, assistantMessageId, {
         content: errorMessage,
         generationStatus: 'error',
+        requestStatus: 'error',
         routingDecision,
         ...(errorMessage === 'Local AI 응답 시간이 초과되었습니다.'
           ? {
@@ -688,9 +880,10 @@ export function App() {
             }
           : {}),
       });
+      setWorkspaceRequestStatus(request.workspaceId, 'error');
     } finally {
       pendingExternalRequestsRef.current.delete(assistantMessageId);
-      setWorkspaceGenerating(request.workspaceId, false);
+      request.inFlight = false;
     }
   }
 
@@ -700,6 +893,7 @@ export function App() {
     update: Partial<Pick<
       ChatMessage,
       | 'content'
+      | 'requestStatus'
       | 'generationStatus'
       | 'generationErrorDetail'
       | 'sources'
@@ -707,6 +901,7 @@ export function App() {
       | 'externalPerformance'
       | 'routingDecision'
       | 'externalSafetyAction'
+      | 'externalApproval'
       | 'model'
       | 'usage'
     >>,
@@ -759,6 +954,27 @@ export function App() {
           chatMessage.id === userMessageId ||
           chatMessage.id === assistantMessageId
             ? { ...chatMessage, routingDecision }
+            : chatMessage,
+        ),
+      };
+    });
+  }
+
+  function saveExternalApprovalForTurn(
+    workspaceId: Workspace['id'],
+    userMessageId: string,
+    assistantMessageId: string,
+    externalApproval: ExternalApprovalInfo,
+  ): void {
+    setChatSessions((currentSessions) => {
+      const sessionMessages = currentSessions[workspaceId] ?? [];
+
+      return {
+        ...currentSessions,
+        [workspaceId]: sessionMessages.map((chatMessage) =>
+          chatMessage.id === userMessageId ||
+          chatMessage.id === assistantMessageId
+            ? { ...chatMessage, externalApproval }
             : chatMessage,
         ),
       };
@@ -819,20 +1035,15 @@ export function App() {
     });
   }
 
-  function setWorkspaceGenerating(
+  function setWorkspaceRequestStatus(
     workspaceId: Workspace['id'],
-    isGenerating: boolean,
+    status: ChatRequestStatus,
   ): void {
-    const nextWorkspaceIds = new Set(generatingWorkspaceIdsRef.current);
-
-    if (isGenerating) {
-      nextWorkspaceIds.add(workspaceId);
-    } else {
-      nextWorkspaceIds.delete(workspaceId);
-    }
-
-    generatingWorkspaceIdsRef.current = nextWorkspaceIds;
-    setGeneratingWorkspaceIds(nextWorkspaceIds);
+    workspaceRequestStatusesRef.current.set(workspaceId, status);
+    setWorkspaceRequestStatuses((currentStatuses) => ({
+      ...currentStatuses,
+      [workspaceId]: status,
+    }));
   }
 
   function attachContextToWorkspace(
@@ -919,7 +1130,7 @@ export function App() {
           <>
             <ChatHeader
               aiMode={aiMode}
-              disabled={isSavingAIMode || isCurrentWorkspaceGenerating}
+              disabled={isSavingAIMode || isCurrentWorkspaceBusy}
               effectiveSecurity={currentSecurity}
               onChangeAIMode={(nextAIMode) => {
                 void handleChangeAIMode(nextAIMode);
@@ -949,7 +1160,7 @@ export function App() {
                 <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
               ) : null}
               <ChatInput
-                disabled={isCurrentWorkspaceGenerating}
+                requestStatus={currentWorkspaceRequestStatus}
                 ref={chatInputRef}
                 value={message}
                 onChange={setMessage}

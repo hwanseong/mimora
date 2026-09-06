@@ -1,12 +1,13 @@
 const { spawn } = require('node:child_process');
-const { mkdtemp, rm } = require('node:fs/promises');
+const { mkdir, mkdtemp, rm, writeFile } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
 const TEMP_DIRECTORY_PREFIX = 'mimora-external-ui-';
 const CHILD_ENVIRONMENT_FLAG = 'MIMORA_EXTERNAL_UI_CHILD';
 const USER_DATA_ENVIRONMENT_KEY = 'MIMORA_EXTERNAL_UI_USER_DATA';
-const CHILD_TIMEOUT_MS = 30_000;
+const REVIEW_VAULT_ENVIRONMENT_KEY = 'MIMORA_EXTERNAL_UI_REVIEW_VAULT';
+const CHILD_TIMEOUT_MS = 150_000;
 const CLEANUP_RETRY_DELAYS_MS = [100, 250, 500, 1_000];
 
 function delay(milliseconds) {
@@ -111,14 +112,22 @@ async function runTestRunner() {
   const temporaryUserData = await mkdtemp(
     path.join(os.tmpdir(), TEMP_DIRECTORY_PREFIX),
   );
+  const reviewVaultPath = path.join(temporaryUserData, 'review-vault');
   let testPassed = false;
 
   try {
+    await mkdir(reviewVaultPath);
+    await writeFile(
+      path.join(reviewVaultPath, '검토대상-고객계획.md'),
+      '# 검토대상 고객계획\n\n검토대상 고객계획의 범위와 담당 업무를 정리한다.',
+      'utf8',
+    );
     const electronExecutable = require('electron');
     const childEnvironment = {
       ...process.env,
       [CHILD_ENVIRONMENT_FLAG]: '1',
       [USER_DATA_ENVIRONMENT_KEY]: temporaryUserData,
+      [REVIEW_VAULT_ENVIRONMENT_KEY]: reviewVaultPath,
     };
 
     delete childEnvironment.ELECTRON_RUN_AS_NODE;
@@ -170,11 +179,14 @@ async function runTestRunner() {
 function runElectronFixture() {
   const { app } = require('electron');
   const temporaryUserData = process.env[USER_DATA_ENVIRONMENT_KEY];
+  const reviewVaultPath = process.env[REVIEW_VAULT_ENVIRONMENT_KEY];
 
   if (
     process.env[CHILD_ENVIRONMENT_FLAG] !== '1' ||
     !temporaryUserData ||
-    !isOwnedTemporaryDirectory(temporaryUserData)
+    !isOwnedTemporaryDirectory(temporaryUserData) ||
+    !reviewVaultPath ||
+    path.relative(temporaryUserData, reviewVaultPath).startsWith('..')
   ) {
     console.error('[external-ui-check] Invalid isolated userData directory.');
     app.exit(1);
@@ -195,7 +207,7 @@ function runElectronFixture() {
   let finished = false;
   const fixtureTimeout = setTimeout(() => {
     finish(1, 'External UI check timed out.');
-  }, 20_000);
+  }, 140_000);
 
   function finish(exitCode, errorMessage) {
     if (finished) {
@@ -256,6 +268,17 @@ function runElectronFixture() {
               provider: 'openai',
               model: 'gpt-4.1-mini',
             });
+            await window.mimora.updateLocalAISettings({
+              provider: 'ollama',
+              endpoint: 'http://127.0.0.1:11434',
+              model: 'qwen3:4b-instruct',
+            });
+            await window.mimora.addVault({
+              name: 'Review Test Vault',
+              type: 'work',
+              security: 'personal',
+              path: ${JSON.stringify(reviewVaultPath)},
+            });
 
             modeSelect.value = 'external';
             modeSelect.dispatchEvent(new Event('change', { bubbles: true }));
@@ -268,24 +291,96 @@ function runElectronFixture() {
               HTMLTextAreaElement.prototype,
               'value',
             ).set;
-            valueSetter.call(messageInput, 'External UI test');
+            valueSetter.call(messageInput, '검토대상 고객계획');
             messageInput.dispatchEvent(new Event('input', { bubbles: true }));
             messageInput.form.requestSubmit();
 
             await waitFor(() =>
-              document.body.textContent.includes('API Key가 설정되지 않았습니다.'),
+              document.body.textContent.includes('외부 AI 전송 전 검토가 필요합니다.'),
             );
+            const composerIsReviewPending =
+              !messageInput.disabled &&
+              messageInput.placeholder === '외부 전송 검토가 필요합니다.' &&
+              messageInput.form.querySelector('button[type="submit"]').textContent === '전송';
+
+            if (!composerIsReviewPending) {
+              throw new Error('Review state was incorrectly shown as LLM loading.');
+            }
+
+            const previewButton = await waitFor(() =>
+              Array.from(document.querySelectorAll('button')).find(
+                (button) => button.textContent.trim() === 'External Preview 확인',
+              ),
+            );
+            previewButton.click();
+
+            const previewDialog = await waitFor(() =>
+              document.querySelector('[role="dialog"]'),
+            );
+            const previewText = previewDialog.textContent;
+            const reviewActionsVisible =
+              previewText.includes('Masked Question') &&
+              previewText.includes('Masked Context') &&
+              previewText.includes('External Payload Safety') &&
+              previewText.includes('Local AI로 처리') &&
+              previewText.includes('승인 후 OpenAI 전송');
+
+            if (!reviewActionsVisible) {
+              throw new Error('Review Preview actions were not rendered.');
+            }
+
+            previewDialog
+              .querySelector('button[aria-label="External Payload Preview 닫기"]')
+              .click();
+            await waitFor(() => !document.querySelector('[role="dialog"]'));
+            const reviewPersistedAfterClose =
+              document.body.textContent.includes('외부 AI 전송 전 검토가 필요합니다.') &&
+              Array.from(document.querySelectorAll('button')).some(
+                (button) => button.textContent.trim() === 'External Preview 확인',
+              );
+
+            const localFallbackButton = Array.from(
+              document.querySelectorAll('button'),
+            ).find(
+              (button) => button.textContent.trim() === 'Local AI로 처리',
+            );
+
+            if (!localFallbackButton) {
+              throw new Error('Local fallback action was not available.');
+            }
+
+            localFallbackButton.click();
+            const completedLocalFooter = await waitFor(() =>
+              Array.from(document.querySelectorAll('.message-routing')).find(
+                (footer) =>
+                  footer.textContent.includes(
+                    'Local AI · External · Local fallback',
+                  ) &&
+                  footer.textContent.includes(
+                    'User selected Local fallback',
+                  ) &&
+                  footer.textContent.includes('Model: qwen3:4b-instruct'),
+              ),
+              120_000,
+            );
+            const localFallbackCompleted = Boolean(completedLocalFooter);
 
             return {
               hasExternalOption,
-              missingApiKeyHandled: true,
+              composerIsReviewPending,
+              reviewActionsVisible,
+              reviewPersistedAfterClose,
+              localFallbackCompleted,
             };
           })()
         `);
 
         if (
           !result.hasExternalOption ||
-          !result.missingApiKeyHandled
+          !result.composerIsReviewPending ||
+          !result.reviewActionsVisible ||
+          !result.reviewPersistedAfterClose ||
+          !result.localFallbackCompleted
         ) {
           throw new Error('External UI assertions did not pass.');
         }

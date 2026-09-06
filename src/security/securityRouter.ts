@@ -16,7 +16,7 @@ export type RoutingReason =
   | 'auto-external-pass'
   | 'safety-gate-not-pass'
   | 'user-approved'
-  | 'user-selected-local'
+  | 'user-selected-local-fallback'
   | 'private-workspace'
   | 'private-vault'
   | 'sensitive-context'
@@ -66,7 +66,7 @@ export const routingReasonLabels: Record<RoutingReason, string> = {
   'auto-external-pass': 'Safety PASS',
   'safety-gate-not-pass': 'Safety policy fallback',
   'user-approved': 'User Approved',
-  'user-selected-local': 'User selected Local',
+  'user-selected-local-fallback': 'User selected Local fallback',
   'private-workspace': 'Private Workspace · Local-only policy',
   'private-vault': 'Private Vault context · Local-only policy',
   'sensitive-context': 'Sensitive context · Local-only policy',

@@ -1,14 +1,40 @@
 import { forwardRef } from 'react';
+import {
+  isChatRequestBusy,
+  type ChatRequestStatus,
+} from '../chat';
 
 export const ChatInput = forwardRef<
   HTMLTextAreaElement,
   {
-    disabled?: boolean;
+    requestStatus?: ChatRequestStatus;
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
   }
->(function ChatInput({ disabled = false, value, onChange, onSubmit }, ref) {
+>(function ChatInput(
+  { requestStatus = 'idle', value, onChange, onSubmit },
+  ref,
+) {
+  const disabled = isChatRequestBusy(requestStatus);
+  const placeholder =
+    requestStatus === 'retrieving-context'
+      ? '참고 문서를 찾는 중입니다...'
+      : requestStatus === 'calling-external'
+        ? 'OpenAI가 분석 중입니다...'
+        : requestStatus === 'calling-local'
+          ? 'Local AI가 분석 중입니다...'
+          : requestStatus === 'review-required'
+            ? '외부 전송 검토가 필요합니다.'
+            : '메시지를 입력하세요';
+  const buttonLabel =
+    requestStatus === 'retrieving-context'
+      ? '검색 중'
+      : requestStatus === 'calling-external' ||
+          requestStatus === 'calling-local'
+        ? '분석 중'
+        : '전송';
+
   return (
     <form
       className="chat-input-bar"
@@ -30,13 +56,13 @@ export const ChatInput = forwardRef<
             onSubmit();
           }
         }}
-        placeholder={disabled ? 'Mimora가 분석 중입니다...' : '메시지를 입력하세요'}
+        placeholder={placeholder}
         ref={ref}
         rows={1}
         value={value}
       />
       <button aria-label="전송" disabled={disabled} type="submit">
-        {disabled ? '분석 중' : '전송'}
+        {buttonLabel}
       </button>
     </form>
   );
