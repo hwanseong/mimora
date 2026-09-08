@@ -16,6 +16,11 @@ import type {
   VaultSearchScope,
 } from '../vaultFiles';
 import type { Workspace } from '../workspaces';
+import {
+  emptyKnowledgeSearchFilters,
+  hasActiveKnowledgeSearchFilters,
+  type KnowledgeSearchFilters,
+} from '../knowledgeSearch';
 import { parseMimoraDocumentMetadata } from '../metadata/mimoraMetadataParser';
 import type { MimoraMetadataParseResult } from '../metadata/types';
 import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
@@ -49,6 +54,51 @@ function renderMetadataChips(values: string[]) {
   ));
 }
 
+function createSearchLabel(
+  query: string,
+  knowledgeFilters: KnowledgeSearchFilters,
+): string | null {
+  if (query) {
+    return query;
+  }
+
+  return hasActiveKnowledgeSearchFilters(knowledgeFilters)
+    ? 'Knowledge filters'
+    : null;
+}
+
+function stripLegacyFrontmatter(markdown: string): string {
+  const normalizedMarkdown = markdown.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n');
+
+  if (!normalizedMarkdown.trimStart().startsWith('---')) {
+    return markdown;
+  }
+
+  const leadingWhitespaceLength =
+    normalizedMarkdown.length - normalizedMarkdown.trimStart().length;
+  const lines = normalizedMarkdown.slice(leadingWhitespaceLength).split('\n');
+  const closingIndex = lines.findIndex(
+    (line, index) => index > 0 && line.trim() === '---',
+  );
+
+  if (closingIndex === -1) {
+    return markdown;
+  }
+
+  return lines.slice(closingIndex + 1).join('\n').trimStart();
+}
+
+function createPreviewMarkdownContent(
+  fileContent: VaultFileContent,
+  metadataResult: MimoraMetadataParseResult | null,
+): string {
+  if (metadataResult?.hasMetadata) {
+    return metadataResult.body.trimStart();
+  }
+
+  return stripLegacyFrontmatter(fileContent.content);
+}
+
 export function VaultBrowserView({
   currentWorkspace,
   onAttachContext,
@@ -71,6 +121,8 @@ export function VaultBrowserView({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] =
     useState<VaultSearchScope>('current');
+  const [knowledgeSearchFilters, setKnowledgeSearchFilters] =
+    useState<KnowledgeSearchFilters>(emptyKnowledgeSearchFilters);
   const [activeSearchQuery, setActiveSearchQuery] = useState<string | null>(null);
   const [searchResults, setSearchResults] = useState<VaultSearchResult[]>([]);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -137,6 +189,12 @@ export function VaultBrowserView({
         selectedFileMetadata.metadata.knowledgeTypes.length ||
         metadataWarnings.length),
   );
+  const hasMimoraMetadataCard = Boolean(
+    selectedFileMetadata?.hasMetadata || hasKnowledgeMetadata,
+  );
+  const previewMarkdownContent = fileContent
+    ? createPreviewMarkdownContent(fileContent, selectedFileMetadata)
+    : '';
 
   useEffect(() => {
     let isActive = true;
@@ -294,36 +352,88 @@ export function VaultBrowserView({
 
   function resetSearch(): void {
     setSearchQuery('');
+    setKnowledgeSearchFilters(emptyKnowledgeSearchFilters);
     clearSearchResults();
   }
 
-  async function searchVaultFiles(query = searchQuery): Promise<void> {
-    const trimmedQuery = query.trim();
+  function clearPreviewSelection(): void {
+    previewRequestSequence.current += 1;
+    setSelectedFile(null);
+    setSelectedFileVaultId('');
+    setFileContent(null);
+    setPreviewError(null);
+    setAttachmentFeedback(null);
+    setIsLoadingPreview(false);
+  }
 
-    if (!trimmedQuery) {
+  async function searchVaultFiles({
+    query = searchQuery,
+    scope = searchScope,
+    knowledgeFilters = knowledgeSearchFilters,
+    vaultId = selectedVaultId,
+  }: {
+    query?: string;
+    scope?: VaultSearchScope;
+    knowledgeFilters?: KnowledgeSearchFilters;
+    vaultId?: string;
+  } = {}): Promise<void> {
+    const trimmedQuery = query.trim();
+    const normalizedKnowledgeFilters = {
+      domains: knowledgeFilters.domains,
+      types: knowledgeFilters.types,
+    };
+
+    if (
+      !trimmedQuery &&
+      !hasActiveKnowledgeSearchFilters(normalizedKnowledgeFilters)
+    ) {
       resetSearch();
       return;
     }
 
     const requestSequence = searchRequestSequence.current + 1;
     searchRequestSequence.current = requestSequence;
-    setActiveSearchQuery(trimmedQuery);
+    setActiveSearchQuery(
+      createSearchLabel(trimmedQuery, normalizedKnowledgeFilters),
+    );
     setSearchError(null);
     setIsSearching(true);
+
+    if (import.meta.env.DEV) {
+      console.info('[Mimora Knowledge Filter]', {
+        selectedDomain: normalizedKnowledgeFilters.domains[0] ?? '',
+        selectedType: normalizedKnowledgeFilters.types[0] ?? '',
+        requestDomains: normalizedKnowledgeFilters.domains,
+        requestTypes: normalizedKnowledgeFilters.types,
+      });
+    }
 
     try {
       const results = await window.mimora.searchVaultFiles({
         query: trimmedQuery,
-        scope: searchScope,
-        ...(searchScope === 'current' ? { vaultId: selectedVaultId } : {}),
+        scope,
+        knowledgeFilters: normalizedKnowledgeFilters,
+        ...(scope === 'current' ? { vaultId } : {}),
       });
 
       if (searchRequestSequence.current === requestSequence) {
         setSearchResults(results);
+
+        if (
+          selectedFile &&
+          !results.some(
+            (result) =>
+              result.vaultId === selectedFileVaultId &&
+              result.relativePath === selectedFile.relativePath,
+          )
+        ) {
+          clearPreviewSelection();
+        }
       }
     } catch (error) {
       if (searchRequestSequence.current === requestSequence) {
         setSearchResults([]);
+        clearPreviewSelection();
         setSearchError(
           getErrorMessage(error, 'Vault 검색을 완료하지 못했습니다.'),
         );
@@ -332,6 +442,18 @@ export function VaultBrowserView({
       if (searchRequestSequence.current === requestSequence) {
         setIsSearching(false);
       }
+    }
+  }
+
+  function updateKnowledgeSearchFilters(
+    nextFilters: KnowledgeSearchFilters,
+  ): void {
+    setKnowledgeSearchFilters(nextFilters);
+
+    if (searchQuery.trim() || hasActiveKnowledgeSearchFilters(nextFilters)) {
+      void searchVaultFiles({ knowledgeFilters: nextFilters });
+    } else {
+      resetSearch();
     }
   }
 
@@ -460,7 +582,7 @@ export function VaultBrowserView({
           disabled={isLoadingFiles || isSearching}
           onClick={() => {
             if (activeSearchQuery) {
-              void searchVaultFiles(activeSearchQuery);
+              void searchVaultFiles();
             } else {
               setRefreshSequence((sequence) => sequence + 1);
             }
@@ -517,7 +639,10 @@ export function VaultBrowserView({
             const nextQuery = event.target.value;
             setSearchQuery(nextQuery);
 
-            if (!nextQuery.trim()) {
+            if (
+              !nextQuery.trim() &&
+              !hasActiveKnowledgeSearchFilters(knowledgeSearchFilters)
+            ) {
               clearSearchResults();
             }
           }}
@@ -528,13 +653,56 @@ export function VaultBrowserView({
         <select
           aria-label="Vault 검색 범위"
           onChange={(event) => {
-            setSearchScope(event.target.value as VaultSearchScope);
-            clearSearchResults();
+            const nextScope = event.target.value as VaultSearchScope;
+            setSearchScope(nextScope);
+
+            if (
+              searchQuery.trim() ||
+              hasActiveKnowledgeSearchFilters(knowledgeSearchFilters)
+            ) {
+              void searchVaultFiles({ scope: nextScope });
+            } else {
+              clearSearchResults();
+            }
           }}
           value={searchScope}
         >
           <option value="current">현재 Vault</option>
           <option value="all">전체 Vault</option>
+        </select>
+        <select
+          aria-label="Knowledge Domain filter"
+          onChange={(event) => {
+            updateKnowledgeSearchFilters({
+              domains: event.target.value ? [event.target.value] : [],
+              types: knowledgeSearchFilters.types,
+            });
+          }}
+          value={knowledgeSearchFilters.domains[0] ?? ''}
+        >
+          <option value="">Domain 전체</option>
+          {(knowledgeDomainRegistry?.domains ?? []).map((domain) => (
+            <option key={domain.canonicalName} value={domain.canonicalName}>
+              {domain.canonicalName}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Knowledge Type filter"
+          onChange={(event) => {
+            updateKnowledgeSearchFilters({
+              domains: knowledgeSearchFilters.domains,
+              types: event.target.value ? [event.target.value] : [],
+            });
+          }}
+          value={knowledgeSearchFilters.types[0] ?? ''}
+        >
+          <option value="">Type 전체</option>
+          {(knowledgeTypeRegistry?.types ?? []).map((type) => (
+            <option key={type.canonicalName} value={type.canonicalName}>
+              {type.canonicalName}
+            </option>
+          ))}
         </select>
         <button className="primary-button" disabled={isSearching} type="submit">
           {isSearching ? '검색 중' : '검색'}
@@ -600,6 +768,18 @@ export function VaultBrowserView({
                       <strong>{result.relativePath}</strong>
                       {result.snippet ? (
                         <span className="vault-search-snippet">“{result.snippet}”</span>
+                      ) : null}
+                      {result.metadata &&
+                      (result.metadata.knowledgeDomains.length > 0 ||
+                        result.metadata.knowledgeTypes.length > 0) ? (
+                        <span className="vault-search-knowledge-tags">
+                          {[
+                            ...result.metadata.knowledgeDomains,
+                            ...result.metadata.knowledgeTypes,
+                          ].map((value) => (
+                            <span key={value}>{value}</span>
+                          ))}
+                        </span>
                       ) : null}
                       <span className="vault-search-result-footer">
                         <span>
@@ -693,11 +873,32 @@ export function VaultBrowserView({
             ) : null}
             {selectedFile && !isLoadingPreview && !previewError && fileContent ? (
               <>
-                {hasKnowledgeMetadata && selectedFileMetadata ? (
+                {hasMimoraMetadataCard && selectedFileMetadata ? (
                   <section
                     aria-label="Normalized Mimora Metadata"
                     className="vault-metadata-summary"
                   >
+                    <div className="vault-metadata-title">Mimora Metadata</div>
+                    <div className="vault-metadata-row">
+                      <span>Document</span>
+                      <div>
+                        {selectedFileMetadata.metadata.documentId ? (
+                          <span className="vault-metadata-value">
+                            {selectedFileMetadata.metadata.documentId}
+                          </span>
+                        ) : (
+                          <span className="vault-metadata-empty">None</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="vault-metadata-row">
+                      <span>Workspace</span>
+                      <div>
+                        {renderMetadataChips(
+                          selectedFileMetadata.metadata.workspaceIds,
+                        )}
+                      </div>
+                    </div>
                     <div className="vault-metadata-row">
                       <span>Domains</span>
                       <div>
@@ -725,6 +926,30 @@ export function VaultBrowserView({
                       <div>
                         {renderMetadataChips(
                           selectedFileMetadata.metadata.knowledgeTypes,
+                        )}
+                      </div>
+                    </div>
+                    <div className="vault-metadata-row">
+                      <span>Security</span>
+                      <div>
+                        {selectedFileMetadata.metadata.security ? (
+                          <span className="vault-metadata-value">
+                            {selectedFileMetadata.metadata.security}
+                          </span>
+                        ) : (
+                          <span className="vault-metadata-empty">None</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="vault-metadata-row">
+                      <span>Origin Workspace</span>
+                      <div>
+                        {selectedFileMetadata.metadata.originWorkspaceId ? (
+                          <span className="vault-metadata-value">
+                            {selectedFileMetadata.metadata.originWorkspaceId}
+                          </span>
+                        ) : (
+                          <span className="vault-metadata-empty">None</span>
                         )}
                       </div>
                     </div>
@@ -758,7 +983,7 @@ export function VaultBrowserView({
                 ) : null}
                 <MarkdownRenderer
                   className="vault-preview-markdown"
-                  content={fileContent.content}
+                  content={previewMarkdownContent}
                 />
               </>
             ) : null}

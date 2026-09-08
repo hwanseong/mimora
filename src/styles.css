@@ -430,7 +430,7 @@ button {
 
 .vault-search-bar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(150px, 1fr) minmax(96px, auto) minmax(140px, auto) minmax(120px, auto) auto auto;
   gap: 7px;
   min-width: 0;
 }
@@ -624,6 +624,22 @@ button {
   -webkit-line-clamp: 3;
 }
 
+.vault-search-knowledge-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.vault-search-knowledge-tags span {
+  border: 1px solid #dde2e8;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 2px 6px;
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
 .vault-search-result-footer {
   display: flex;
   align-items: center;
@@ -669,9 +685,16 @@ button {
   padding: 9px 10px;
 }
 
+.vault-metadata-title {
+  color: #1f2937;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
 .vault-metadata-row {
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: 104px 1fr;
   gap: 8px;
   align-items: start;
   color: #344054;
@@ -696,7 +719,8 @@ button {
 }
 
 .vault-metadata-chip,
-.vault-metadata-empty {
+.vault-metadata-empty,
+.vault-metadata-value {
   display: inline-flex;
   align-items: center;
   min-height: 20px;
@@ -1043,6 +1067,39 @@ button {
 
 .archived-search-toggle:has(input:disabled) {
   opacity: 0.62;
+}
+
+.knowledge-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.knowledge-filter-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #667085;
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
+.knowledge-filter-controls select {
+  min-height: 24px;
+  max-width: 170px;
+  border: 1px solid #dfe3e8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #344054;
+  padding: 2px 8px;
+  font: inherit;
+  outline: 0;
+}
+
+.knowledge-filter-controls select:focus {
+  border-color: #b8c0cc;
+  box-shadow: 0 0 0 3px rgb(32 41 56 / 8%);
 }
 
 .header-meta {

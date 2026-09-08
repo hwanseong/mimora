@@ -40,6 +40,12 @@ import {
   toSelectableWorkspace,
   type Workspace,
 } from './workspaces';
+import {
+  emptyKnowledgeSearchFilters,
+  type KnowledgeSearchFilters,
+} from './knowledgeSearch';
+import type { KnowledgeDomain } from './registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeType } from './registry/knowledgeTypeRegistryTypes';
 import type { SearchScopeSettings } from './settings';
 import {
   evaluateSecurity,
@@ -93,6 +99,14 @@ export function App() {
   const [searchScope, setSearchScope] = useState<SearchScopeSettings>({
     includeArchived: false,
   });
+  const [knowledgeSearchFilters, setKnowledgeSearchFilters] =
+    useState<KnowledgeSearchFilters>(emptyKnowledgeSearchFilters);
+  const [knowledgeDomainOptions, setKnowledgeDomainOptions] = useState<
+    KnowledgeDomain[]
+  >([]);
+  const [knowledgeTypeOptions, setKnowledgeTypeOptions] = useState<
+    KnowledgeType[]
+  >([]);
   const [isSavingSearchScope, setIsSavingSearchScope] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
   const [chatHistoryStatus, setChatHistoryStatus] = useState<
@@ -169,6 +183,35 @@ export function App() {
 
   useEffect(() => {
     void refreshWorkspaceRegistry();
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void Promise.all([
+      window.mimora.loadKnowledgeDomainRegistry(),
+      window.mimora.loadKnowledgeTypeRegistry(),
+    ])
+      .then(([domainRegistry, typeRegistry]) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setKnowledgeDomainOptions(domainRegistry.domains);
+        setKnowledgeTypeOptions(typeRegistry.types);
+      })
+      .catch(() => {
+        if (!isMounted) {
+          return;
+        }
+
+        setKnowledgeDomainOptions([]);
+        setKnowledgeTypeOptions([]);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -320,6 +363,9 @@ export function App() {
     const targetAIMode = aiMode;
     const targetIncludeArchived =
       isAllWorkspaceScope(targetWorkspaceId) && searchScope.includeArchived;
+    const targetKnowledgeFilters = isAllWorkspaceScope(targetWorkspaceId)
+      ? knowledgeSearchFilters
+      : emptyKnowledgeSearchFilters;
 
     if (import.meta.env.DEV) {
       console.info('[Archived Debug]', {
@@ -366,6 +412,7 @@ export function App() {
       previousMessages,
       manualContexts,
       targetIncludeArchived,
+      targetKnowledgeFilters,
       endToEndStartedTime,
     );
   }
@@ -662,6 +709,7 @@ export function App() {
     previousMessages: ChatMessage[],
     manualContexts: AttachedContext[],
     includeArchived: boolean,
+    knowledgeFilters: KnowledgeSearchFilters,
     endToEndStartedTime: number,
   ): Promise<void> {
     let autoContext: AutoRetrievedContext[] = [];
@@ -684,6 +732,7 @@ export function App() {
         workspaceId,
         limit: 5,
         includeArchived,
+        knowledgeFilters,
       });
     } catch (error) {
       autoContextError =
@@ -1468,12 +1517,16 @@ export function App() {
               disabled={isSavingAIMode || isCurrentWorkspaceBusy}
               effectiveSecurity={currentSecurity}
               includeArchived={searchScope.includeArchived}
+              knowledgeDomainOptions={knowledgeDomainOptions}
+              knowledgeFilters={knowledgeSearchFilters}
+              knowledgeTypeOptions={knowledgeTypeOptions}
               onChangeAIMode={(nextAIMode) => {
                 void handleChangeAIMode(nextAIMode);
               }}
               onChangeIncludeArchived={(includeArchived) => {
                 void handleChangeIncludeArchived(includeArchived);
               }}
+              onChangeKnowledgeFilters={setKnowledgeSearchFilters}
               searchScopeDisabled={
                 isSavingSearchScope || isCurrentWorkspaceBusy
               }

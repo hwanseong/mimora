@@ -3,6 +3,7 @@ import type {
   DocumentMetadataValidationIssue,
   MimoraDocumentMetadata,
 } from './metadata/types';
+import type { KnowledgeSearchFilters } from './knowledgeSearch';
 
 export type AutoRetrievedContext = {
   documentId: string;
@@ -29,4 +30,5 @@ export type AutoContextRetrievalInput = {
   workspaceId?: string;
   limit?: number;
   includeArchived?: boolean;
+  knowledgeFilters?: KnowledgeSearchFilters;
 };

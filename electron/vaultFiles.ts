@@ -4,6 +4,11 @@ import type {
   AutoContextRetrievalInput,
   AutoRetrievedContext,
 } from '../src/autoContext';
+import {
+  hasActiveKnowledgeSearchFilters,
+  normalizeKnowledgeSearchFilters,
+  type KnowledgeSearchFilters,
+} from '../src/knowledgeSearch';
 import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
 import { createRegistryStatusService } from './registryStatus';
@@ -304,8 +309,11 @@ function validateSearchInput(input: unknown): VaultSearchInput {
 
   const candidate = input as Partial<VaultSearchInput>;
   const query = typeof candidate.query === 'string' ? candidate.query.trim() : '';
+  const knowledgeFilters = normalizeKnowledgeSearchFilters(
+    candidate.knowledgeFilters,
+  );
 
-  if (!query) {
+  if (!query && !hasActiveKnowledgeSearchFilters(knowledgeFilters)) {
     throw new Error('검색어를 입력하세요.');
   }
 
@@ -323,6 +331,7 @@ function validateSearchInput(input: unknown): VaultSearchInput {
   return {
     query,
     scope: candidate.scope,
+    knowledgeFilters,
     ...(candidate.scope === 'current' ? { vaultId: candidate.vaultId } : {}),
   };
 }
@@ -355,6 +364,7 @@ async function searchVault(
   vault: VaultConfig,
   query: string,
   metadataRegistryOptions: MetadataRegistryOptions = {},
+  knowledgeFilters: KnowledgeSearchFilters = normalizeKnowledgeSearchFilters(),
 ): Promise<VaultSearchResult[]> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -380,6 +390,19 @@ async function searchVault(
         fileName: file.name,
         ...createMetadataResultFields(metadataResult),
       };
+      const matchesKnowledgeFilters = documentMatchesKnowledgeFilters(
+        metadataResult.metadata,
+        knowledgeFilters,
+      );
+
+      if (!matchesKnowledgeFilters) {
+        continue;
+      }
+
+      if (!query) {
+        results.push({ ...baseResult, matchType: 'metadata' });
+        continue;
+      }
 
       if (file.name.toLocaleLowerCase().includes(normalizedQuery)) {
         results.push({ ...baseResult, matchType: 'filename' });
@@ -473,6 +496,24 @@ type MetadataRegistryOptions = {
   knowledgeDomainRegistryUnavailable?: boolean;
   knowledgeTypeRegistryUnavailable?: boolean;
 };
+
+function documentMatchesKnowledgeFilters(
+  metadata: MimoraDocumentMetadata,
+  filters: KnowledgeSearchFilters,
+): boolean {
+  if (!hasActiveKnowledgeSearchFilters(filters)) {
+    return true;
+  }
+
+  const matchesDomains =
+    filters.domains.length === 0 ||
+    filters.domains.every((domain) => metadata.knowledgeDomains.includes(domain));
+  const matchesTypes =
+    filters.types.length === 0 ||
+    filters.types.every((type) => metadata.knowledgeTypes.includes(type));
+
+  return matchesDomains && matchesTypes;
+}
 
 type DocumentEligibilityResult = {
   eligible: boolean;
@@ -1082,6 +1123,7 @@ async function retrieveFromVault(
   workspaceStatusMap: WorkspaceStatusMap,
   includeArchived: boolean,
   metadataRegistryOptions: MetadataRegistryOptions = {},
+  knowledgeFilters: KnowledgeSearchFilters = normalizeKnowledgeSearchFilters(),
 ): Promise<VaultRetrieval> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -1126,6 +1168,10 @@ async function retrieveFromVault(
       }
 
       pipeline.lifecycleEligibleCandidates += 1;
+
+      if (!documentMatchesKnowledgeFilters(metadataResult.metadata, knowledgeFilters)) {
+        continue;
+      }
 
       const {
         matchedTokenCount,
@@ -1338,12 +1384,16 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
     typeof candidate.limit === 'number' && Number.isFinite(candidate.limit)
       ? Math.floor(candidate.limit)
       : 5;
+  const knowledgeFilters = normalizeKnowledgeSearchFilters(
+    candidate.knowledgeFilters,
+  );
 
   return {
     query,
     workspaceId,
     limit: Math.min(Math.max(requestedLimit, 1), 10),
     includeArchived: candidate.includeArchived === true,
+    knowledgeFilters,
   };
 }
 
@@ -1395,13 +1445,28 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
       const settings = await settingsStore.getSettings();
       const metadataRegistryOptions = await loadMetadataRegistryOptions();
 
+      if (isDevelopmentEnvironment()) {
+        console.info('[Mimora Knowledge Filter]', {
+          stage: 'searchVaultFiles',
+          selectedDomain: searchInput.knowledgeFilters?.domains[0] ?? '',
+          selectedType: searchInput.knowledgeFilters?.types[0] ?? '',
+          requestDomains: searchInput.knowledgeFilters?.domains ?? [],
+          requestTypes: searchInput.knowledgeFilters?.types ?? [],
+        });
+      }
+
       if (settings.vaults.length === 0) {
         throw new Error('등록된 Vault가 없습니다. 설정에서 Vault를 추가하세요.');
       }
 
       if (searchInput.scope === 'current') {
         const vault = await getVault(settingsStore, searchInput.vaultId);
-        return searchVault(vault, searchInput.query, metadataRegistryOptions);
+        return searchVault(
+          vault,
+          searchInput.query,
+          metadataRegistryOptions,
+          searchInput.knowledgeFilters,
+        );
       }
 
       const vaultSearches = await Promise.all(
@@ -1413,6 +1478,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 vault,
                 searchInput.query,
                 metadataRegistryOptions,
+                searchInput.knowledgeFilters,
               ),
             };
           } catch (error) {
@@ -1445,6 +1511,11 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
 
       const { phrase, tokens } = preprocessRetrievalQuery(retrievalInput.query);
       const metadataRegistryOptions = await loadMetadataRegistryOptions();
+      const effectiveKnowledgeFilters = isAllWorkspaceScope(
+        retrievalInput.workspaceId,
+      )
+        ? retrievalInput.knowledgeFilters
+        : normalizeKnowledgeSearchFilters();
       const workspaceRegistry =
         isAllWorkspaceScope(retrievalInput.workspaceId)
           ? await registryStatusService.loadWorkspaceRegistry()
@@ -1488,6 +1559,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 workspaceStatusMap,
                 retrievalInput.includeArchived,
                 metadataRegistryOptions,
+                effectiveKnowledgeFilters,
               ),
             };
           } catch (error) {

@@ -2,6 +2,7 @@ import type {
   DocumentMetadataValidationIssue,
   MimoraDocumentMetadata,
 } from './metadata/types';
+import type { KnowledgeSearchFilters } from './knowledgeSearch';
 
 export type VaultFile = {
   relativePath: string;
@@ -20,6 +21,7 @@ export type VaultSearchInput = {
   query: string;
   scope: VaultSearchScope;
   vaultId?: string;
+  knowledgeFilters?: KnowledgeSearchFilters;
 };
 
 export type VaultSearchResult = {
@@ -35,7 +37,7 @@ export type VaultSearchResult = {
   contentOrigin?: MimoraDocumentMetadata['contentOrigin'];
   relativePath: string;
   fileName: string;
-  matchType: 'filename' | 'path' | 'content';
+  matchType: 'filename' | 'path' | 'content' | 'metadata';
   metadata?: MimoraDocumentMetadata;
   metadataIssues?: DocumentMetadataValidationIssue[];
   snippet?: string;
