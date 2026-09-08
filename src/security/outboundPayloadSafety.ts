@@ -1,4 +1,5 @@
 import type { VaultSecurity, VaultType } from '../settings';
+import type { MimoraDocumentMetadata } from '../metadata/types';
 import {
   findRemainingRegisteredEntityIds,
   type MaskingEntry,
@@ -64,6 +65,7 @@ export type OutboundPayloadDocumentMetadata = {
   security: VaultSecurity;
   relativePath: string;
   fileName: string;
+  metadata?: MimoraDocumentMetadata;
 };
 
 function escapeRegularExpression(value: string): string {
@@ -152,6 +154,9 @@ export function evaluateOutboundPayload(input: {
   const hasPrivateContext = documents.some(
     (document) => document.vaultType === 'private',
   );
+  const hasPrivateDocument = documents.some(
+    (document) => document.metadata?.security === 'private',
+  );
   const hasSensitiveContext = documents.some(
     (document) => document.security === 'sensitive',
   ) || effectiveSecurity === 'sensitive';
@@ -208,6 +213,14 @@ export function evaluateOutboundPayload(input: {
       remainingEntityIds.length > 0
         ? `Registered entity remains in outbound payload (${remainingEntityIds.length}).`
         : '활성화된 등록 Entity의 원문이 남아 있지 않습니다.',
+    ),
+    check(
+      'private-document-context',
+      'Private document context',
+      hasPrivateDocument ? 'fail' : 'pass',
+      hasPrivateDocument
+        ? 'Private 문서 metadata가 감지되어 외부 전송을 차단합니다.'
+        : 'Private 문서 metadata가 없습니다.',
     ),
     check(
       'private-vault-context',

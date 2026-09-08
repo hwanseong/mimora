@@ -1,4 +1,5 @@
 import type { VaultSecurity, VaultType } from './settings';
+import type { MimoraDocumentMetadata } from './metadata/types';
 
 export const RECENT_HISTORY_MESSAGE_LIMIT = 4;
 
@@ -71,6 +72,7 @@ export type LLMContextDocument = {
   security: VaultSecurity;
   relativePath: string;
   fileName: string;
+  metadata?: MimoraDocumentMetadata;
   snippet?: string;
   content: string;
 };

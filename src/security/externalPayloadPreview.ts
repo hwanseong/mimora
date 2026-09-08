@@ -1,5 +1,6 @@
 import type { EffectiveSecurity } from './securityRouter';
 import type { VaultSecurity, VaultType } from '../settings';
+import type { MimoraDocumentMetadata } from '../metadata/types';
 import {
   findRemainingRegisteredEntityIds,
   maskText,
@@ -31,6 +32,7 @@ export type ExternalPreviewDocument = {
   security: VaultSecurity;
   relativePath: string;
   fileName: string;
+  metadata?: MimoraDocumentMetadata;
   originalChars: number;
   maskedContent: string;
   replacementCount: number;
@@ -65,6 +67,7 @@ export type ExternalPreviewContextInput = {
   security: VaultSecurity;
   relativePath: string;
   fileName: string;
+  metadata?: MimoraDocumentMetadata;
   content: string;
 };
 
@@ -181,6 +184,7 @@ export function createExternalPayloadPreview(input: {
         security: document.security,
         relativePath: document.relativePath,
         fileName: document.fileName,
+        metadata: document.metadata,
         originalChars: document.content.length,
         maskedContent: pipelineResult.maskedText,
         replacementCount: pipelineResult.replacementCount,

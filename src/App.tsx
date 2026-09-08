@@ -384,6 +384,9 @@ export function App() {
       relativePath: context.relativePath,
       fileName: context.fileName,
       ...('snippet' in context ? { snippet: context.snippet } : {}),
+      ...('metadata' in context && context.metadata
+        ? { metadata: context.metadata }
+        : {}),
       content: context.content,
     };
   }
@@ -411,10 +414,13 @@ export function App() {
           vaultName: context.vaultName,
           vaultType: context.vaultType,
           security: context.security,
-          relativePath: context.relativePath,
-          fileName: context.fileName,
-        },
-      ];
+        relativePath: context.relativePath,
+        fileName: context.fileName,
+        ...('metadata' in context && context.metadata
+          ? { metadata: context.metadata }
+          : {}),
+      },
+    ];
     });
   }
 
@@ -560,6 +566,7 @@ export function App() {
         security: document.security,
         relativePath: document.relativePath,
         fileName: document.fileName,
+        metadata: document.metadata,
       })),
       approved: routingDecision.approved,
     });

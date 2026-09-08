@@ -1,9 +1,18 @@
 import type { VaultSecurity, VaultType } from './settings';
-import type { MimoraDocumentMetadata } from './metadata/types';
+import type {
+  DocumentMetadataValidationIssue,
+  MimoraDocumentMetadata,
+} from './metadata/types';
 
 export type AutoRetrievedContext = {
   documentId: string;
+  mimoraDocumentId?: string;
+  workspaceIds: string[];
+  originWorkspaceId?: string | null;
+  documentSecurity?: MimoraDocumentMetadata['security'];
+  contentOrigin?: MimoraDocumentMetadata['contentOrigin'];
   metadata?: MimoraDocumentMetadata;
+  metadataIssues?: DocumentMetadataValidationIssue[];
   vaultId: string;
   vaultName: string;
   vaultType: VaultType;

@@ -8,6 +8,10 @@ import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
 import { parseMimoraDocumentMetadata } from '../src/metadata/mimoraMetadataParser';
 import type {
+  DocumentMetadataValidationIssue,
+  MimoraDocumentMetadata,
+} from '../src/metadata/types';
+import type {
   VaultFile,
   VaultFileContent,
   VaultSearchInput,
@@ -355,35 +359,36 @@ async function searchVault(
   await walkMarkdownFiles(rootPath, rootPath, [], files);
 
   for (const file of files) {
-    const baseResult = {
-      vaultId: vault.id,
-      vaultName: vault.name,
-      vaultType: vault.type,
-      security: vault.security,
-      relativePath: file.relativePath,
-      fileName: file.name,
-    };
-
-    if (file.name.toLocaleLowerCase().includes(normalizedQuery)) {
-      results.push({ ...baseResult, matchType: 'filename' });
-      continue;
-    }
-
-    if (file.relativePath.toLocaleLowerCase().includes(normalizedQuery)) {
-      results.push({ ...baseResult, matchType: 'path' });
-      continue;
-    }
-
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
       const metadataResult = parseMimoraDocumentMetadata(content);
+      const baseResult = {
+        vaultId: vault.id,
+        vaultName: vault.name,
+        vaultType: vault.type,
+        security: vault.security,
+        documentId: metadataResult.metadata.documentId,
+        relativePath: file.relativePath,
+        fileName: file.name,
+        ...createMetadataResultFields(metadataResult),
+      };
+
+      if (file.name.toLocaleLowerCase().includes(normalizedQuery)) {
+        results.push({ ...baseResult, matchType: 'filename' });
+        continue;
+      }
+
+      if (file.relativePath.toLocaleLowerCase().includes(normalizedQuery)) {
+        results.push({ ...baseResult, matchType: 'path' });
+        continue;
+      }
+
       const matchIndex = content.toLocaleLowerCase().indexOf(normalizedQuery);
 
       if (matchIndex >= 0) {
         results.push({
           ...baseResult,
           matchType: 'content',
-          metadata: metadataResult.metadata,
           snippet: createSearchSnippet(content, matchIndex, query),
         });
       }
@@ -437,8 +442,39 @@ type VaultRetrieval = {
   results: ScoredAutoContext[];
 };
 
+type ParsedDocumentMetadata = {
+  metadata: MimoraDocumentMetadata;
+  issues: DocumentMetadataValidationIssue[];
+};
+
 function shouldApplyWorkspaceFilter(workspaceId: string): boolean {
   return workspaceId !== allWorkspaceId;
+}
+
+function createMetadataResultFields(metadataResult: ParsedDocumentMetadata): {
+  mimoraDocumentId?: string;
+  workspaceIds: string[];
+  originWorkspaceId?: string | null;
+  documentSecurity?: MimoraDocumentMetadata['security'];
+  contentOrigin?: MimoraDocumentMetadata['contentOrigin'];
+  metadata: MimoraDocumentMetadata;
+  metadataIssues?: DocumentMetadataValidationIssue[];
+} {
+  return {
+    ...(metadataResult.metadata.documentId
+      ? {
+          mimoraDocumentId: metadataResult.metadata.documentId,
+        }
+      : {}),
+    workspaceIds: metadataResult.metadata.workspaceIds,
+    originWorkspaceId: metadataResult.metadata.originWorkspaceId ?? null,
+    documentSecurity: metadataResult.metadata.security,
+    contentOrigin: metadataResult.metadata.contentOrigin,
+    metadata: metadataResult.metadata,
+    ...(metadataResult.issues.length > 0
+      ? { metadataIssues: metadataResult.issues }
+      : {}),
+  };
 }
 
 const koreanParticles = [
@@ -787,7 +823,7 @@ async function retrieveFromVault(
 
       results.push({
         documentId: createVaultDocumentId(vault.id, file.relativePath),
-        metadata: metadataResult.metadata,
+        ...createMetadataResultFields(metadataResult),
         vaultId: vault.id,
         vaultName: vault.name,
         vaultType: vault.type,
@@ -879,6 +915,61 @@ function logRetrievalDiagnostics(input: {
   });
 }
 
+function logDuplicateDocumentIdWarning(
+  results: Array<{
+    mimoraDocumentId?: string;
+    vaultId: string;
+    vaultName: string;
+    relativePath: string;
+  }>,
+  source: 'vault-search' | 'auto-context',
+): void {
+  if (
+    process.env.NODE_ENV !== 'development' &&
+    !process.env.VITE_DEV_SERVER_URL
+  ) {
+    return;
+  }
+
+  const documentsById = new Map<
+    string,
+    Array<{ vaultId: string; vaultName: string; relativePath: string }>
+  >();
+
+  for (const result of results) {
+    if (!result.mimoraDocumentId) {
+      continue;
+    }
+
+    const documents = documentsById.get(result.mimoraDocumentId) ?? [];
+
+    documents.push({
+      vaultId: result.vaultId,
+      vaultName: result.vaultName,
+      relativePath: result.relativePath,
+    });
+    documentsById.set(result.mimoraDocumentId, documents);
+  }
+
+  const duplicates = [...documentsById.entries()]
+    .filter(([, documents]) => documents.length > 1)
+    .map(([documentId, documents]) => ({
+      documentId,
+      count: documents.length,
+      documents,
+    }));
+
+  if (duplicates.length === 0) {
+    return;
+  }
+
+  console.warn('[Mimora Metadata] Duplicate document_id detected.', {
+    source,
+    duplicateCount: duplicates.length,
+    duplicates,
+  });
+}
+
 function validateAutoContextInput(input: unknown): Required<AutoContextRetrievalInput> {
   if (!input || typeof input !== 'object') {
     throw new Error('자동 문서 검색 요청이 올바르지 않습니다.');
@@ -963,7 +1054,11 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
         );
       }
 
-      return vaultSearches.flatMap((result) => result.results);
+      const searchResults = vaultSearches.flatMap((result) => result.results);
+
+      logDuplicateDocumentIdWarning(searchResults, 'vault-search');
+
+      return searchResults;
     },
 
     async retrieveAutoContext(input: unknown): Promise<AutoRetrievedContext[]> {
@@ -1015,6 +1110,8 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
             left.vaultName.localeCompare(right.vaultName) ||
             left.relativePath.localeCompare(right.relativePath),
         );
+
+      logDuplicateDocumentIdWarning(scoredResults, 'auto-context');
 
       logRetrievalDiagnostics({
         queryChars: retrievalInput.query.length,

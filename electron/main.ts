@@ -529,6 +529,7 @@ function isExternalDocumentMetadata(
     'security',
     'relativePath',
     'fileName',
+    'metadata',
   ]);
 
   return (
@@ -539,7 +540,11 @@ function isExternalDocumentMetadata(
     ['work', 'private', 'knowledge'].includes(document.vaultType ?? '') &&
     ['internal', 'sensitive', 'personal'].includes(document.security ?? '') &&
     typeof document.relativePath === 'string' &&
-    typeof document.fileName === 'string'
+    typeof document.fileName === 'string' &&
+    (document.metadata === undefined ||
+      (typeof document.metadata === 'object' &&
+        document.metadata !== null &&
+        !Array.isArray(document.metadata)))
   );
 }
 

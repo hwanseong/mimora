@@ -1,4 +1,7 @@
-import type { MimoraDocumentMetadata } from './metadata/types';
+import type {
+  DocumentMetadataValidationIssue,
+  MimoraDocumentMetadata,
+} from './metadata/types';
 
 export type VaultFile = {
   relativePath: string;
@@ -24,9 +27,16 @@ export type VaultSearchResult = {
   vaultName: string;
   vaultType: import('./settings').VaultType;
   security: import('./settings').VaultSecurity;
+  documentId?: string;
+  mimoraDocumentId?: string;
+  workspaceIds: string[];
+  originWorkspaceId?: string | null;
+  documentSecurity?: MimoraDocumentMetadata['security'];
+  contentOrigin?: MimoraDocumentMetadata['contentOrigin'];
   relativePath: string;
   fileName: string;
   matchType: 'filename' | 'path' | 'content';
   metadata?: MimoraDocumentMetadata;
+  metadataIssues?: DocumentMetadataValidationIssue[];
   snippet?: string;
 };
