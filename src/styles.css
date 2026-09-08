@@ -100,6 +100,10 @@ button {
 }
 
 .nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   width: 100%;
   min-height: 28px;
   border: 0;
@@ -110,6 +114,31 @@ button {
   font-size: 13px;
   text-align: left;
   line-height: 1.25;
+}
+
+.nav-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-status-badge {
+  flex: 0 0 auto;
+  border: 1px solid #d9dde4;
+  border-radius: 999px;
+  color: #697386;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.nav-section-message {
+  margin: 2px 8px 0;
+  color: #8a93a3;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .nav-item:hover {

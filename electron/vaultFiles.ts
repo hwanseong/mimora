@@ -6,12 +6,14 @@ import type {
 } from '../src/autoContext';
 import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
+import { parseMimoraDocumentMetadata } from '../src/metadata/mimoraMetadataParser';
 import type {
   VaultFile,
   VaultFileContent,
   VaultSearchInput,
   VaultSearchResult,
 } from '../src/vaultFiles';
+import { allWorkspaceId } from '../src/workspaces';
 
 type SettingsStore = ReturnType<typeof createSettingsStore>;
 
@@ -374,12 +376,14 @@ async function searchVault(
 
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
+      const metadataResult = parseMimoraDocumentMetadata(content);
       const matchIndex = content.toLocaleLowerCase().indexOf(normalizedQuery);
 
       if (matchIndex >= 0) {
         results.push({
           ...baseResult,
           matchType: 'content',
+          metadata: metadataResult.metadata,
           snippet: createSearchSnippet(content, matchIndex, query),
         });
       }
@@ -432,6 +436,10 @@ type VaultRetrieval = {
   candidateCount: number;
   results: ScoredAutoContext[];
 };
+
+function shouldApplyWorkspaceFilter(workspaceId: string): boolean {
+  return workspaceId !== allWorkspaceId;
+}
 
 const koreanParticles = [
   '에게서',
@@ -742,6 +750,7 @@ async function retrieveFromVault(
   query: string,
   phrase: string,
   tokens: string[],
+  workspaceId: string,
 ): Promise<VaultRetrieval> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -752,6 +761,15 @@ async function retrieveFromVault(
   for (const file of files) {
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
+      const metadataResult = parseMimoraDocumentMetadata(content);
+
+      if (
+        shouldApplyWorkspaceFilter(workspaceId) &&
+        !metadataResult.metadata.workspaceIds.includes(workspaceId)
+      ) {
+        continue;
+      }
+
       const {
         matchedTokenCount,
         phraseMatched,
@@ -769,6 +787,7 @@ async function retrieveFromVault(
 
       results.push({
         documentId: createVaultDocumentId(vault.id, file.relativePath),
+        metadata: metadataResult.metadata,
         vaultId: vault.id,
         vaultName: vault.name,
         vaultType: vault.type,
@@ -867,6 +886,10 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
 
   const candidate = input as Partial<AutoContextRetrievalInput>;
   const query = typeof candidate.query === 'string' ? candidate.query.trim() : '';
+  const workspaceId =
+    typeof candidate.workspaceId === 'string' && candidate.workspaceId.trim()
+      ? candidate.workspaceId.trim()
+      : allWorkspaceId;
 
   if (!query) {
     throw new Error('자동 문서 검색을 위한 질문이 비어 있습니다.');
@@ -879,6 +902,7 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
 
   return {
     query,
+    workspaceId,
     limit: Math.min(Math.max(requestedLimit, 1), 10),
   };
 }
@@ -961,6 +985,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 retrievalInput.query,
                 phrase,
                 tokens,
+                retrievalInput.workspaceId,
               ),
             };
           } catch (error) {

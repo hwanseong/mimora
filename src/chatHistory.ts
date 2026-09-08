@@ -6,17 +6,15 @@ import {
   aiModeOptions,
   type RoutingDecision,
 } from './security/securityRouter';
-import { workspaceSections } from './workspaces';
+import {
+  isChatHistoryWorkspaceId,
+  normalizeChatHistoryWorkspaceId,
+} from './workspaces';
 
 export const CHAT_HISTORY_VERSION = 1 as const;
-const workspaceIds = new Set(
-  workspaceSections.flatMap((section) =>
-    section.items.map((workspace) => workspace.id),
-  ),
-);
 
 export function isKnownWorkspaceId(value: unknown): value is string {
-  return typeof value === 'string' && workspaceIds.has(value);
+  return isChatHistoryWorkspaceId(value);
 }
 
 export type PersistedChatMessage = Pick<
@@ -291,6 +289,7 @@ export function createPersistedChatHistory(
       continue;
     }
 
+    const normalizedWorkspaceId = normalizeChatHistoryWorkspaceId(workspaceId);
     const messages = rawMessages
       .map(sanitizePersistedMessage)
       .filter((message): message is PersistedChatMessage => message !== null);
@@ -299,10 +298,15 @@ export function createPersistedChatHistory(
       continue;
     }
 
-    sessions[workspaceId] = {
-      workspaceId,
-      messages,
-      updatedAt: messages.at(-1)?.createdAt ?? new Date(0).toISOString(),
+    const existingSession = sessions[normalizedWorkspaceId];
+    const nextMessages = existingSession
+      ? [...existingSession.messages, ...messages]
+      : messages;
+
+    sessions[normalizedWorkspaceId] = {
+      workspaceId: normalizedWorkspaceId,
+      messages: nextMessages,
+      updatedAt: nextMessages.at(-1)?.createdAt ?? new Date(0).toISOString(),
     };
   }
 
@@ -321,10 +325,15 @@ export function parsePersistedChatHistory(input: unknown): PersistedChatHistory 
   const sessions: ChatSessions = {};
 
   for (const [workspaceId, workspaceChat] of Object.entries(input.sessions)) {
+    if (!isKnownWorkspaceId(workspaceId)) {
+      continue;
+    }
+
+    const normalizedWorkspaceId = normalizeChatHistoryWorkspaceId(workspaceId);
     if (
       !isRecord(workspaceChat) ||
-      !isKnownWorkspaceId(workspaceId) ||
-      workspaceChat.workspaceId !== workspaceId ||
+      (workspaceChat.workspaceId !== workspaceId &&
+        workspaceChat.workspaceId !== normalizedWorkspaceId) ||
       !Array.isArray(workspaceChat.messages) ||
       typeof workspaceChat.updatedAt !== 'string'
     ) {
@@ -338,7 +347,10 @@ export function parsePersistedChatHistory(input: unknown): PersistedChatHistory 
     }
 
     if (messages.length > 0) {
-      sessions[workspaceId] = messages as PersistedChatMessage[];
+      sessions[normalizedWorkspaceId] = [
+        ...(sessions[normalizedWorkspaceId] ?? []),
+        ...(messages as PersistedChatMessage[]),
+      ];
     }
   }
 

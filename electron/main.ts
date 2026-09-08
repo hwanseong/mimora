@@ -26,7 +26,10 @@ import {
   evaluateSecurity,
   type AIMode,
 } from '../src/security/securityRouter';
-import { workspaceSections } from '../src/workspaces';
+import {
+  allWorkspaceId,
+  type WorkspaceType,
+} from '../src/workspaces';
 import {
   authorizeExternalSend,
   evaluateOutboundPayload,
@@ -93,6 +96,23 @@ const chatHistoryStore = createChatHistoryStore({
 });
 const vaultFilesService = createVaultFilesService(settingsStore);
 const registryStatusService = createRegistryStatusService(settingsStore);
+
+async function getWorkspaceTypeForRequest(
+  workspaceId: string,
+): Promise<WorkspaceType> {
+  if (workspaceId === allWorkspaceId) {
+    return 'all';
+  }
+
+  const registry = await registryStatusService.loadWorkspaceRegistry();
+  const workspace = registry.workspaces.find((item) => item.id === workspaceId);
+
+  if (!workspace) {
+    throw new Error('External AI 요청의 Workspace를 확인할 수 없습니다.');
+  }
+
+  return workspace.type;
+}
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '설정 처리 중 오류가 발생했습니다.';
@@ -374,16 +394,10 @@ function registerOpenAIHandlers(): void {
         const startedTime = performance.now();
         const requestStartedAt = new Date();
         const settings = await settingsStore.getSettings();
-        const workspace = workspaceSections
-          .flatMap((section) => section.items)
-          .find((item) => item.id === input.workspaceId);
-
-        if (!workspace) {
-          throw new Error('External AI 요청의 Workspace를 확인할 수 없습니다.');
-        }
+        const workspaceType = await getWorkspaceTypeForRequest(input.workspaceId);
 
         const effectiveSecurity = evaluateSecurity(
-          workspace.type,
+          workspaceType,
           input.documents.map((document) => ({
             vaultId: document.documentId,
             relativePath: document.relativePath,

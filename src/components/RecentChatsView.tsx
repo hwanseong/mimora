@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ChatSessions } from '../chat';
-import { workspaceSections, type Workspace } from '../workspaces';
+import type { Workspace } from '../workspaces';
 
 export const RECENT_CHAT_PREVIEW_MAX_CHARS = 72;
 export const PRIVATE_RECENT_CHAT_PREVIEW_MAX_CHARS = 60;
@@ -85,9 +85,8 @@ function getLastUserMessage(
 
 export function createRecentChatItems(
   chatSessions: ChatSessions,
+  workspaces: Workspace[],
 ): RecentChatItem[] {
-  const workspaces = workspaceSections.flatMap((section) => section.items);
-
   return workspaces
     .flatMap((workspace) => {
       const messages = chatSessions[workspace.id] ?? [];
@@ -129,14 +128,16 @@ export function RecentChatsView({
   onDeleteWorkspaceChat,
   onOpenWorkspace,
   storageError,
+  workspaces,
 }: {
   chatSessions: ChatSessions;
   isLoading?: boolean;
   onDeleteWorkspaceChat: (workspace: Workspace) => Promise<void>;
   onOpenWorkspace: (workspace: Workspace) => void;
   storageError?: string | null;
+  workspaces: Workspace[];
 }) {
-  const recentChats = createRecentChatItems(chatSessions);
+  const recentChats = createRecentChatItems(chatSessions, workspaces);
   const [now, setNow] = useState(() => Date.now());
   const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);

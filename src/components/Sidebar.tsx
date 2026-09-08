@@ -1,13 +1,21 @@
-import { type Workspace, workspaceSections } from '../workspaces';
+import type { Workspace, WorkspaceSection, WorkspaceStatus } from '../workspaces';
+
+const statusLabels: Partial<Record<WorkspaceStatus, string>> = {
+  planned: 'Planned',
+  on_hold: 'On Hold',
+  closed: 'Closed',
+};
 
 function NavSection({
   title,
   items,
+  message,
   selectedWorkspaceId,
   onSelectWorkspace,
 }: {
   title: string;
   items: Workspace[];
+  message?: string;
   selectedWorkspaceId: string;
   onSelectWorkspace: (workspace: Workspace) => void;
 }) {
@@ -15,6 +23,7 @@ function NavSection({
     <section className="nav-section" aria-labelledby={`${title}-heading`}>
       <h2 id={`${title}-heading`}>{title}</h2>
       <div className="nav-list">
+        {message ? <p className="nav-section-message">{message}</p> : null}
         {items.map((item) => (
           <button
             aria-pressed={item.id === selectedWorkspaceId}
@@ -25,7 +34,10 @@ function NavSection({
             }}
             type="button"
           >
-            {item.label}
+            <span className="nav-item-label">{item.label}</span>
+            {statusLabels[item.status] ? (
+              <span className="nav-status-badge">{statusLabels[item.status]}</span>
+            ) : null}
           </button>
         ))}
       </div>
@@ -40,6 +52,7 @@ export function Sidebar({
   onOpenRecentChats,
   onOpenVaultBrowser,
   onOpenSettings,
+  workspaceSections,
   selectedWorkspaceId,
   onSelectWorkspace,
 }: {
@@ -49,6 +62,7 @@ export function Sidebar({
   onOpenRecentChats: () => void;
   onOpenVaultBrowser: () => void;
   onOpenSettings: () => void;
+  workspaceSections: WorkspaceSection[];
   selectedWorkspaceId: string;
   onSelectWorkspace: (workspace: Workspace) => void;
 }) {
@@ -60,6 +74,7 @@ export function Sidebar({
           <NavSection
             items={section.items}
             key={section.title}
+            message={section.message}
             onSelectWorkspace={onSelectWorkspace}
             selectedWorkspaceId={selectedWorkspaceId}
             title={section.title}

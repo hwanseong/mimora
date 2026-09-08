@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   isChatRequestBusy,
   tryBeginExternalAction,
@@ -32,7 +32,13 @@ import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
 import { VaultBrowserView } from './components/VaultBrowserView';
 import { WelcomePanel } from './components/WelcomePanel';
-import { defaultWorkspace, type Workspace } from './workspaces';
+import {
+  createSelectableWorkspaces,
+  createWorkspaceSections,
+  defaultWorkspace,
+  toSelectableWorkspace,
+  type Workspace,
+} from './workspaces';
 import {
   evaluateSecurity,
   routeAIRequest,
@@ -76,6 +82,9 @@ export function App() {
   >('chat');
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
+  const [registryWorkspaces, setRegistryWorkspaces] = useState<Workspace[]>([]);
+  const [isWorkspaceRegistryUnavailable, setIsWorkspaceRegistryUnavailable] =
+    useState(false);
   const [message, setMessage] = useState('');
   const [aiMode, setAIMode] = useState<AIMode>('auto');
   const [isSavingAIMode, setIsSavingAIMode] = useState(false);
@@ -98,6 +107,18 @@ export function App() {
     Record<string, ChatRequestStatus>
   >({});
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const workspaceSections = useMemo(
+    () =>
+      createWorkspaceSections({
+        registryWorkspaces,
+        registryUnavailable: isWorkspaceRegistryUnavailable,
+      }),
+    [isWorkspaceRegistryUnavailable, registryWorkspaces],
+  );
+  const selectableWorkspaces = useMemo(
+    () => createSelectableWorkspaces(workspaceSections),
+    [workspaceSections],
+  );
   const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
   const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
   const currentWorkspaceRequestStatus =
@@ -115,6 +136,40 @@ export function App() {
   const currentSecurity =
     latestRoutingDecision?.security ??
     evaluateSecurity(selectedWorkspace.type, currentContexts).security;
+
+  async function refreshWorkspaceRegistry(): Promise<void> {
+    try {
+      const workspaceRegistry = await window.mimora.loadWorkspaceRegistry();
+      const loadedWorkspaces =
+        workspaceRegistry.workspaces.map(toSelectableWorkspace);
+
+      setRegistryWorkspaces(loadedWorkspaces);
+      setIsWorkspaceRegistryUnavailable(
+        workspaceRegistry.state !== 'loaded' && loadedWorkspaces.length === 0,
+      );
+    } catch {
+      setRegistryWorkspaces([]);
+      setIsWorkspaceRegistryUnavailable(true);
+    }
+  }
+
+  useEffect(() => {
+    void refreshWorkspaceRegistry();
+  }, []);
+
+  useEffect(() => {
+    setSelectedWorkspace((currentWorkspace) => {
+      if (currentWorkspace.id === defaultWorkspace.id) {
+        return currentWorkspace;
+      }
+
+      return (
+        selectableWorkspaces.find(
+          (workspace) => workspace.id === currentWorkspace.id,
+        ) ?? defaultWorkspace
+      );
+    });
+  }, [selectableWorkspaces]);
 
   useEffect(() => {
     let isMounted = true;
@@ -577,6 +632,7 @@ export function App() {
     try {
       autoContext = await window.mimora.retrieveAutoContext({
         query,
+        workspaceId,
         limit: 5,
       });
     } catch (error) {
@@ -1294,6 +1350,7 @@ export function App() {
         }}
         selectedWorkspaceId={activeView === 'chat' ? selectedWorkspace.id : ''}
         onSelectWorkspace={handleSelectWorkspace}
+        workspaceSections={workspaceSections}
       />
       <main
         className={`chat-area${activeView !== 'chat' ? ' settings-area' : ''}`}
@@ -1308,7 +1365,7 @@ export function App() {
         }
       >
         {activeView === 'settings' ? (
-          <SettingsView />
+          <SettingsView onWorkspaceRegistryChanged={refreshWorkspaceRegistry} />
         ) : activeView === 'recent-chats' ? (
           <RecentChatsView
             chatSessions={chatSessions}
@@ -1316,6 +1373,7 @@ export function App() {
             onDeleteWorkspaceChat={handleDeleteWorkspaceChat}
             onOpenWorkspace={handleSelectWorkspace}
             storageError={chatHistoryError}
+            workspaces={selectableWorkspaces}
           />
         ) : activeView === 'vault-browser' ? (
           <VaultBrowserView

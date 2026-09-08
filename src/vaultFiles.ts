@@ -1,3 +1,5 @@
+import type { MimoraDocumentMetadata } from './metadata/types';
+
 export type VaultFile = {
   relativePath: string;
   name: string;
@@ -25,5 +27,6 @@ export type VaultSearchResult = {
   relativePath: string;
   fileName: string;
   matchType: 'filename' | 'path' | 'content';
+  metadata?: MimoraDocumentMetadata;
   snippet?: string;
 };

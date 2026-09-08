@@ -49,7 +49,11 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '설정을 저장하지 못했습니다.';
 }
 
-export function SettingsView() {
+export function SettingsView({
+  onWorkspaceRegistryChanged,
+}: {
+  onWorkspaceRegistryChanged?: () => Promise<void> | void;
+}) {
   const [settings, setSettings] = useState<MimoraSettings>(defaultSettings);
   const [formState, setFormState] = useState<VaultFormState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VaultConfig | null>(null);
@@ -288,6 +292,7 @@ export function SettingsView() {
       setSettings(nextSettings);
       setFormState(null);
       await refreshRegistryStatus();
+      await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
@@ -301,6 +306,7 @@ export function SettingsView() {
       setSettings(nextSettings);
       setDeleteTarget(null);
       await refreshRegistryStatus();
+      await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
@@ -315,6 +321,7 @@ export function SettingsView() {
       );
       setSettings(nextSettings);
       await refreshRegistryStatus();
+      await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
