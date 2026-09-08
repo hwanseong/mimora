@@ -51,6 +51,7 @@ import type {
   VaultSearchInput,
   VaultSearchResult,
 } from './vaultFiles';
+import type { DocumentIdValidationSummary } from './documentIdValidation';
 
 type MimoraApi = {
     appName: string;
@@ -116,6 +117,7 @@ type MimoraApi = {
     ) => Promise<LocalAIChatResult>;
     selectVaultDirectory: () => Promise<VaultDirectorySelection | null>;
     listVaultFiles: (vaultId: string) => Promise<VaultFile[]>;
+    validateDocumentIds: () => Promise<DocumentIdValidationSummary>;
     readVaultFile: (
       vaultId: string,
       relativePath: string,

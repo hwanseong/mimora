@@ -24,6 +24,11 @@ import type { RegistryStatus } from '../registry/types';
 import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeTypeRegistryParseResult } from '../registry/knowledgeTypeRegistryTypes';
 import type { WorkspaceRegistryParseResult } from '../registry/workspaceRegistryTypes';
+import {
+  documentIdValidationStatusLabels,
+  type DocumentIdValidationStatus,
+  type DocumentIdValidationSummary,
+} from '../documentIdValidation';
 
 type VaultFormState = {
   id?: string;
@@ -87,6 +92,12 @@ export function SettingsView({
     useState(false);
   const [showKnowledgeTypeRegistryIssues, setShowKnowledgeTypeRegistryIssues] =
     useState(false);
+  const [documentIdValidation, setDocumentIdValidation] =
+    useState<DocumentIdValidationSummary | null>(null);
+  const [documentIdValidationError, setDocumentIdValidationError] =
+    useState<string | null>(null);
+  const [documentIdProblemFilter, setDocumentIdProblemFilter] =
+    useState<DocumentIdValidationStatus | null>(null);
 
   const isEditing = Boolean(formState?.id);
   const sortedVaults = useMemo(() => settings.vaults, [settings.vaults]);
@@ -104,6 +115,16 @@ export function SettingsView({
     localAIForm.provider !== settings.localAI.provider ||
     localAIForm.endpoint !== settings.localAI.endpoint ||
     localAIForm.model !== settings.localAI.model;
+  const documentIdProblemDocuments = useMemo(
+    () =>
+      documentIdValidation?.documents.filter(
+        (document) =>
+          documentIdProblemFilter !== null &&
+          document.status === documentIdProblemFilter &&
+          document.status !== 'valid',
+      ) ?? [],
+    [documentIdProblemFilter, documentIdValidation],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -120,12 +141,14 @@ export function SettingsView({
             loadedWorkspaceRegistry,
             loadedKnowledgeDomainRegistry,
             loadedKnowledgeTypeRegistry,
+            loadedDocumentIdValidation,
           ] =
             await Promise.all([
               window.mimora.getRegistryStatus(),
               window.mimora.loadWorkspaceRegistry(),
               window.mimora.loadKnowledgeDomainRegistry(),
               window.mimora.loadKnowledgeTypeRegistry(),
+              window.mimora.validateDocumentIds(),
             ]);
 
           if (isMounted) {
@@ -133,6 +156,8 @@ export function SettingsView({
             setWorkspaceRegistry(loadedWorkspaceRegistry);
             setKnowledgeDomainRegistry(loadedKnowledgeDomainRegistry);
             setKnowledgeTypeRegistry(loadedKnowledgeTypeRegistry);
+            setDocumentIdValidation(loadedDocumentIdValidation);
+            setDocumentIdValidationError(null);
           }
         }
       } catch (error) {
@@ -169,6 +194,19 @@ export function SettingsView({
     setWorkspaceRegistry(nextWorkspaceRegistry);
     setKnowledgeDomainRegistry(nextKnowledgeDomainRegistry);
     setKnowledgeTypeRegistry(nextKnowledgeTypeRegistry);
+  }
+
+  async function refreshDocumentIdValidation(): Promise<void> {
+    try {
+      const nextDocumentIdValidation =
+        await window.mimora.validateDocumentIds();
+
+      setDocumentIdValidation(nextDocumentIdValidation);
+      setDocumentIdValidationError(null);
+    } catch (error) {
+      setDocumentIdValidation(null);
+      setDocumentIdValidationError(getErrorMessage(error));
+    }
   }
 
   async function handleReloadRegistry(): Promise<void> {
@@ -331,6 +369,7 @@ export function SettingsView({
       setSettings(nextSettings);
       setFormState(null);
       await refreshRegistryStatus();
+      await refreshDocumentIdValidation();
       await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -345,6 +384,7 @@ export function SettingsView({
       setSettings(nextSettings);
       setDeleteTarget(null);
       await refreshRegistryStatus();
+      await refreshDocumentIdValidation();
       await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -920,6 +960,139 @@ export function SettingsView({
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+      </section>
+
+      <section
+        className="document-id-validation-card"
+        aria-labelledby="document-id-validation-heading"
+      >
+        <div className="registry-header">
+          <div>
+            <h2 id="document-id-validation-heading">
+              Document ID Validation
+            </h2>
+            <p>
+              Read-only validation across all registered Vault Markdown files.
+            </p>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() => {
+              void refreshDocumentIdValidation();
+            }}
+            type="button"
+          >
+            Re-scan
+          </button>
+        </div>
+
+        {documentIdValidationError ? (
+          <p className="document-id-validation-error" role="alert">
+            {documentIdValidationError}
+          </p>
+        ) : null}
+
+        <div className="document-id-count-grid">
+          {(
+            [
+              'valid',
+              'missing',
+              'invalid-format',
+              'duplicate',
+            ] satisfies DocumentIdValidationStatus[]
+          ).map((status) => {
+            const count = documentIdValidation?.counts[status] ?? 0;
+            const isProblemStatus = status !== 'valid';
+            const isActive = documentIdProblemFilter === status;
+
+            return (
+              <button
+                aria-pressed={isActive}
+                className={`document-id-count-card ${status}${
+                  isActive ? ' active' : ''
+                }`}
+                disabled={!isProblemStatus || count === 0}
+                key={status}
+                onClick={() => {
+                  setDocumentIdProblemFilter(isActive ? null : status);
+                }}
+                type="button"
+              >
+                <span>{documentIdValidationStatusLabels[status]}</span>
+                <strong>{count}</strong>
+              </button>
+            );
+          })}
+        </div>
+
+        {documentIdValidation ? (
+          <p className="document-id-validation-meta">
+            Scanned {documentIdValidation.documentCount} Markdown files in{' '}
+            {documentIdValidation.vaultCount} Vaults.
+          </p>
+        ) : (
+          <p className="document-id-validation-meta">
+            Document ID validation has not run yet.
+          </p>
+        )}
+
+        {documentIdValidation?.errors.length ? (
+          <div className="document-id-validation-errors">
+            <strong>Scan warnings</strong>
+            <ul>
+              {documentIdValidation.errors.map((error, index) => (
+                <li key={`${error.vaultId}-${index}`}>
+                  {error.vaultName}: {error.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {documentIdProblemFilter ? (
+          <div className="document-id-problem-list">
+            <div className="document-id-problem-heading">
+              {documentIdValidationStatusLabels[documentIdProblemFilter]}
+            </div>
+            {documentIdProblemFilter === 'duplicate' &&
+            documentIdValidation?.duplicateGroups.length ? (
+              documentIdValidation.duplicateGroups.map((group) => (
+                <article
+                  className="document-id-duplicate-group"
+                  key={group.documentId}
+                >
+                  <strong>{group.documentId}</strong>
+                  <span>Used in {group.documents.length} documents</span>
+                  <ul>
+                    {group.documents.map((document) => (
+                      <li
+                        key={`${document.vaultId}:${document.relativePath}`}
+                      >
+                        {document.vaultName} / {document.relativePath}
+                      </li>
+                    ))}
+                  </ul>
+                </article>
+              ))
+            ) : documentIdProblemDocuments.length > 0 ? (
+              documentIdProblemDocuments.map((document) => (
+                <article
+                  className="document-id-problem-row"
+                  key={`${document.vaultId}:${document.relativePath}`}
+                >
+                  <strong>{document.fileName}</strong>
+                  <span>{document.vaultName}</span>
+                  <code>{document.documentId ?? 'Missing'}</code>
+                  <em>{documentIdValidationStatusLabels[document.status]}</em>
+                </article>
+              ))
+            ) : (
+              <p className="document-id-validation-meta">
+                No documents for this status.
+              </p>
+            )}
           </div>
         ) : null}
       </section>

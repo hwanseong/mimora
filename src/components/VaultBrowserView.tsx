@@ -33,6 +33,12 @@ import type { MimoraMetadataParseResult } from '../metadata/types';
 import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeTypeRegistryParseResult } from '../registry/knowledgeTypeRegistryTypes';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import {
+  documentIdValidationStatusLabels,
+  getDocumentIdFormatStatus,
+  type DocumentIdValidationDocument,
+  type DocumentIdValidationSummary,
+} from '../documentIdValidation';
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
@@ -111,6 +117,24 @@ function createPreviewMarkdownContent(
   return stripLegacyFrontmatter(fileContent.content);
 }
 
+function createDocumentValidationKey(vaultId: string, relativePath: string): string {
+  return `${vaultId}:${relativePath}`;
+}
+
+function renderDocumentIdStatusBadge(
+  document: DocumentIdValidationDocument | null | undefined,
+) {
+  if (!document) {
+    return null;
+  }
+
+  return (
+    <span className={`document-id-status-badge ${document.status}`}>
+      {documentIdValidationStatusLabels[document.status]}
+    </span>
+  );
+}
+
 export function VaultBrowserView({
   currentWorkspace,
   onAttachContext,
@@ -130,6 +154,8 @@ export function VaultBrowserView({
     useState<KnowledgeDomainRegistryParseResult | null>(null);
   const [knowledgeTypeRegistry, setKnowledgeTypeRegistry] =
     useState<KnowledgeTypeRegistryParseResult | null>(null);
+  const [documentIdValidation, setDocumentIdValidation] =
+    useState<DocumentIdValidationSummary | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] =
     useState<VaultSearchScope>('current');
@@ -203,12 +229,58 @@ export function VaultBrowserView({
         selectedFileMetadata.metadata.knowledgeTypes.length ||
         metadataWarnings.length),
   );
-  const hasMimoraMetadataCard = Boolean(
-    selectedFileMetadata?.hasMetadata || hasKnowledgeMetadata,
-  );
   const previewMarkdownContent = fileContent
     ? createPreviewMarkdownContent(fileContent, selectedFileMetadata)
     : '';
+  const documentIdValidationByFile = useMemo(() => {
+    const validations = new Map<string, DocumentIdValidationDocument>();
+
+    for (const document of documentIdValidation?.documents ?? []) {
+      validations.set(
+        createDocumentValidationKey(document.vaultId, document.relativePath),
+        document,
+      );
+    }
+
+    return validations;
+  }, [documentIdValidation]);
+  const selectedDocumentIdValidation =
+    selectedFile && selectedFileVaultId
+      ? documentIdValidationByFile.get(
+          createDocumentValidationKey(
+            selectedFileVaultId,
+            selectedFile.relativePath,
+          ),
+        ) ?? null
+      : null;
+  const selectedDocumentIdFormatStatus = selectedFileMetadata
+    ? getDocumentIdFormatStatus(selectedFileMetadata.metadata.documentId)
+    : null;
+  const effectiveSelectedDocumentIdValidation =
+    selectedFile &&
+    selectedFileVault &&
+    selectedDocumentIdFormatStatus &&
+    selectedDocumentIdFormatStatus !== 'valid'
+      ? {
+          documentKey: createDocumentValidationKey(
+            selectedFileVault.id,
+            selectedFile.relativePath,
+          ),
+          vaultId: selectedFileVault.id,
+          vaultName: selectedFileVault.name,
+          vaultType: selectedFileVault.type,
+          vaultSecurity: selectedFileVault.security,
+          relativePath: selectedFile.relativePath,
+          fileName: selectedFile.name,
+          documentId: selectedFileMetadata?.metadata.documentId ?? null,
+          status: selectedDocumentIdFormatStatus,
+        }
+      : selectedDocumentIdValidation;
+  const hasMimoraMetadataCard = Boolean(
+    selectedFileMetadata?.hasMetadata ||
+      hasKnowledgeMetadata ||
+      effectiveSelectedDocumentIdValidation,
+  );
 
   useEffect(() => {
     let isActive = true;
@@ -219,10 +291,12 @@ export function VaultBrowserView({
           loadedSettings,
           loadedKnowledgeDomainRegistry,
           loadedKnowledgeTypeRegistry,
+          loadedDocumentIdValidation,
         ] = await Promise.all([
           window.mimora.getSettings(),
           window.mimora.loadKnowledgeDomainRegistry(),
           window.mimora.loadKnowledgeTypeRegistry(),
+          window.mimora.validateDocumentIds(),
         ]);
 
         if (!isActive) {
@@ -232,6 +306,7 @@ export function VaultBrowserView({
         setSettings(loadedSettings);
         setKnowledgeDomainRegistry(loadedKnowledgeDomainRegistry);
         setKnowledgeTypeRegistry(loadedKnowledgeTypeRegistry);
+        setDocumentIdValidation(loadedDocumentIdValidation);
         setSelectedVaultId((currentVaultId) => {
           if (loadedSettings.vaults.some((vault) => vault.id === currentVaultId)) {
             return currentVaultId;
@@ -625,6 +700,13 @@ export function VaultBrowserView({
           className="secondary-button"
           disabled={isLoadingFiles || isSearching}
           onClick={() => {
+            void window.mimora
+              .validateDocumentIds()
+              .then(setDocumentIdValidation)
+              .catch(() => {
+                setDocumentIdValidation(null);
+              });
+
             if (activeSearchQuery) {
               void searchVaultFiles();
             } else {
@@ -812,6 +894,13 @@ export function VaultBrowserView({
                   const isSelected =
                     selectedFileVaultId === result.vaultId &&
                     selectedFile?.relativePath === result.relativePath;
+                  const resultDocumentIdValidation =
+                    documentIdValidationByFile.get(
+                      createDocumentValidationKey(
+                        result.vaultId,
+                        result.relativePath,
+                      ),
+                    ) ?? null;
 
                   return (
                     <button
@@ -832,6 +921,11 @@ export function VaultBrowserView({
                         {isAiDerived ? (
                           <span className="ai-derived-source-badge">AI Wiki</span>
                         ) : null}
+                        {resultDocumentIdValidation?.status !== 'valid'
+                          ? renderDocumentIdStatusBadge(
+                              resultDocumentIdValidation,
+                            )
+                          : null}
                       </strong>
                       {result.snippet ? (
                         <span className="vault-search-snippet">“{result.snippet}”</span>
@@ -947,7 +1041,7 @@ export function VaultBrowserView({
                   >
                     <div className="vault-metadata-title">Mimora Metadata</div>
                     <div className="vault-metadata-row">
-                      <span>Document</span>
+                      <span>Document ID</span>
                       <div>
                         {selectedFileMetadata.metadata.documentId ? (
                           <span className="vault-metadata-value">
@@ -955,6 +1049,9 @@ export function VaultBrowserView({
                           </span>
                         ) : (
                           <span className="vault-metadata-empty">None</span>
+                        )}
+                        {renderDocumentIdStatusBadge(
+                          effectiveSelectedDocumentIdValidation,
                         )}
                       </div>
                     </div>

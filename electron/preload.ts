@@ -54,6 +54,7 @@ import type {
   VaultSearchInput,
   VaultSearchResult,
 } from '../src/vaultFiles';
+import type { DocumentIdValidationSummary } from '../src/documentIdValidation';
 
 function unwrapIpcResult<T>(result: MimoraIpcResult<T>): T {
   if (result.ok) {
@@ -116,6 +117,12 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('vaultFiles:list', vaultId) as Promise<
         MimoraIpcResult<VaultFile[]>
+      >
+    ).then(unwrapIpcResult),
+  validateDocumentIds: () =>
+    (
+      ipcRenderer.invoke('vaultFiles:validateDocumentIds') as Promise<
+        MimoraIpcResult<DocumentIdValidationSummary>
       >
     ).then(unwrapIpcResult),
   updateLocalAISettings: (input: LocalAISettings) =>

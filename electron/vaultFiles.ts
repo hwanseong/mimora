@@ -24,6 +24,12 @@ import type {
   DocumentMetadataValidationIssue,
   MimoraDocumentMetadata,
 } from '../src/metadata/types';
+import {
+  createEmptyDocumentIdCounts,
+  getDocumentIdFormatStatus,
+  type DocumentIdValidationDocument,
+  type DocumentIdValidationSummary,
+} from '../src/documentIdValidation';
 import type { KnowledgeDomainRegistry } from '../src/registry/knowledgeDomainRegistryTypes';
 import { resolveKnowledgeType } from '../src/registry/knowledgeTypeRegistryParser';
 import type { KnowledgeTypeRegistry } from '../src/registry/knowledgeTypeRegistryTypes';
@@ -40,6 +46,17 @@ type SettingsStore = ReturnType<typeof createSettingsStore>;
 
 function createVaultDocumentId(vaultId: string, relativePath: string): string {
   return JSON.stringify([vaultId, relativePath]);
+}
+
+function normalizeVaultRelativePath(relativePath: string): string {
+  return relativePath.replace(/\\/gu, '/').replace(/^\/+/u, '');
+}
+
+function createDocumentValidationKey(
+  vaultId: string,
+  relativePath: string,
+): string {
+  return JSON.stringify([vaultId, normalizeVaultRelativePath(relativePath)]);
 }
 
 function getFsErrorCode(error: unknown): string | null {
@@ -1539,6 +1556,127 @@ export function createVaultFilesService(
   }
 
   return {
+    async validateDocumentIds(): Promise<DocumentIdValidationSummary> {
+      const settings = await settingsStore.getSettings();
+      const documents: DocumentIdValidationDocument[] = [];
+      const documentsByKey = new Map<string, DocumentIdValidationDocument>();
+      const errors: DocumentIdValidationSummary['errors'] = [];
+
+      for (const vault of settings.vaults) {
+        try {
+          const rootPath = await resolveVaultRoot(vault);
+          const files: VaultFile[] = [];
+
+          await walkMarkdownFiles(rootPath, rootPath, [], files);
+
+          for (const file of files) {
+            try {
+              const content = await readMarkdownFile(rootPath, file.relativePath);
+              const metadataResult = parseMimoraDocumentMetadata(
+                content.content,
+                {},
+              );
+              const documentId =
+                metadataResult.metadata.documentId?.trim() || null;
+              const documentKey = createDocumentValidationKey(
+                vault.id,
+                file.relativePath,
+              );
+
+              if (documentsByKey.has(documentKey)) {
+                continue;
+              }
+
+              const validationDocument: DocumentIdValidationDocument = {
+                documentKey,
+                vaultId: vault.id,
+                vaultName: vault.name,
+                vaultType: vault.type,
+                vaultSecurity: vault.security,
+                relativePath: file.relativePath,
+                fileName: file.name,
+                documentId,
+                status: getDocumentIdFormatStatus(documentId),
+              };
+
+              documentsByKey.set(documentKey, validationDocument);
+              documents.push(validationDocument);
+            } catch (error) {
+              errors.push({
+                vaultId: vault.id,
+                vaultName: vault.name,
+                message:
+                  error instanceof Error
+                    ? `${file.relativePath}: ${error.message}`
+                    : `${file.relativePath}: Markdown file could not be read.`,
+              });
+            }
+          }
+        } catch (error) {
+          errors.push({
+            vaultId: vault.id,
+            vaultName: vault.name,
+            message:
+              error instanceof Error
+                ? error.message
+                : 'Vault could not be scanned.',
+          });
+        }
+      }
+
+      const documentsByValidId = new Map<
+        string,
+        Map<string, DocumentIdValidationDocument>
+      >();
+
+      for (const document of documents) {
+        if (!document.documentId || document.status !== 'valid') {
+          continue;
+        }
+
+        const documentsForId =
+          documentsByValidId.get(document.documentId) ??
+          new Map<string, DocumentIdValidationDocument>();
+
+        documentsForId.set(document.documentKey, document);
+        documentsByValidId.set(document.documentId, documentsForId);
+      }
+
+      for (const [documentId, documentsForId] of documentsByValidId) {
+        const uniqueDocuments = [...documentsForId.values()];
+
+        if (uniqueDocuments.length < 2) {
+          continue;
+        }
+
+        for (const document of uniqueDocuments) {
+          document.status = 'duplicate';
+          document.duplicateGroupId = documentId;
+        }
+      }
+
+      const counts = createEmptyDocumentIdCounts();
+
+      for (const document of documents) {
+        counts[document.status] += 1;
+      }
+
+      return {
+        scannedAt: new Date().toISOString(),
+        vaultCount: settings.vaults.length,
+        documentCount: documents.length,
+        counts,
+        documents,
+        duplicateGroups: [...documentsByValidId.entries()]
+          .map(([documentId, documentsForId]) => ({
+            documentId,
+            documents: [...documentsForId.values()],
+          }))
+          .filter((group) => group.documents.length > 1),
+        errors,
+      };
+    },
+
     async listVaultFiles(vaultId: unknown): Promise<VaultFile[]> {
       const vault = await getVault(settingsStore, vaultId);
       const rootPath = await resolveVaultRoot(vault);

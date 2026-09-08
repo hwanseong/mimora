@@ -80,6 +80,7 @@ import type {
   VaultFileContent,
   VaultSearchResult,
 } from '../src/vaultFiles';
+import type { DocumentIdValidationSummary } from '../src/documentIdValidation';
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
@@ -852,6 +853,12 @@ function registerLocalAIHandlers(): void {
 }
 
 function registerVaultFileHandlers(): void {
+  ipcMain.handle(
+    'vaultFiles:validateDocumentIds',
+    async (): Promise<MimoraIpcResult<DocumentIdValidationSummary>> =>
+      toIpcResult(() => vaultFilesService.validateDocumentIds()),
+  );
+
   ipcMain.handle(
     'vaultFiles:list',
     async (_event, vaultId: unknown): Promise<MimoraIpcResult<VaultFile[]>> =>
