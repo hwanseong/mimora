@@ -3,6 +3,14 @@ import {
   type DocumentSecurity,
   type MimoraDocumentMetadata,
 } from './metadata/types';
+import {
+  resolveKnowledgeDomain,
+} from './registry/knowledgeDomainRegistryParser';
+import {
+  resolveKnowledgeType,
+} from './registry/knowledgeTypeRegistryParser';
+import type { KnowledgeDomainRegistry } from './registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistry } from './registry/knowledgeTypeRegistryTypes';
 
 export type DerivedKnowledgeSource = {
   vaultId: string;
@@ -15,6 +23,13 @@ export type DerivedKnowledgeSource = {
   security: DocumentSecurity;
 };
 
+export type ExcludedKnowledgeSuggestion = {
+  value: string;
+  category: 'domain' | 'type';
+  reason: 'not-registered';
+  sourceCount: number;
+};
+
 export type DerivedKnowledgeDraft = {
   title: string;
   content: string;
@@ -23,6 +38,7 @@ export type DerivedKnowledgeDraft = {
   originWorkspaceId?: string | null;
   knowledgeDomains: string[];
   knowledgeTypes: string[];
+  excludedKnowledgeSuggestions: ExcludedKnowledgeSuggestion[];
   security: DocumentSecurity;
   contentOrigin: 'ai-derived';
   targetVaultId: string;
@@ -44,6 +60,8 @@ export type DerivedKnowledgeSuggestionInput = {
   content: string;
   sourceDocuments: DerivedKnowledgeSource[];
   sourceMetadata: MimoraDocumentMetadata[];
+  knowledgeDomainRegistry?: KnowledgeDomainRegistry | null;
+  knowledgeTypeRegistry?: KnowledgeTypeRegistry | null;
   fallbackWorkspaceId?: string | null;
   fallbackKnowledgeDomain?: string | null;
   fallbackKnowledgeType?: string | null;
@@ -95,6 +113,38 @@ function createDraftTitle(question: string): string {
   return normalizedQuestion || 'AI Wiki Draft';
 }
 
+function normalizeExcludedKnowledgeSuggestions(
+  suggestions: ExcludedKnowledgeSuggestion[] = [],
+): ExcludedKnowledgeSuggestion[] {
+  const merged = new Map<string, ExcludedKnowledgeSuggestion>();
+
+  for (const suggestion of suggestions) {
+    const value = suggestion.value.trim();
+
+    if (!value) {
+      continue;
+    }
+
+    const key = `${suggestion.category}:${value}`;
+    const current = merged.get(key);
+
+    merged.set(key, {
+      value,
+      category: suggestion.category,
+      reason: 'not-registered',
+      sourceCount:
+        (current?.sourceCount ?? 0) + Math.max(1, suggestion.sourceCount),
+    });
+  }
+
+  return [...merged.values()].sort(
+    (left, right) =>
+      left.category.localeCompare(right.category) ||
+      right.sourceCount - left.sourceCount ||
+      left.value.localeCompare(right.value),
+  );
+}
+
 export function normalizeDerivedKnowledgeDraft(
   draft: DerivedKnowledgeDraft,
 ): DerivedKnowledgeDraft {
@@ -120,6 +170,9 @@ export function normalizeDerivedKnowledgeDraft(
     originWorkspaceId: draft.originWorkspaceId?.trim() || null,
     knowledgeDomains: uniqueValues(draft.knowledgeDomains),
     knowledgeTypes: uniqueValues(draft.knowledgeTypes),
+    excludedKnowledgeSuggestions: normalizeExcludedKnowledgeSuggestions(
+      draft.excludedKnowledgeSuggestions,
+    ),
     security,
     contentOrigin: 'ai-derived',
     targetVaultId: draft.targetVaultId.trim(),
@@ -179,6 +232,130 @@ export function validateDerivedKnowledgeDraft(
   return errors;
 }
 
+function createExcludedSuggestionsFromCounts(
+  counts: Map<string, number>,
+  category: ExcludedKnowledgeSuggestion['category'],
+): ExcludedKnowledgeSuggestion[] {
+  return [...counts.entries()].map(([value, sourceCount]) => ({
+    value,
+    category,
+    reason: 'not-registered',
+    sourceCount,
+  }));
+}
+
+function resolveDomainSuggestions(input: {
+  sourceDocuments: DerivedKnowledgeSource[];
+  sourceMetadata: MimoraDocumentMetadata[];
+  registry?: KnowledgeDomainRegistry | null;
+  fallback?: string | null;
+}): {
+  suggestions: string[];
+  excluded: ExcludedKnowledgeSuggestion[];
+} {
+  const rawValues = [
+    ...input.sourceDocuments.flatMap((source) => source.knowledgeDomains),
+    ...input.sourceMetadata.flatMap((metadata) =>
+      metadata.rawKnowledgeDomains?.length
+        ? metadata.rawKnowledgeDomains
+        : metadata.knowledgeDomains,
+    ),
+  ];
+
+  if (!input.registry) {
+    return {
+      suggestions:
+        rawValues.length > 0
+          ? rankValues(rawValues, 3)
+          : uniqueValues(input.fallback ? [input.fallback] : []),
+      excluded: [],
+    };
+  }
+
+  const resolvedValues: string[] = [];
+  const excludedCounts = new Map<string, number>();
+
+  for (const value of rawValues) {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      continue;
+    }
+
+    const resolved = resolveKnowledgeDomain(trimmedValue, input.registry);
+
+    if (resolved.canonicalName) {
+      resolvedValues.push(resolved.canonicalName);
+    } else {
+      excludedCounts.set(trimmedValue, (excludedCounts.get(trimmedValue) ?? 0) + 1);
+    }
+  }
+
+  return {
+    suggestions:
+      resolvedValues.length > 0
+        ? rankValues(resolvedValues, 3)
+        : uniqueValues(input.fallback ? [input.fallback] : []),
+    excluded: createExcludedSuggestionsFromCounts(excludedCounts, 'domain'),
+  };
+}
+
+function resolveTypeSuggestions(input: {
+  sourceDocuments: DerivedKnowledgeSource[];
+  sourceMetadata: MimoraDocumentMetadata[];
+  registry?: KnowledgeTypeRegistry | null;
+  fallback?: string | null;
+}): {
+  suggestions: string[];
+  excluded: ExcludedKnowledgeSuggestion[];
+} {
+  const rawValues = [
+    ...input.sourceDocuments.flatMap((source) => source.knowledgeTypes),
+    ...input.sourceMetadata.flatMap((metadata) =>
+      metadata.rawKnowledgeTypes?.length
+        ? metadata.rawKnowledgeTypes
+        : metadata.knowledgeTypes,
+    ),
+  ];
+
+  if (!input.registry) {
+    return {
+      suggestions:
+        rawValues.length > 0
+          ? rankValues(rawValues, 1)
+          : uniqueValues(input.fallback ? [input.fallback] : []),
+      excluded: [],
+    };
+  }
+
+  const resolvedValues: string[] = [];
+  const excludedCounts = new Map<string, number>();
+
+  for (const value of rawValues) {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      continue;
+    }
+
+    const resolved = resolveKnowledgeType(trimmedValue, input.registry);
+
+    if (resolved) {
+      resolvedValues.push(resolved);
+    } else {
+      excludedCounts.set(trimmedValue, (excludedCounts.get(trimmedValue) ?? 0) + 1);
+    }
+  }
+
+  return {
+    suggestions:
+      resolvedValues.length > 0
+        ? rankValues(resolvedValues, 1)
+        : uniqueValues(input.fallback ? [input.fallback] : []),
+    excluded: createExcludedSuggestionsFromCounts(excludedCounts, 'type'),
+  };
+}
+
 export function createDerivedKnowledgeSuggestion(
   input: DerivedKnowledgeSuggestionInput,
 ): DerivedKnowledgeDraft {
@@ -204,24 +381,18 @@ export function createDerivedKnowledgeSuggestion(
       : sourceOriginWorkspaceIds.length === 0
         ? workspaceIds[0] ?? null
         : null;
-  const sourceKnowledgeDomains = [
-    ...input.sourceDocuments.flatMap((source) => source.knowledgeDomains),
-    ...input.sourceMetadata.flatMap((metadata) => metadata.knowledgeDomains),
-  ];
-  const sourceKnowledgeTypes = [
-    ...input.sourceDocuments.flatMap((source) => source.knowledgeTypes),
-    ...input.sourceMetadata.flatMap((metadata) => metadata.knowledgeTypes),
-  ];
-  const knowledgeDomains =
-    sourceKnowledgeDomains.length > 0
-      ? rankValues(sourceKnowledgeDomains, 3)
-      : uniqueValues(
-          input.fallbackKnowledgeDomain ? [input.fallbackKnowledgeDomain] : [],
-        );
-  const knowledgeTypes =
-    sourceKnowledgeTypes.length > 0
-      ? rankValues(sourceKnowledgeTypes, 1)
-      : uniqueValues(input.fallbackKnowledgeType ? [input.fallbackKnowledgeType] : []);
+  const domainResult = resolveDomainSuggestions({
+    sourceDocuments: input.sourceDocuments,
+    sourceMetadata: input.sourceMetadata,
+    registry: input.knowledgeDomainRegistry,
+    fallback: input.fallbackKnowledgeDomain,
+  });
+  const typeResult = resolveTypeSuggestions({
+    sourceDocuments: input.sourceDocuments,
+    sourceMetadata: input.sourceMetadata,
+    registry: input.knowledgeTypeRegistry,
+    fallback: input.fallbackKnowledgeType,
+  });
   const title = createDraftTitle(input.question);
 
   return normalizeDerivedKnowledgeDraft({
@@ -230,8 +401,12 @@ export function createDerivedKnowledgeSuggestion(
     sourceDocuments: input.sourceDocuments,
     workspaceIds,
     originWorkspaceId,
-    knowledgeDomains,
-    knowledgeTypes,
+    knowledgeDomains: domainResult.suggestions,
+    knowledgeTypes: typeResult.suggestions,
+    excludedKnowledgeSuggestions: [
+      ...domainResult.excluded,
+      ...typeResult.excluded,
+    ],
     security: deriveSecurityFromSources(input.sourceDocuments),
     contentOrigin: 'ai-derived',
     targetVaultId: input.targetVaultId,

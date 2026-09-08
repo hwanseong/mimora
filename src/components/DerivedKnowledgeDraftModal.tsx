@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   buildDerivedKnowledgeBodyMarkdown,
   buildDerivedKnowledgeMarkdown,
@@ -6,6 +6,7 @@ import {
   normalizeDerivedKnowledgeDraft,
   validateDerivedKnowledgeDraft,
   type DerivedKnowledgeDraft,
+  type ExcludedKnowledgeSuggestion,
 } from '../derivedKnowledge';
 import type { KnowledgeDomain } from '../registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeType } from '../registry/knowledgeTypeRegistryTypes';
@@ -31,12 +32,58 @@ function isPrivateTargetCandidate(vault: VaultConfig): boolean {
   return vault.type === 'private' || vault.security !== 'internal';
 }
 
-function displayValue(value?: string | null, fallback = '자동 추론 불가'): string {
+function displayValue(
+  value?: string | null,
+  fallback = '자동 추론 불가',
+): string {
   return value?.trim() ? value : fallback;
 }
 
 function displayValues(values: string[], fallback = '미선택'): string {
   return values.length > 0 ? values.join(', ') : fallback;
+}
+
+function getExclusions(
+  suggestions: ExcludedKnowledgeSuggestion[],
+  category: ExcludedKnowledgeSuggestion['category'],
+): ExcludedKnowledgeSuggestion[] {
+  return suggestions.filter((suggestion) => suggestion.category === category);
+}
+
+function ExcludedSuggestionList({
+  categoryLabel,
+  suggestions,
+}: {
+  categoryLabel: string;
+  suggestions: ExcludedKnowledgeSuggestion[];
+}) {
+  if (suggestions.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="derived-excluded-suggestions">
+      <strong>{categoryLabel} 추천 제외</strong>
+      <ul>
+        {suggestions.map((suggestion) => (
+          <li key={`${suggestion.category}:${suggestion.value}`}>
+            <span>{suggestion.value}</span>
+            <small>
+              Registry 미등록 · Source metadata {suggestion.sourceCount}회
+            </small>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function MetadataValue({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return <dd className="derived-metadata-value">{children}</dd>;
 }
 
 export function DerivedKnowledgeDraftModal({
@@ -72,6 +119,18 @@ export function DerivedKnowledgeDraftModal({
       ? vaults.filter(isPrivateTargetCandidate)
       : vaults;
   const sourceCount = normalizedDraft.sourceDocuments.length;
+  const targetVault = vaults.find(
+    (vault) => vault.id === normalizedDraft.targetVaultId,
+  );
+  const domainExclusions = getExclusions(
+    normalizedDraft.excludedKnowledgeSuggestions,
+    'domain',
+  );
+  const typeExclusions = getExclusions(
+    normalizedDraft.excludedKnowledgeSuggestions,
+    'type',
+  );
+  const hasExclusions = domainExclusions.length > 0 || typeExclusions.length > 0;
 
   function changeTitle(title: string): void {
     const currentAutoFilename = createDraftFilename(draft.title);
@@ -169,6 +228,7 @@ export function DerivedKnowledgeDraftModal({
                     knowledgeDomains: splitCommaValues(event.target.value),
                   });
                 }}
+                placeholder="미선택"
                 value={joinValues(draft.knowledgeDomains)}
               />
             </label>
@@ -177,6 +237,11 @@ export function DerivedKnowledgeDraftModal({
                 <option key={domain.canonicalName} value={domain.canonicalName} />
               ))}
             </datalist>
+            {domainExclusions.length > 0 ? (
+              <p className="derived-draft-warning">
+                일부 Source Domain은 Registry에 없어 추천에서 제외했습니다.
+              </p>
+            ) : null}
             <label>
               <span>Knowledge Type</span>
               <select
@@ -190,7 +255,7 @@ export function DerivedKnowledgeDraftModal({
                 }}
                 value={draft.knowledgeTypes[0] ?? ''}
               >
-                <option value="">Select type</option>
+                <option value="">미선택</option>
                 {knowledgeTypeOptions.map((type) => (
                   <option key={type.canonicalName} value={type.canonicalName}>
                     {type.canonicalName}
@@ -198,6 +263,11 @@ export function DerivedKnowledgeDraftModal({
                 ))}
               </select>
             </label>
+            {typeExclusions.length > 0 ? (
+              <p className="derived-draft-warning">
+                일부 Source Type은 Registry에 없어 추천에서 제외했습니다.
+              </p>
+            ) : null}
             <label>
               <span>Target Vault</span>
               <select
@@ -251,42 +321,82 @@ export function DerivedKnowledgeDraftModal({
             <section className="derived-metadata-preview-card">
               <div className="derived-draft-preview-heading">
                 <strong>Rendered Metadata Preview</strong>
-                <span>저장 metadata와 동일</span>
+                <span>저장 metadata와 동기화</span>
               </div>
               <dl>
                 <div>
                   <dt>Document ID</dt>
-                  <dd>{displayValue(normalizedDraft.documentId, '미입력')}</dd>
+                  <MetadataValue>
+                    {displayValue(normalizedDraft.documentId, '미입력')}
+                  </MetadataValue>
+                </div>
+                <div>
+                  <dt>Filename</dt>
+                  <MetadataValue>{displayValue(normalizedDraft.filename)}</MetadataValue>
                 </div>
                 <div>
                   <dt>Workspace IDs</dt>
-                  <dd>{displayValues(normalizedDraft.workspaceIds)}</dd>
+                  <MetadataValue>
+                    {displayValues(normalizedDraft.workspaceIds)}
+                  </MetadataValue>
                 </div>
                 <div>
                   <dt>Origin Workspace</dt>
-                  <dd>{displayValue(normalizedDraft.originWorkspaceId)}</dd>
+                  <MetadataValue>
+                    {displayValue(normalizedDraft.originWorkspaceId)}
+                  </MetadataValue>
                 </div>
                 <div>
                   <dt>Knowledge Domains</dt>
-                  <dd>{displayValues(normalizedDraft.knowledgeDomains)}</dd>
+                  <MetadataValue>
+                    {displayValues(normalizedDraft.knowledgeDomains)}
+                  </MetadataValue>
                 </div>
                 <div>
                   <dt>Knowledge Type</dt>
-                  <dd>{displayValues(normalizedDraft.knowledgeTypes)}</dd>
+                  <MetadataValue>
+                    {displayValues(normalizedDraft.knowledgeTypes)}
+                  </MetadataValue>
                 </div>
                 <div>
                   <dt>Security</dt>
-                  <dd>{normalizedDraft.security.toUpperCase()}</dd>
+                  <MetadataValue>{normalizedDraft.security.toUpperCase()}</MetadataValue>
+                </div>
+                <div>
+                  <dt>Target Vault</dt>
+                  <MetadataValue>
+                    {targetVault
+                      ? `${targetVault.name} · ${vaultTypeLabels[targetVault.type]}`
+                      : '미선택'}
+                  </MetadataValue>
                 </div>
                 <div>
                   <dt>Content Origin</dt>
-                  <dd>AI Derived</dd>
+                  <MetadataValue>AI Derived</MetadataValue>
                 </div>
                 <div>
                   <dt>Sources</dt>
-                  <dd>{sourceCount} documents</dd>
+                  <MetadataValue>{sourceCount} documents</MetadataValue>
+                </div>
+                <div>
+                  <dt>추천 근거</dt>
+                  <MetadataValue>
+                    Source metadata {sourceCount} documents
+                  </MetadataValue>
                 </div>
               </dl>
+              {hasExclusions ? (
+                <div className="derived-excluded-suggestion-grid">
+                  <ExcludedSuggestionList
+                    categoryLabel="Domain"
+                    suggestions={domainExclusions}
+                  />
+                  <ExcludedSuggestionList
+                    categoryLabel="Type"
+                    suggestions={typeExclusions}
+                  />
+                </div>
+              ) : null}
             </section>
             <section className="derived-body-preview-card">
               <div className="derived-draft-preview-heading">

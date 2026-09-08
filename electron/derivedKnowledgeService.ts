@@ -119,6 +119,36 @@ function validateSaveInput(input: unknown): SaveDerivedKnowledgeInput {
     knowledgeTypes: candidate.knowledgeTypes.filter(
       (value): value is string => typeof value === 'string',
     ),
+    excludedKnowledgeSuggestions: Array.isArray(
+      candidate.excludedKnowledgeSuggestions,
+    )
+      ? candidate.excludedKnowledgeSuggestions.flatMap((suggestion) => {
+          if (
+            typeof suggestion !== 'object' ||
+            suggestion === null ||
+            Array.isArray(suggestion)
+          ) {
+            return [];
+          }
+
+          const item = suggestion as Partial<
+            SaveDerivedKnowledgeInput['excludedKnowledgeSuggestions'][number]
+          >;
+
+          return typeof item.value === 'string' &&
+            (item.category === 'domain' || item.category === 'type')
+            ? [
+                {
+                  value: item.value,
+                  category: item.category,
+                  reason: 'not-registered' as const,
+                  sourceCount:
+                    typeof item.sourceCount === 'number' ? item.sourceCount : 1,
+                },
+              ]
+            : [];
+        })
+      : [],
     security: candidate.security === 'private' ? 'private' : 'normal',
     contentOrigin: 'ai-derived',
     targetVaultId: candidate.targetVaultId,

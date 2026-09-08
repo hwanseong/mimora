@@ -557,6 +557,8 @@ export function App() {
       content: input.assistantMessage.content,
       sourceDocuments,
       sourceMetadata: allMetadata,
+      knowledgeDomainRegistry: getKnowledgeDomainRegistryForDraft(),
+      knowledgeTypeRegistry: getKnowledgeTypeRegistryForDraft(),
       fallbackWorkspaceId: !isAllWorkspaceScope(input.workspaceId)
         ? input.workspaceId
         : null,
