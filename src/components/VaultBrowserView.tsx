@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   createAttachedContextId,
   type AttachedContext,
@@ -16,10 +16,37 @@ import type {
   VaultSearchScope,
 } from '../vaultFiles';
 import type { Workspace } from '../workspaces';
+import { parseMimoraDocumentMetadata } from '../metadata/mimoraMetadataParser';
+import type { MimoraMetadataParseResult } from '../metadata/types';
+import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistryParseResult } from '../registry/knowledgeTypeRegistryTypes';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 function getErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function hasDifferentNormalizedValues(
+  rawValues: string[] | undefined,
+  normalizedValues: string[],
+): boolean {
+  if (!rawValues || rawValues.length !== normalizedValues.length) {
+    return Boolean(rawValues?.length || normalizedValues.length);
+  }
+
+  return rawValues.some((rawValue, index) => rawValue !== normalizedValues[index]);
+}
+
+function renderMetadataChips(values: string[]) {
+  if (values.length === 0) {
+    return <span className="vault-metadata-empty">None</span>;
+  }
+
+  return values.map((value) => (
+    <span className="vault-metadata-chip" key={value}>
+      {value}
+    </span>
+  ));
 }
 
 export function VaultBrowserView({
@@ -37,6 +64,10 @@ export function VaultBrowserView({
   const [selectedFile, setSelectedFile] = useState<VaultFile | null>(null);
   const [selectedFileVaultId, setSelectedFileVaultId] = useState('');
   const [fileContent, setFileContent] = useState<VaultFileContent | null>(null);
+  const [knowledgeDomainRegistry, setKnowledgeDomainRegistry] =
+    useState<KnowledgeDomainRegistryParseResult | null>(null);
+  const [knowledgeTypeRegistry, setKnowledgeTypeRegistry] =
+    useState<KnowledgeTypeRegistryParseResult | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] =
     useState<VaultSearchScope>('current');
@@ -77,19 +108,58 @@ export function VaultBrowserView({
       !isLoadingPreview &&
       !previewError,
   );
+  const selectedFileMetadata = useMemo<MimoraMetadataParseResult | null>(() => {
+    if (!fileContent) {
+      return null;
+    }
+
+    return parseMimoraDocumentMetadata(fileContent.content, {
+      knowledgeDomainRegistry: knowledgeDomainRegistry?.registry ?? null,
+      knowledgeTypeRegistry: knowledgeTypeRegistry?.registry ?? null,
+      knowledgeDomainRegistryUnavailable:
+        knowledgeDomainRegistry !== null && !knowledgeDomainRegistry.registry,
+      knowledgeTypeRegistryUnavailable:
+        knowledgeTypeRegistry !== null && !knowledgeTypeRegistry.registry,
+    });
+  }, [fileContent, knowledgeDomainRegistry, knowledgeTypeRegistry]);
+  const metadataWarnings =
+    selectedFileMetadata?.issues.filter(
+      (issue) =>
+        issue.severity === 'warning' &&
+        (issue.field === 'knowledge_domains' ||
+          issue.field === 'knowledge_type'),
+    ) ?? [];
+  const hasKnowledgeMetadata = Boolean(
+    selectedFileMetadata &&
+      (selectedFileMetadata.metadata.rawKnowledgeDomains?.length ||
+        selectedFileMetadata.metadata.knowledgeDomains.length ||
+        selectedFileMetadata.metadata.rawKnowledgeTypes?.length ||
+        selectedFileMetadata.metadata.knowledgeTypes.length ||
+        metadataWarnings.length),
+  );
 
   useEffect(() => {
     let isActive = true;
 
     async function loadSettings(): Promise<void> {
       try {
-        const loadedSettings = await window.mimora.getSettings();
+        const [
+          loadedSettings,
+          loadedKnowledgeDomainRegistry,
+          loadedKnowledgeTypeRegistry,
+        ] = await Promise.all([
+          window.mimora.getSettings(),
+          window.mimora.loadKnowledgeDomainRegistry(),
+          window.mimora.loadKnowledgeTypeRegistry(),
+        ]);
 
         if (!isActive) {
           return;
         }
 
         setSettings(loadedSettings);
+        setKnowledgeDomainRegistry(loadedKnowledgeDomainRegistry);
+        setKnowledgeTypeRegistry(loadedKnowledgeTypeRegistry);
         setSelectedVaultId((currentVaultId) => {
           if (loadedSettings.vaults.some((vault) => vault.id === currentVaultId)) {
             return currentVaultId;
@@ -622,10 +692,75 @@ export function VaultBrowserView({
               </p>
             ) : null}
             {selectedFile && !isLoadingPreview && !previewError && fileContent ? (
-              <MarkdownRenderer
-                className="vault-preview-markdown"
-                content={fileContent.content}
-              />
+              <>
+                {hasKnowledgeMetadata && selectedFileMetadata ? (
+                  <section
+                    aria-label="Normalized Mimora Metadata"
+                    className="vault-metadata-summary"
+                  >
+                    <div className="vault-metadata-row">
+                      <span>Domains</span>
+                      <div>
+                        {renderMetadataChips(
+                          selectedFileMetadata.metadata.knowledgeDomains,
+                        )}
+                      </div>
+                    </div>
+                    {hasDifferentNormalizedValues(
+                      selectedFileMetadata.metadata.rawKnowledgeDomains,
+                      selectedFileMetadata.metadata.knowledgeDomains,
+                    ) ? (
+                      <div className="vault-metadata-row muted">
+                        <span>Raw</span>
+                        <div>
+                          {renderMetadataChips(
+                            selectedFileMetadata.metadata.rawKnowledgeDomains ??
+                              [],
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="vault-metadata-row">
+                      <span>Type</span>
+                      <div>
+                        {renderMetadataChips(
+                          selectedFileMetadata.metadata.knowledgeTypes,
+                        )}
+                      </div>
+                    </div>
+                    {hasDifferentNormalizedValues(
+                      selectedFileMetadata.metadata.rawKnowledgeTypes,
+                      selectedFileMetadata.metadata.knowledgeTypes,
+                    ) ? (
+                      <div className="vault-metadata-row muted">
+                        <span>Raw</span>
+                        <div>
+                          {renderMetadataChips(
+                            selectedFileMetadata.metadata.rawKnowledgeTypes ??
+                              [],
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                    {metadataWarnings.length > 0 ? (
+                      <div className="vault-metadata-warnings">
+                        <strong>Metadata warnings</strong>
+                        <ul>
+                          {metadataWarnings.map((issue, index) => (
+                            <li key={`${issue.code}-${index}`}>
+                              {issue.message}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                  </section>
+                ) : null}
+                <MarkdownRenderer
+                  className="vault-preview-markdown"
+                  content={fileContent.content}
+                />
+              </>
             ) : null}
           </div>
         </section>

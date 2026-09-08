@@ -236,6 +236,8 @@ export function parseMimoraDocumentMetadata(
     knownWorkspaceIds?: Iterable<string>;
     knowledgeDomainRegistry?: KnowledgeDomainRegistry | null;
     knowledgeTypeRegistry?: KnowledgeTypeRegistry | null;
+    knowledgeDomainRegistryUnavailable?: boolean;
+    knowledgeTypeRegistryUnavailable?: boolean;
   } = {},
 ): MimoraMetadataParseResult {
   const normalizedMarkdown = normalizeMarkdownText(markdown);
@@ -370,7 +372,7 @@ export function parseMimoraDocumentMetadata(
           createIssue({
             severity: 'warning',
             code: 'unknown-knowledge-domain',
-            message: 'Knowledge Domain Registry에 존재하지 않는 domain입니다.',
+            message: `등록되지 않은 Knowledge Domain입니다: ${rawKnowledgeDomain}`,
             field: 'knowledge_domains',
             documentId,
           }),
@@ -379,8 +381,35 @@ export function parseMimoraDocumentMetadata(
     }
 
     metadata.knowledgeDomains = uniqueValues(normalizedDomains);
+
+    if (metadata.knowledgeDomains.length !== normalizedDomains.length) {
+      issues.push(
+        createIssue({
+          severity: 'warning',
+          code: 'duplicate-normalized-domain',
+          message: '여러 knowledge_domains 값이 같은 canonical domain으로 정규화되었습니다.',
+          field: 'knowledge_domains',
+          documentId,
+        }),
+      );
+    }
   } else {
     metadata.knowledgeDomains = rawKnowledgeDomains;
+
+    if (
+      options.knowledgeDomainRegistryUnavailable &&
+      rawKnowledgeDomains.length > 0
+    ) {
+      issues.push(
+        createIssue({
+          severity: 'warning',
+          code: 'knowledge-domain-registry-unavailable',
+          message: 'Knowledge Domain Registry를 읽을 수 없어 raw domain 값을 유지했습니다.',
+          field: 'knowledge_domains',
+          documentId,
+        }),
+      );
+    }
   }
 
   const rawKnowledgeTypes = splitListValue(table.values.get('knowledge_type') ?? '');
@@ -402,7 +431,7 @@ export function parseMimoraDocumentMetadata(
           createIssue({
             severity: 'warning',
             code: 'unknown-knowledge-type',
-            message: 'Knowledge Type Registry에 존재하지 않는 type입니다.',
+            message: `등록되지 않은 Knowledge Type입니다: ${rawKnowledgeType}`,
             field: 'knowledge_type',
             documentId,
           }),
@@ -413,6 +442,21 @@ export function parseMimoraDocumentMetadata(
     metadata.knowledgeTypes = uniqueValues(normalizedTypes);
   } else {
     metadata.knowledgeTypes = rawKnowledgeTypes;
+
+    if (
+      options.knowledgeTypeRegistryUnavailable &&
+      rawKnowledgeTypes.length > 0
+    ) {
+      issues.push(
+        createIssue({
+          severity: 'warning',
+          code: 'knowledge-type-registry-unavailable',
+          message: 'Knowledge Type Registry를 읽을 수 없어 raw type 값을 유지했습니다.',
+          field: 'knowledge_type',
+          documentId,
+        }),
+      );
+    }
   }
 
   const security = table.values.get('security')?.trim() as

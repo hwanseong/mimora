@@ -470,6 +470,8 @@ type ParsedDocumentMetadata = {
 type MetadataRegistryOptions = {
   knowledgeDomainRegistry?: KnowledgeDomainRegistry | null;
   knowledgeTypeRegistry?: KnowledgeTypeRegistry | null;
+  knowledgeDomainRegistryUnavailable?: boolean;
+  knowledgeTypeRegistryUnavailable?: boolean;
 };
 
 type DocumentEligibilityResult = {
@@ -1361,6 +1363,8 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
     return {
       knowledgeDomainRegistry: domainRegistry?.registry ?? null,
       knowledgeTypeRegistry: typeRegistry?.registry ?? null,
+      knowledgeDomainRegistryUnavailable: !domainRegistry?.registry,
+      knowledgeTypeRegistryUnavailable: !typeRegistry?.registry,
     };
   }
 
