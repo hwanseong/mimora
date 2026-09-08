@@ -21,6 +21,13 @@ import {
   hasActiveKnowledgeSearchFilters,
   type KnowledgeSearchFilters,
 } from '../knowledgeSearch';
+import {
+  contentOriginSearchScopeLabels,
+  contentOriginSearchScopes,
+  getEffectiveContentOrigin,
+  isAiDerivedDocument,
+  type ContentOriginSearchScope,
+} from '../contentOrigin';
 import { parseMimoraDocumentMetadata } from '../metadata/mimoraMetadataParser';
 import type { MimoraMetadataParseResult } from '../metadata/types';
 import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
@@ -57,13 +64,18 @@ function renderMetadataChips(values: string[]) {
 function createSearchLabel(
   query: string,
   knowledgeFilters: KnowledgeSearchFilters,
+  contentOriginScope: ContentOriginSearchScope,
 ): string | null {
   if (query) {
     return query;
   }
 
-  return hasActiveKnowledgeSearchFilters(knowledgeFilters)
-    ? 'Knowledge filters'
+  if (hasActiveKnowledgeSearchFilters(knowledgeFilters)) {
+    return 'Knowledge filters';
+  }
+
+  return contentOriginScope !== 'all'
+    ? `Source: ${contentOriginSearchScopeLabels[contentOriginScope]}`
     : null;
 }
 
@@ -121,6 +133,8 @@ export function VaultBrowserView({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchScope, setSearchScope] =
     useState<VaultSearchScope>('current');
+  const [contentOriginScope, setContentOriginScope] =
+    useState<ContentOriginSearchScope>('all');
   const [knowledgeSearchFilters, setKnowledgeSearchFilters] =
     useState<KnowledgeSearchFilters>(emptyKnowledgeSearchFilters);
   const [activeSearchQuery, setActiveSearchQuery] = useState<string | null>(null);
@@ -352,6 +366,7 @@ export function VaultBrowserView({
 
   function resetSearch(): void {
     setSearchQuery('');
+    setContentOriginScope('all');
     setKnowledgeSearchFilters(emptyKnowledgeSearchFilters);
     clearSearchResults();
   }
@@ -370,11 +385,13 @@ export function VaultBrowserView({
     query = searchQuery,
     scope = searchScope,
     knowledgeFilters = knowledgeSearchFilters,
+    sourceScope = contentOriginScope,
     vaultId = selectedVaultId,
   }: {
     query?: string;
     scope?: VaultSearchScope;
     knowledgeFilters?: KnowledgeSearchFilters;
+    sourceScope?: ContentOriginSearchScope;
     vaultId?: string;
   } = {}): Promise<void> {
     const trimmedQuery = query.trim();
@@ -385,7 +402,8 @@ export function VaultBrowserView({
 
     if (
       !trimmedQuery &&
-      !hasActiveKnowledgeSearchFilters(normalizedKnowledgeFilters)
+      !hasActiveKnowledgeSearchFilters(normalizedKnowledgeFilters) &&
+      sourceScope === 'all'
     ) {
       resetSearch();
       return;
@@ -394,7 +412,7 @@ export function VaultBrowserView({
     const requestSequence = searchRequestSequence.current + 1;
     searchRequestSequence.current = requestSequence;
     setActiveSearchQuery(
-      createSearchLabel(trimmedQuery, normalizedKnowledgeFilters),
+      createSearchLabel(trimmedQuery, normalizedKnowledgeFilters, sourceScope),
     );
     setSearchError(null);
     setIsSearching(true);
@@ -405,6 +423,7 @@ export function VaultBrowserView({
         selectedType: normalizedKnowledgeFilters.types[0] ?? '',
         requestDomains: normalizedKnowledgeFilters.domains,
         requestTypes: normalizedKnowledgeFilters.types,
+        contentOriginScope: sourceScope,
       });
     }
 
@@ -413,6 +432,7 @@ export function VaultBrowserView({
         query: trimmedQuery,
         scope,
         knowledgeFilters: normalizedKnowledgeFilters,
+        contentOriginScope: sourceScope,
         ...(scope === 'current' ? { vaultId } : {}),
       });
 
@@ -450,10 +470,30 @@ export function VaultBrowserView({
   ): void {
     setKnowledgeSearchFilters(nextFilters);
 
-    if (searchQuery.trim() || hasActiveKnowledgeSearchFilters(nextFilters)) {
+    if (
+      searchQuery.trim() ||
+      hasActiveKnowledgeSearchFilters(nextFilters) ||
+      contentOriginScope !== 'all'
+    ) {
       void searchVaultFiles({ knowledgeFilters: nextFilters });
     } else {
       resetSearch();
+    }
+  }
+
+  function updateContentOriginScope(
+    nextContentOriginScope: ContentOriginSearchScope,
+  ): void {
+    setContentOriginScope(nextContentOriginScope);
+
+    if (
+      searchQuery.trim() ||
+      hasActiveKnowledgeSearchFilters(knowledgeSearchFilters) ||
+      nextContentOriginScope !== 'all'
+    ) {
+      void searchVaultFiles({ sourceScope: nextContentOriginScope });
+    } else {
+      clearSearchResults();
     }
   }
 
@@ -641,7 +681,8 @@ export function VaultBrowserView({
 
             if (
               !nextQuery.trim() &&
-              !hasActiveKnowledgeSearchFilters(knowledgeSearchFilters)
+              !hasActiveKnowledgeSearchFilters(knowledgeSearchFilters) &&
+              contentOriginScope === 'all'
             ) {
               clearSearchResults();
             }
@@ -658,7 +699,8 @@ export function VaultBrowserView({
 
             if (
               searchQuery.trim() ||
-              hasActiveKnowledgeSearchFilters(knowledgeSearchFilters)
+              hasActiveKnowledgeSearchFilters(knowledgeSearchFilters) ||
+              contentOriginScope !== 'all'
             ) {
               void searchVaultFiles({ scope: nextScope });
             } else {
@@ -669,6 +711,21 @@ export function VaultBrowserView({
         >
           <option value="current">현재 Vault</option>
           <option value="all">전체 Vault</option>
+        </select>
+        <select
+          aria-label="Content Origin filter"
+          onChange={(event) => {
+            updateContentOriginScope(
+              event.target.value as ContentOriginSearchScope,
+            );
+          }}
+          value={contentOriginScope}
+        >
+          {contentOriginSearchScopes.map((scope) => (
+            <option key={scope} value={scope}>
+              Source {contentOriginSearchScopeLabels[scope]}
+            </option>
+          ))}
         </select>
         <select
           aria-label="Knowledge Domain filter"
@@ -747,6 +804,7 @@ export function VaultBrowserView({
               ? searchResults.map((result) => {
                   const isSensitive =
                     result.vaultType === 'private' || result.security === 'sensitive';
+                  const isAiDerived = isAiDerivedDocument(result.metadata);
                   const isSelected =
                     selectedFileVaultId === result.vaultId &&
                     selectedFile?.relativePath === result.relativePath;
@@ -765,7 +823,12 @@ export function VaultBrowserView({
                         {result.vaultName} · {vaultTypeLabels[result.vaultType]} ·{' '}
                         {vaultSecurityLabels[result.security]}
                       </span>
-                      <strong>{result.relativePath}</strong>
+                      <strong>
+                        {result.relativePath}
+                        {isAiDerived ? (
+                          <span className="ai-derived-source-badge">AI Wiki</span>
+                        ) : null}
+                      </strong>
                       {result.snippet ? (
                         <span className="vault-search-snippet">“{result.snippet}”</span>
                       ) : null}
@@ -944,13 +1007,13 @@ export function VaultBrowserView({
                     <div className="vault-metadata-row">
                       <span>Content Origin</span>
                       <div>
-                        {selectedFileMetadata.metadata.contentOrigin ? (
-                          <span className="vault-metadata-value">
-                            {selectedFileMetadata.metadata.contentOrigin}
-                          </span>
-                        ) : (
-                          <span className="vault-metadata-empty">None</span>
-                        )}
+                        <span className="vault-metadata-value">
+                          {getEffectiveContentOrigin(
+                            selectedFileMetadata.metadata,
+                          ) === 'ai-derived'
+                            ? 'AI Derived'
+                            : 'Original'}
+                        </span>
                       </div>
                     </div>
                     <div className="vault-metadata-row">

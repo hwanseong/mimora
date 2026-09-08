@@ -3,17 +3,23 @@ import {
   normalizeKnowledgeSearchFilters,
   type KnowledgeSearchFilters,
 } from './knowledgeSearch';
+import {
+  isContentOriginSearchScope,
+  type ContentOriginSearchScope,
+} from './contentOrigin';
 
 export type GlobalSearchScope = {
   includeArchived: boolean;
   knowledgeDomains: string[];
   knowledgeTypes: string[];
+  contentOriginScope: ContentOriginSearchScope;
 };
 
 export type SearchScopeSnapshot = {
   includeArchived: boolean;
   domain?: string | null;
   type?: string | null;
+  contentOriginScope: ContentOriginSearchScope;
 };
 
 export type SearchScopedHistoryMessage = {
@@ -25,6 +31,7 @@ export const defaultGlobalSearchScope: GlobalSearchScope = {
   includeArchived: false,
   knowledgeDomains: [],
   knowledgeTypes: [],
+  contentOriginScope: 'all',
 };
 
 function normalizeSnapshotValue(value?: string | null): string | null {
@@ -40,12 +47,18 @@ function normalizeSearchScopeSnapshot(
     includeArchived: snapshot?.includeArchived === true,
     domain: normalizeSnapshotValue(snapshot?.domain),
     type: normalizeSnapshotValue(snapshot?.type),
+    contentOriginScope: isContentOriginSearchScope(
+      snapshot?.contentOriginScope,
+    )
+      ? snapshot.contentOriginScope
+      : 'all',
   };
 }
 
 export function createGlobalSearchScope(
   includeArchived: boolean,
   knowledgeFilters: KnowledgeSearchFilters = emptyKnowledgeSearchFilters,
+  contentOriginScope: ContentOriginSearchScope = 'all',
 ): GlobalSearchScope {
   const normalizedFilters = normalizeKnowledgeSearchFilters(knowledgeFilters);
 
@@ -53,6 +66,7 @@ export function createGlobalSearchScope(
     includeArchived,
     knowledgeDomains: normalizedFilters.domains,
     knowledgeTypes: normalizedFilters.types,
+    contentOriginScope,
   };
 }
 
@@ -63,6 +77,7 @@ export function createSearchScopeSnapshot(
     includeArchived: searchScope.includeArchived,
     domain: normalizeSnapshotValue(searchScope.knowledgeDomains[0]),
     type: normalizeSnapshotValue(searchScope.knowledgeTypes[0]),
+    contentOriginScope: searchScope.contentOriginScope,
   };
 }
 
@@ -83,7 +98,8 @@ export function hasActiveSearchScopeSnapshot(
   return Boolean(
     normalizedSnapshot.includeArchived ||
       normalizedSnapshot.domain ||
-      normalizedSnapshot.type,
+      normalizedSnapshot.type ||
+      normalizedSnapshot.contentOriginScope !== 'all',
   );
 }
 
@@ -97,7 +113,8 @@ export function areSearchScopeSnapshotsEqual(
   return (
     normalizedLeft.includeArchived === normalizedRight.includeArchived &&
     normalizedLeft.domain === normalizedRight.domain &&
-    normalizedLeft.type === normalizedRight.type
+    normalizedLeft.type === normalizedRight.type &&
+    normalizedLeft.contentOriginScope === normalizedRight.contentOriginScope
   );
 }
 

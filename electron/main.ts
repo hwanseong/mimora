@@ -144,6 +144,7 @@ function logArchivedRetrievalIpcInput(input: unknown): void {
       domains?: unknown;
       types?: unknown;
     };
+    contentOriginScope?: unknown;
   };
   const query = typeof candidate.query === 'string' ? candidate.query : '';
 
@@ -159,6 +160,10 @@ function logArchivedRetrievalIpcInput(input: unknown): void {
     requestTypes: Array.isArray(candidate.knowledgeFilters?.types)
       ? candidate.knowledgeFilters.types
       : [],
+    contentOriginScope:
+      typeof candidate.contentOriginScope === 'string'
+        ? candidate.contentOriginScope
+        : 'all',
     questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
   });
 }

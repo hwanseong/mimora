@@ -19,6 +19,7 @@ import {
   defaultRegistrySettings,
   type RegistrySettings,
 } from './registry/types';
+import type { ContentOriginSearchScope } from './contentOrigin';
 
 export const vaultTypeOptions = ['work', 'private', 'knowledge'] as const;
 export const vaultSecurityOptions = [
@@ -42,6 +43,7 @@ export type VaultConfig = {
 
 export type SearchScopeSettings = {
   includeArchived: boolean;
+  contentOriginScope: ContentOriginSearchScope;
 };
 
 export type MimoraSettings = {
@@ -86,6 +88,7 @@ export const defaultSettings: MimoraSettings = {
   registry: { ...defaultRegistrySettings },
   search: {
     includeArchived: false,
+    contentOriginScope: 'all',
   },
   localAI: { ...defaultLocalAISettings },
   externalAI: { ...defaultExternalAISettings },

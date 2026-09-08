@@ -1,4 +1,5 @@
 :root {
+  --chat-content-max: 1180px;
   color: #1f2937;
   background: #f6f7f9;
   font-family:
@@ -42,7 +43,7 @@ button {
 
 .app-layout {
   display: grid;
-  grid-template-columns: minmax(204px, 17.5%) minmax(0, 1fr) minmax(248px, 20.5%);
+  grid-template-columns: clamp(200px, 13vw, 230px) minmax(0, 1fr) clamp(240px, 18vw, 300px);
   height: 100vh;
   height: 100dvh;
   min-width: 0;
@@ -430,7 +431,7 @@ button {
 
 .vault-search-bar {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(96px, auto) minmax(140px, auto) minmax(120px, auto) auto auto;
+  grid-template-columns: minmax(150px, 1fr) minmax(96px, auto) minmax(112px, auto) minmax(140px, auto) minmax(120px, auto) auto auto;
   gap: 7px;
   min-width: 0;
 }
@@ -611,6 +612,10 @@ button {
 }
 
 .vault-search-result strong {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
   color: #1f2937;
   font-size: 12px;
   overflow-wrap: anywhere;
@@ -869,6 +874,7 @@ button {
 }
 
 .markdown-renderer pre {
+  max-width: 100%;
   margin: 0.8em 0;
   overflow-x: auto;
   border: 1px solid #e2e5ea;
@@ -943,6 +949,13 @@ button {
   max-width: 100%;
   font-size: 13.5px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.chat-markdown .markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .chat-markdown h1 {
@@ -971,6 +984,7 @@ button {
 .chat-markdown table {
   width: max-content;
   min-width: 100%;
+  max-width: none;
 }
 
 .chat-markdown th,
@@ -1012,13 +1026,21 @@ button {
 }
 
 .chat-header {
+  display: block;
+  min-width: 0;
+  min-height: 56px;
+  padding: 10px 0;
+  border-bottom: 1px solid #eceef2;
+}
+
+.chat-header-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 56px;
-  padding: 10px 19px;
-  border-bottom: 1px solid #eceef2;
+  width: min(var(--chat-content-max), calc(100% - 44px));
+  min-width: 0;
+  margin: 0 auto;
 }
 
 .eyebrow {
@@ -1040,6 +1062,7 @@ button {
 .workspace-heading {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .archived-search-toggle {
@@ -1133,6 +1156,7 @@ button {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+  min-width: 0;
 }
 
 .header-meta > span,
@@ -1209,18 +1233,23 @@ button {
 
 .chat-messages {
   min-height: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 18px 22px;
 }
 
 .message-list {
   display: grid;
   gap: 12px;
-  width: min(900px, 100%);
+  width: min(var(--chat-content-max), 100%);
+  max-width: 100%;
+  min-width: 0;
   margin: 0 auto;
 }
 
 .message-row {
   display: flex;
+  min-width: 0;
 }
 
 .message-row.user {
@@ -1232,20 +1261,25 @@ button {
 }
 
 .message-content {
-  max-width: min(680px, 78%);
+  min-width: 0;
+  max-width: min(720px, 76%);
   border: 1px solid #e4e7ec;
   border-radius: 12px;
   padding: 10px 12px;
   color: #1f2937;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .message-row.user .message-content {
+  max-width: min(720px, 72%);
   border-color: #dfe3e8;
   background: #f2f3f5;
 }
 
 .message-row.assistant .message-content {
+  width: min(100%, 1100px);
+  max-width: 100%;
   background: #ffffff;
 }
 
@@ -1405,6 +1439,29 @@ button {
 
 .message-sources li {
   overflow-wrap: anywhere;
+}
+
+.ai-derived-source-badge,
+.ai-derived-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid #d9dde5;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #596273;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.ai-derived-source-badge {
+  padding: 2px 6px;
+}
+
+.ai-derived-inline-badge {
+  padding: 1px 5px;
 }
 
 .auto-context-state,
@@ -1841,6 +1898,9 @@ button {
 }
 
 .auto-context-documents button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   max-width: 180px;
   min-height: 23px;
   overflow: hidden;
@@ -2225,6 +2285,12 @@ button {
   white-space: nowrap;
 }
 
+.auto-context-documents button > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .derived-draft-preview pre {
   max-height: 180px;
   max-width: 100%;
@@ -2256,7 +2322,9 @@ button {
 .attached-context-bar {
   display: grid;
   gap: 6px;
-  width: min(900px, calc(100% - 44px));
+  width: min(var(--chat-content-max), calc(100% - 44px));
+  max-width: 100%;
+  min-width: 0;
   max-height: 104px;
   margin: 0 auto;
   overflow-y: auto;
@@ -2336,7 +2404,9 @@ button {
   display: flex;
   flex-wrap: nowrap;
   gap: 5px;
-  width: min(900px, calc(100% - 44px));
+  width: min(var(--chat-content-max), calc(100% - 44px));
+  max-width: 100%;
+  min-width: 0;
   margin: 0 auto;
   overflow-x: auto;
   overflow-y: hidden;
@@ -3175,7 +3245,9 @@ button {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 7px;
-  width: min(900px, calc(100% - 44px));
+  width: min(var(--chat-content-max), calc(100% - 44px));
+  max-width: 100%;
+  min-width: 0;
   margin: 0 auto;
   padding: 7px;
   border: 1px solid #dfe3e8;
@@ -3264,6 +3336,8 @@ button {
 }
 
 .context-panel {
+  width: 100%;
+  min-width: 0;
   height: 100%;
   min-height: 0;
   overflow-y: auto;
@@ -3348,9 +3422,23 @@ button {
   font-size: 13px;
 }
 
+@media (max-width: 1100px) {
+  .app-layout {
+    grid-template-columns: 200px minmax(0, 1fr) 240px;
+  }
+
+  .chat-header-inner,
+  .message-list,
+  .attached-context-bar,
+  .quick-prompt-bar,
+  .chat-input-bar {
+    width: calc(100% - 32px);
+  }
+}
+
 @media (max-width: 1050px) {
   .app-layout {
-    grid-template-columns: 190px minmax(0, 1fr) 226px;
+    grid-template-columns: 190px minmax(0, 1fr) 220px;
   }
 }
 
@@ -3373,9 +3461,13 @@ button {
   }
 
   .chat-header {
+    padding: 12px 0;
+  }
+
+  .chat-header-inner {
     align-items: flex-start;
     flex-direction: column;
-    padding: 12px 14px;
+    width: calc(100% - 24px);
   }
 
   .header-meta {
@@ -3391,6 +3483,15 @@ button {
   }
 
   .message-content {
+    max-width: 88%;
+  }
+
+  .message-row.assistant .message-content {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .message-row.user .message-content {
     max-width: 88%;
   }
 

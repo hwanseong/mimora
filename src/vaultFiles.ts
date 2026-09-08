@@ -3,6 +3,7 @@ import type {
   MimoraDocumentMetadata,
 } from './metadata/types';
 import type { KnowledgeSearchFilters } from './knowledgeSearch';
+import type { ContentOriginSearchScope } from './contentOrigin';
 
 export type VaultFile = {
   relativePath: string;
@@ -22,6 +23,7 @@ export type VaultSearchInput = {
   scope: VaultSearchScope;
   vaultId?: string;
   knowledgeFilters?: KnowledgeSearchFilters;
+  contentOriginScope?: ContentOriginSearchScope;
 };
 
 export type VaultSearchResult = {

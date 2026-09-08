@@ -8,6 +8,7 @@ import {
   type RoutingDecision,
 } from './security/securityRouter';
 import type { SearchScopeSnapshot } from './searchScope';
+import { isContentOriginSearchScope } from './contentOrigin';
 import {
   isChatHistoryWorkspaceId,
   normalizeChatHistoryWorkspaceId,
@@ -264,6 +265,9 @@ function sanitizeSearchScopeSnapshot(
     includeArchived: value.includeArchived,
     domain: typeof value.domain === 'string' ? value.domain : null,
     type: typeof value.type === 'string' ? value.type : null,
+    contentOriginScope: isContentOriginSearchScope(value.contentOriginScope)
+      ? value.contentOriginScope
+      : 'all',
   };
 }
 

@@ -4,6 +4,7 @@ import type {
   MimoraDocumentMetadata,
 } from './metadata/types';
 import type { KnowledgeSearchFilters } from './knowledgeSearch';
+import type { ContentOriginSearchScope } from './contentOrigin';
 
 export type AutoRetrievedContext = {
   documentId: string;
@@ -31,4 +32,5 @@ export type AutoContextRetrievalInput = {
   limit?: number;
   includeArchived?: boolean;
   knowledgeFilters?: KnowledgeSearchFilters;
+  contentOriginScope?: ContentOriginSearchScope;
 };

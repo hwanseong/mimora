@@ -1,5 +1,9 @@
 import { useState } from 'react';
 import type { AutoRetrievedContext } from '../autoContext';
+import {
+  contentOriginSearchScopeLabels,
+  isAiDerivedDocument,
+} from '../contentOrigin';
 import type { SearchScopeSnapshot } from '../searchScope';
 import { vaultSecurityLabels, vaultTypeLabels } from '../settings';
 
@@ -49,14 +53,15 @@ export function AutoContextPanel({
     searchScopeSnapshot &&
       (searchScopeSnapshot.includeArchived ||
         searchScopeSnapshot.domain ||
-        searchScopeSnapshot.type),
+        searchScopeSnapshot.type ||
+        searchScopeSnapshot.contentOriginScope !== 'all'),
   );
 
   return (
     <details className="auto-context-details">
       <summary>
         <span>자동 참조 문서 {contexts.length}개</span>
-        {containsSensitive ? <span>🔒 Sensitive 포함</span> : null}
+        {containsSensitive ? <span>Sensitive 포함</span> : null}
       </summary>
       <div className="auto-context-body">
         {hasSearchScopeSnapshot && searchScopeSnapshot ? (
@@ -69,27 +74,41 @@ export function AutoContextPanel({
             {searchScopeSnapshot.type
               ? ` · Type: ${searchScopeSnapshot.type}`
               : ''}
+            {searchScopeSnapshot.contentOriginScope !== 'all'
+              ? ` · Source: ${
+                  contentOriginSearchScopeLabels[
+                    searchScopeSnapshot.contentOriginScope
+                  ]
+                }`
+              : ''}
           </small>
         ) : null}
         <div className="auto-context-documents">
-          {contexts.map((context) => (
-            <button
-              aria-pressed={selectedDocumentId === context.documentId}
-              className={
-                selectedDocumentId === context.documentId ? 'active' : undefined
-              }
-              key={context.documentId}
-              onClick={() => {
-                setSelectedDocumentId((currentId) =>
-                  currentId === context.documentId ? null : context.documentId,
-                );
-              }}
-              title={`${context.vaultName} · ${context.relativePath} · ${vaultSecurityLabels[context.security]}`}
-              type="button"
-            >
-              {context.fileName}
-            </button>
-          ))}
+          {contexts.map((context) => {
+            const isAiDerived = isAiDerivedDocument(context.metadata);
+
+            return (
+              <button
+                aria-pressed={selectedDocumentId === context.documentId}
+                className={
+                  selectedDocumentId === context.documentId ? 'active' : undefined
+                }
+                key={context.documentId}
+                onClick={() => {
+                  setSelectedDocumentId((currentId) =>
+                    currentId === context.documentId ? null : context.documentId,
+                  );
+                }}
+                title={`${context.vaultName} · ${context.relativePath} · ${vaultSecurityLabels[context.security]}`}
+                type="button"
+              >
+                <span>{context.fileName}</span>
+                {isAiDerived ? (
+                  <span className="ai-derived-inline-badge">AI Wiki</span>
+                ) : null}
+              </button>
+            );
+          })}
         </div>
 
         {selectedContext ? (

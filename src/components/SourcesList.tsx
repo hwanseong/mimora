@@ -1,3 +1,4 @@
+import { isAiDerivedDocument } from '../contentOrigin';
 import type { LLMContextSource } from '../llmChat';
 import { vaultSecurityLabels } from '../settings';
 
@@ -7,13 +8,14 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
   }
 
   return (
-    <section className="message-sources" aria-label="답변 출처">
+    <section className="message-sources" aria-label="응답 출처">
       <strong>Sources</strong>
       <ul>
         {sources.map((source) => {
           const isProtected =
             source.vaultType === 'private' ||
             source.security === 'sensitive';
+          const isAiDerived = isAiDerivedDocument(source.metadata);
 
           return (
             <li
@@ -22,7 +24,10 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
             >
               <span>{source.fileName}</span>
               <span> · {source.vaultName}</span>
-              {isProtected ? <span> 🔒</span> : null}
+              {isAiDerived ? (
+                <span className="ai-derived-source-badge">AI Wiki</span>
+              ) : null}
+              {isProtected ? <span>Protected</span> : null}
             </li>
           );
         })}

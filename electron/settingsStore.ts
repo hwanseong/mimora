@@ -46,6 +46,7 @@ import {
   defaultRegistrySettings,
   type RegistrySettings,
 } from '../src/registry/types';
+import { isContentOriginSearchScope } from '../src/contentOrigin';
 
 type LegacyVaultSettings = {
   workVaultPath?: unknown;
@@ -93,6 +94,8 @@ function parseSearchScopeSettings(value: unknown): {
 
   const includeArchived = (value as Partial<SearchScopeSettings>)
     .includeArchived;
+  const contentOriginScope = (value as Partial<SearchScopeSettings>)
+    .contentOriginScope;
 
   return {
     search: {
@@ -100,8 +103,13 @@ function parseSearchScopeSettings(value: unknown): {
         typeof includeArchived === 'boolean'
           ? includeArchived
           : defaultSettings.search.includeArchived,
+      contentOriginScope: isContentOriginSearchScope(contentOriginScope)
+        ? contentOriginScope
+        : defaultSettings.search.contentOriginScope,
     },
-    migrated: typeof includeArchived !== 'boolean',
+    migrated:
+      typeof includeArchived !== 'boolean' ||
+      !isContentOriginSearchScope(contentOriginScope),
   };
 }
 

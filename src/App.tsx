@@ -57,6 +57,7 @@ import {
 import { parseMimoraDocumentMetadata } from './metadata/mimoraMetadataParser';
 import type { KnowledgeDomainRegistry } from './registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeTypeRegistry } from './registry/knowledgeTypeRegistryTypes';
+import type { ContentOriginSearchScope } from './contentOrigin';
 import {
   createKnowledgeSearchFiltersFromScope,
   createGlobalSearchScope,
@@ -120,6 +121,7 @@ export function App() {
   const [isSavingAIMode, setIsSavingAIMode] = useState(false);
   const [searchScope, setSearchScope] = useState<SearchScopeSettings>({
     includeArchived: false,
+    contentOriginScope: 'all',
   });
   const [knowledgeSearchFilters, setKnowledgeSearchFilters] =
     useState<KnowledgeSearchFilters>(emptyKnowledgeSearchFilters);
@@ -189,8 +191,13 @@ export function App() {
       createGlobalSearchScope(
         searchScope.includeArchived,
         knowledgeSearchFilters,
+        searchScope.contentOriginScope,
       ),
-    [knowledgeSearchFilters, searchScope.includeArchived],
+    [
+      knowledgeSearchFilters,
+      searchScope.contentOriginScope,
+      searchScope.includeArchived,
+    ],
   );
   const currentWorkspaceRequestStatus =
     workspaceRequestStatuses[selectedWorkspace.id] ?? 'idle';
@@ -212,9 +219,10 @@ export function App() {
     if (import.meta.env.DEV) {
       console.info('[Archived Debug]', {
         uiIncludeArchived: searchScope.includeArchived,
+        uiContentOriginScope: searchScope.contentOriginScope,
       });
     }
-  }, [searchScope.includeArchived]);
+  }, [searchScope.contentOriginScope, searchScope.includeArchived]);
 
   async function refreshWorkspaceRegistry(): Promise<void> {
     try {
@@ -689,6 +697,7 @@ export function App() {
       isAllWorkspaceRequest
         ? createKnowledgeSearchFiltersFromScope(globalSearchScope)
         : emptyKnowledgeSearchFilters,
+      isAllWorkspaceRequest ? globalSearchScope.contentOriginScope : 'all',
     );
     const targetIncludeArchived = targetGlobalSearchScope.includeArchived;
     const targetKnowledgeFilters =
@@ -708,6 +717,7 @@ export function App() {
         includeArchived: targetSearchScopeSnapshot.includeArchived,
         domain: targetSearchScopeSnapshot.domain,
         type: targetSearchScopeSnapshot.type,
+        contentOriginScope: targetSearchScopeSnapshot.contentOriginScope,
         scopedHistoryMessages: previousMessages.length,
       });
       console.info('[Archived Debug]', {
@@ -715,6 +725,7 @@ export function App() {
         workspaceId: targetWorkspaceId,
         uiIncludeArchived: searchScope.includeArchived,
         requestIncludeArchived: targetIncludeArchived,
+        requestContentOriginScope: targetSearchScopeSnapshot.contentOriginScope,
         questionContainsArchivedMarker:
           trimmedMessage.includes('ARCHIVED-ONLY-777'),
       });
@@ -751,11 +762,12 @@ export function App() {
       assistantMessage.id,
       trimmedMessage,
       previousMessages,
-      manualContexts,
-      targetIncludeArchived,
-      targetKnowledgeFilters,
-      endToEndStartedTime,
-    );
+    manualContexts,
+    targetIncludeArchived,
+    targetKnowledgeFilters,
+    targetSearchScopeSnapshot.contentOriginScope,
+    endToEndStartedTime,
+  );
   }
 
   async function handleDeleteWorkspaceChat(workspace: Workspace): Promise<void> {
@@ -1051,6 +1063,7 @@ export function App() {
     manualContexts: AttachedContext[],
     includeArchived: boolean,
     knowledgeFilters: KnowledgeSearchFilters,
+    contentOriginScope: ContentOriginSearchScope,
     endToEndStartedTime: number,
   ): Promise<void> {
     let autoContext: AutoRetrievedContext[] = [];
@@ -1064,6 +1077,7 @@ export function App() {
           workspaceId,
           requestIncludeArchived: includeArchived,
           retrievalIncludeArchived: includeArchived,
+          contentOriginScope,
           questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
         });
       }
@@ -1074,6 +1088,7 @@ export function App() {
         limit: 5,
         includeArchived,
         knowledgeFilters,
+        contentOriginScope,
       });
     } catch (error) {
       autoContextError =
@@ -1688,7 +1703,10 @@ export function App() {
   async function handleChangeIncludeArchived(
     includeArchived: boolean,
   ): Promise<void> {
-    const nextSearchScope: SearchScopeSettings = { includeArchived };
+    const nextSearchScope: SearchScopeSettings = {
+      ...searchScope,
+      includeArchived,
+    };
 
     setSearchScope(nextSearchScope);
     setIsSavingSearchScope(true);
@@ -1709,11 +1727,55 @@ export function App() {
     }
   }
 
+  async function handleChangeContentOriginScope(
+    contentOriginScope: ContentOriginSearchScope,
+  ): Promise<void> {
+    const previousSearchScope = searchScope;
+    const nextSearchScope: SearchScopeSettings = {
+      ...searchScope,
+      contentOriginScope,
+    };
+
+    setSearchScope(nextSearchScope);
+    setIsSavingSearchScope(true);
+
+    try {
+      const settings = await window.mimora.updateSearchScope(nextSearchScope);
+      setSearchScope(settings.search);
+    } catch (error) {
+      console.error('[Mimora Settings] Failed to update search scope.', {
+        error: getChatErrorMessage(error),
+      });
+      setSearchScope(previousSearchScope);
+    } finally {
+      setIsSavingSearchScope(false);
+    }
+  }
+
   function handleResetGlobalSearchScope(): void {
     setKnowledgeSearchFilters(emptyKnowledgeSearchFilters);
 
-    if (searchScope.includeArchived) {
-      void handleChangeIncludeArchived(false);
+    if (
+      searchScope.includeArchived ||
+      searchScope.contentOriginScope !== 'all'
+    ) {
+      void window.mimora
+        .updateSearchScope({
+          includeArchived: false,
+          contentOriginScope: 'all',
+        })
+        .then((settings) => {
+          setSearchScope(settings.search);
+        })
+        .catch((error) => {
+          console.error('[Mimora Settings] Failed to reset search scope.', {
+            error: getChatErrorMessage(error),
+          });
+          setSearchScope({
+            includeArchived: false,
+            contentOriginScope: 'all',
+          });
+        });
     }
   }
 
@@ -1866,6 +1928,7 @@ export function App() {
               disabled={isSavingAIMode || isCurrentWorkspaceBusy}
               effectiveSecurity={currentSecurity}
               includeArchived={searchScope.includeArchived}
+              contentOriginScope={searchScope.contentOriginScope}
               isKnowledgeDomainRegistryAvailable={
                 isKnowledgeDomainRegistryAvailable
               }
@@ -1880,6 +1943,9 @@ export function App() {
               }}
               onChangeIncludeArchived={(includeArchived) => {
                 void handleChangeIncludeArchived(includeArchived);
+              }}
+              onChangeContentOriginScope={(contentOriginScope) => {
+                void handleChangeContentOriginScope(contentOriginScope);
               }}
               onChangeKnowledgeFilters={setKnowledgeSearchFilters}
               onResetSearchScope={handleResetGlobalSearchScope}

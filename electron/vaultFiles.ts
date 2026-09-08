@@ -9,6 +9,12 @@ import {
   normalizeKnowledgeSearchFilters,
   type KnowledgeSearchFilters,
 } from '../src/knowledgeSearch';
+import {
+  documentMatchesContentOriginScope,
+  getEffectiveContentOrigin,
+  isContentOriginSearchScope,
+  type ContentOriginSearchScope,
+} from '../src/contentOrigin';
 import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
 import { createRegistryStatusService } from './registryStatus';
@@ -314,8 +320,17 @@ function validateSearchInput(input: unknown): VaultSearchInput {
   const knowledgeFilters = normalizeKnowledgeSearchFilters(
     candidate.knowledgeFilters,
   );
+  const contentOriginScope = isContentOriginSearchScope(
+    candidate.contentOriginScope,
+  )
+    ? candidate.contentOriginScope
+    : 'all';
 
-  if (!query && !hasActiveKnowledgeSearchFilters(knowledgeFilters)) {
+  if (
+    !query &&
+    !hasActiveKnowledgeSearchFilters(knowledgeFilters) &&
+    contentOriginScope === 'all'
+  ) {
     throw new Error('검색어를 입력하세요.');
   }
 
@@ -334,6 +349,7 @@ function validateSearchInput(input: unknown): VaultSearchInput {
     query,
     scope: candidate.scope,
     knowledgeFilters,
+    contentOriginScope,
     ...(candidate.scope === 'current' ? { vaultId: candidate.vaultId } : {}),
   };
 }
@@ -367,6 +383,7 @@ async function searchVault(
   query: string,
   metadataRegistryOptions: MetadataRegistryOptions = {},
   knowledgeFilters: KnowledgeSearchFilters = normalizeKnowledgeSearchFilters(),
+  contentOriginScope: ContentOriginSearchScope = 'all',
 ): Promise<VaultSearchResult[]> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -396,6 +413,14 @@ async function searchVault(
         metadataResult.metadata,
         knowledgeFilters,
       );
+      const matchesContentOriginScope = documentMatchesContentOriginScope(
+        metadataResult.metadata,
+        contentOriginScope,
+      );
+
+      if (!matchesContentOriginScope) {
+        continue;
+      }
 
       if (!matchesKnowledgeFilters) {
         continue;
@@ -469,6 +494,7 @@ type ScoredAutoContext = AutoRetrievedContext & {
   exactMatchedTokenCount: number;
   scoreBeforeExactBoost: number;
   exactMatchBonus: number;
+  originalContentOriginBoost: number;
 };
 
 type VaultRetrieval = {
@@ -483,6 +509,7 @@ type RetrievalPipelineCounts = {
   allMarkdownCandidates: number;
   metadataParsedCandidates: number;
   lifecycleEligibleCandidates: number;
+  contentOriginEligibleCandidates: number;
   knowledgeEligibleCandidates: number;
   queryMatchedCandidates: number;
   aboveThresholdCandidates: number;
@@ -593,6 +620,7 @@ function createEmptyRetrievalPipelineCounts(): RetrievalPipelineCounts {
     allMarkdownCandidates: 0,
     metadataParsedCandidates: 0,
     lifecycleEligibleCandidates: 0,
+    contentOriginEligibleCandidates: 0,
     knowledgeEligibleCandidates: 0,
     queryMatchedCandidates: 0,
     aboveThresholdCandidates: 0,
@@ -610,6 +638,9 @@ function mergeRetrievalPipelineCounts(
         total.metadataParsedCandidates + item.metadataParsedCandidates,
       lifecycleEligibleCandidates:
         total.lifecycleEligibleCandidates + item.lifecycleEligibleCandidates,
+      contentOriginEligibleCandidates:
+        total.contentOriginEligibleCandidates +
+        item.contentOriginEligibleCandidates,
       knowledgeEligibleCandidates:
         total.knowledgeEligibleCandidates + item.knowledgeEligibleCandidates,
       queryMatchedCandidates:
@@ -1172,6 +1203,7 @@ async function retrieveFromVault(
   includeArchived: boolean,
   metadataRegistryOptions: MetadataRegistryOptions = {},
   knowledgeFilters: KnowledgeSearchFilters = normalizeKnowledgeSearchFilters(),
+  contentOriginScope: ContentOriginSearchScope = 'all',
 ): Promise<VaultRetrieval> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -1217,6 +1249,17 @@ async function retrieveFromVault(
 
       pipeline.lifecycleEligibleCandidates += 1;
 
+      if (
+        !documentMatchesContentOriginScope(
+          metadataResult.metadata,
+          contentOriginScope,
+        )
+      ) {
+        continue;
+      }
+
+      pipeline.contentOriginEligibleCandidates += 1;
+
       if (!documentMatchesKnowledgeFilters(metadataResult.metadata, knowledgeFilters)) {
         continue;
       }
@@ -1234,6 +1277,14 @@ async function retrieveFromVault(
         exactMatchBonus,
       } =
         calculateRetrievalScore(file, content, phrase, tokens);
+      const effectiveContentOrigin = getEffectiveContentOrigin(
+        metadataResult.metadata,
+      );
+      const originalContentOriginBoost =
+        contentOriginScope === 'all' && effectiveContentOrigin === 'human'
+          ? 2
+          : 0;
+      const boostedScore = score + originalContentOriginBoost;
       const scoreMeetsCandidateThreshold = score > 0;
       const scoredContext: ScoredAutoContext = {
         documentId: createVaultDocumentId(vault.id, file.relativePath),
@@ -1244,7 +1295,7 @@ async function retrieveFromVault(
         security: vault.security,
         relativePath: file.relativePath,
         fileName: file.name,
-        score,
+        score: boostedScore,
         matchedTokenCount,
         phraseMatched,
         exactMeaningfulTokenMatch,
@@ -1252,6 +1303,7 @@ async function retrieveFromVault(
         exactMatchedTokenCount,
         scoreBeforeExactBoost,
         exactMatchBonus,
+        originalContentOriginBoost,
         snippet: createAutoContextSnippet(content, query, tokens),
         content,
       };
@@ -1315,6 +1367,7 @@ function logRetrievalDiagnostics(input: {
   queryTokenCount: number;
   queryTokens: string[];
   knowledgeFilters: KnowledgeSearchFilters;
+  contentOriginScope: ContentOriginSearchScope;
   pipeline: RetrievalPipelineCounts;
 }): void {
   if (
@@ -1328,6 +1381,7 @@ function logRetrievalDiagnostics(input: {
     rank: index + 1,
     scoreBeforeExactBoost: result.scoreBeforeExactBoost,
     exactMatchBonus: result.exactMatchBonus,
+    originalContentOriginBoost: result.originalContentOriginBoost,
     score: result.score,
     matchedTokens: result.matchedTokenCount,
     exactMatchedTokens: result.exactMatchedTokenCount,
@@ -1344,6 +1398,7 @@ function logRetrievalDiagnostics(input: {
     queryChars: input.queryChars,
     queryTokens: input.queryTokens,
     knowledgeFilters: input.knowledgeFilters,
+    contentOriginScope: input.contentOriginScope,
     scannedCandidates: input.candidateCount,
     pipeline: input.pipeline,
     matchedCandidates: input.results.length,
@@ -1441,6 +1496,11 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
   const knowledgeFilters = normalizeKnowledgeSearchFilters(
     candidate.knowledgeFilters,
   );
+  const contentOriginScope = isContentOriginSearchScope(
+    candidate.contentOriginScope,
+  )
+    ? candidate.contentOriginScope
+    : 'all';
 
   return {
     query,
@@ -1448,6 +1508,7 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
     limit: Math.min(Math.max(requestedLimit, 1), 10),
     includeArchived: candidate.includeArchived === true,
     knowledgeFilters,
+    contentOriginScope,
   };
 }
 
@@ -1530,6 +1591,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
           searchInput.query,
           metadataRegistryOptions,
           effectiveKnowledgeFilters,
+          searchInput.contentOriginScope,
         );
       }
 
@@ -1543,6 +1605,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 searchInput.query,
                 metadataRegistryOptions,
                 effectiveKnowledgeFilters,
+                searchInput.contentOriginScope,
               ),
             };
           } catch (error) {
@@ -1607,6 +1670,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
           queryTokens: tokens,
           requestKnowledgeFilters: retrievalInput.knowledgeFilters,
           effectiveKnowledgeFilters,
+          contentOriginScope: retrievalInput.contentOriginScope,
         });
         console.info('[Archived Debug]', {
           stage: 'workspace-lookup',
@@ -1631,6 +1695,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 retrievalInput.includeArchived,
                 metadataRegistryOptions,
                 effectiveKnowledgeFilters,
+                retrievalInput.contentOriginScope,
               ),
             };
           } catch (error) {
@@ -1674,6 +1739,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
         queryTokenCount: tokens.length,
         queryTokens: tokens,
         knowledgeFilters: effectiveKnowledgeFilters,
+        contentOriginScope: retrievalInput.contentOriginScope,
         pipeline: mergeRetrievalPipelineCounts(
           vaultRetrievals.map((result) => result.retrieval.pipeline),
         ),
@@ -1713,6 +1779,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
             exactMatchedTokenCount: _exactMatchedTokenCount,
             scoreBeforeExactBoost: _scoreBeforeExactBoost,
             exactMatchBonus: _exactMatchBonus,
+            originalContentOriginBoost: _originalContentOriginBoost,
             ...result
           }) =>
             result,
