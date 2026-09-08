@@ -27,6 +27,7 @@ import type {
   AddVaultInput,
   MimoraIpcResult,
   MimoraSettings,
+  SearchScopeSettings,
   UpdateVaultInput,
   VaultDirectorySelection,
 } from '../src/settings';
@@ -168,6 +169,12 @@ contextBridge.exposeInMainWorld('mimora', {
   updateAIMode: (aiMode: AIMode) =>
     (
       ipcRenderer.invoke('settings:updateAIMode', aiMode) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  updateSearchScope: (input: SearchScopeSettings) =>
+    (
+      ipcRenderer.invoke('settings:updateSearchScope', input) as Promise<
         MimoraIpcResult<MimoraSettings>
       >
     ).then(unwrapIpcResult),

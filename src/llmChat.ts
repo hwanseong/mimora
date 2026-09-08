@@ -1,5 +1,6 @@
 import type { VaultSecurity, VaultType } from './settings';
 import type { MimoraDocumentMetadata } from './metadata/types';
+import type { ContextBudgetResult } from './context/contextBudgetManager';
 
 export const RECENT_HISTORY_MESSAGE_LIMIT = 4;
 
@@ -73,6 +74,7 @@ export type LLMContextDocument = {
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;
+  relevanceScore?: number;
   snippet?: string;
   content: string;
 };
@@ -99,6 +101,7 @@ export type LLMChatDiagnostics = {
   finalUserPromptChars: number;
   totalRequestChars: number;
   requestMessageCount: number;
+  contextBudget?: ContextBudgetResult;
 };
 
 export type LocalAIChatInput = {

@@ -2,6 +2,11 @@ import type { EffectiveSecurity } from './securityRouter';
 import type { VaultSecurity, VaultType } from '../settings';
 import type { MimoraDocumentMetadata } from '../metadata/types';
 import {
+  buildContextBudget,
+  createContextBudgetSummary,
+  createContextProfile,
+} from '../context/contextBudgetManager';
+import {
   findRemainingRegisteredEntityIds,
   maskText,
   type MaskingEntry,
@@ -68,6 +73,8 @@ export type ExternalPreviewContextInput = {
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;
+  relevanceScore?: number;
+  score?: number;
   content: string;
 };
 
@@ -90,6 +97,10 @@ function deduplicateContextDocuments(
     seenDocuments.add(documentKey);
     return true;
   });
+}
+
+function createContextDocumentKey(document: ExternalPreviewContextInput): string {
+  return JSON.stringify([document.vaultId, document.relativePath]);
 }
 
 function mergeReplacements(
@@ -147,16 +158,58 @@ export function applyExternalSafeTextPipeline(input: {
 export function createExternalPayloadPreview(input: {
   workspaceId: string;
   effectiveSecurity: EffectiveSecurity;
+  model?: string | null;
   question: string;
   manualContexts: ExternalPreviewContextInput[];
   autoContexts: ExternalPreviewContextInput[];
   maskingEntries: MaskingEntry[];
   secretRules?: SecretRule[];
 }): ExternalPayloadPreview {
+  const documentsByKey = new Map<string, ExternalPreviewContextInput>();
+  const toBudgetDocument = (
+    document: ExternalPreviewContextInput,
+    source: 'manual' | 'auto',
+  ) => {
+    const documentKey = createContextDocumentKey(document);
+
+    documentsByKey.set(documentKey, document);
+
+    return {
+      documentKey,
+      source,
+      content: document.content,
+      relevanceScore: document.relevanceScore ?? document.score,
+    };
+  };
+  const contextBudget = buildContextBudget({
+    profile: createContextProfile('openai', input.model ?? null),
+    systemPrompt: '',
+    question: input.question,
+    manualDocuments: input.manualContexts.map((document) =>
+      toBudgetDocument(document, 'manual'),
+    ),
+    autoDocuments: input.autoContexts.map((document) =>
+      toBudgetDocument(document, 'auto'),
+    ),
+  });
   const contextDocuments = deduplicateContextDocuments(
-    input.manualContexts,
-    input.autoContexts,
+    contextBudget.documents.flatMap((budgetedDocument) => {
+      const document = documentsByKey.get(budgetedDocument.documentKey);
+
+      return document
+        ? [{ ...document, content: budgetedDocument.includedText }]
+        : [];
+    }),
+    [],
   );
+
+  if (
+    process.env.NODE_ENV === 'development' ||
+    import.meta.env.DEV
+  ) {
+    console.info('[Mimora Context Budget]', createContextBudgetSummary(contextBudget));
+  }
+
   const secretRules = input.secretRules ?? [...builtInSecretRules];
   const structuralMasker = createStructuralSensitiveDataMasker();
   const questionResult = applyExternalSafeTextPipeline({

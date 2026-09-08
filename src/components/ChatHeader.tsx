@@ -9,19 +9,43 @@ export function ChatHeader({
   aiMode,
   effectiveSecurity,
   disabled = false,
+  includeArchived = false,
   onChangeAIMode,
+  onChangeIncludeArchived,
+  searchScopeDisabled = false,
+  showSearchScope = false,
 }: {
   workspaceLabel: string;
   aiMode: AIMode;
   effectiveSecurity: EffectiveSecurity;
   disabled?: boolean;
+  includeArchived?: boolean;
   onChangeAIMode: (aiMode: AIMode) => void;
+  onChangeIncludeArchived?: (includeArchived: boolean) => void;
+  searchScopeDisabled?: boolean;
+  showSearchScope?: boolean;
 }) {
   return (
     <header className="chat-header">
-      <div>
+      <div className="workspace-heading">
         <p className="eyebrow">현재 Workspace</p>
         <h1>{workspaceLabel}</h1>
+        {showSearchScope ? (
+          <label
+            className="archived-search-toggle"
+            title="Archived Workspace에 연결된 문서까지 검색합니다."
+          >
+            <input
+              checked={includeArchived}
+              disabled={searchScopeDisabled || !onChangeIncludeArchived}
+              onChange={(event) => {
+                onChangeIncludeArchived?.(event.target.checked);
+              }}
+              type="checkbox"
+            />
+            <span>과거 업무 포함</span>
+          </label>
+        ) : null}
       </div>
 
       <div className="header-meta" aria-label="채팅 설정">

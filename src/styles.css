@@ -939,6 +939,38 @@ button {
   line-height: 1.2;
 }
 
+.workspace-heading {
+  display: grid;
+  gap: 3px;
+}
+
+.archived-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin-top: 2px;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.2;
+  user-select: none;
+}
+
+.archived-search-toggle input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: #475467;
+}
+
+.archived-search-toggle:has(input:not(:disabled)) {
+  cursor: pointer;
+}
+
+.archived-search-toggle:has(input:disabled) {
+  opacity: 0.62;
+}
+
 .header-meta {
   display: flex;
   flex-wrap: wrap;

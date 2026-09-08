@@ -3,6 +3,7 @@ import type {
   LLMModel,
 } from '../../src/localAI';
 import type {
+  LLMChatMessage,
   LLMChatRequest,
   LLMChatResponse,
 } from '../../src/llmChat';
@@ -10,7 +11,7 @@ import type { ChatLLMProvider } from './LLMProvider';
 
 const defaultTimeoutMs = 5_000;
 export const CHAT_TIMEOUT_MS = 120_000;
-export const MAX_RESPONSE_TOKENS = 256;
+export const MAX_RESPONSE_TOKENS = 900;
 
 type OllamaModelResponse = {
   name?: unknown;
@@ -196,6 +197,163 @@ function parseChatResponse(value: unknown): LLMChatResponse {
   };
 }
 
+function isDevelopmentEnvironment(): boolean {
+  return (
+    process.env.NODE_ENV === 'development' ||
+    Boolean(process.env.VITE_DEV_SERVER_URL)
+  );
+}
+
+function getFinalUserMessage(request: LLMChatRequest): LLMChatMessage | null {
+  for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+    const message = request.messages[index];
+
+    if (message.role === 'user') {
+      return message;
+    }
+  }
+
+  return null;
+}
+
+function getContextDocumentBlockChars(
+  userContent: string,
+  documentNumber: number,
+): number {
+  const escapedNumber = String(documentNumber).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const blockPattern = new RegExp(
+    String.raw`\[CONTEXT DOCUMENT ${escapedNumber}\]\n[\s\S]*?\n\[/CONTEXT DOCUMENT ${escapedNumber}\]`,
+    'u',
+  );
+  const match = blockPattern.exec(userContent);
+
+  return match ? match[0].length : 0;
+}
+
+function logFinalLocalPromptDiagnostic(input: {
+  model: string;
+  request: LLMChatRequest;
+}): void {
+  if (!isDevelopmentEnvironment()) {
+    return;
+  }
+
+  const systemMessage =
+    input.request.messages.find((message) => message.role === 'system') ?? null;
+  const currentUserMessage = getFinalUserMessage(input.request);
+  const currentUserContent = currentUserMessage?.content ?? '';
+  const historyMessages = input.request.messages.filter(
+    (message, index) =>
+      message !== systemMessage &&
+      message !== currentUserMessage &&
+      !(index === input.request.messages.length - 1 && message.role === 'user'),
+  );
+  const document1Chars = getContextDocumentBlockChars(currentUserContent, 1);
+  const document2Chars = getContextDocumentBlockChars(currentUserContent, 2);
+  const document1EndIndex = currentUserContent.indexOf(
+    '[/CONTEXT DOCUMENT 1]',
+  );
+  const document2StartIndex = currentUserContent.indexOf(
+    '[CONTEXT DOCUMENT 2]',
+  );
+  const projectContextEndIndex = currentUserContent.indexOf(
+    '</Project Context>',
+  );
+  const userQuestionStartIndex = currentUserContent.indexOf('<User Question>');
+
+  console.info('[Mimora Final Local Prompt Diagnostic]', {
+    model: input.model,
+    messageCount: input.request.messages.length,
+    system: {
+      chars: systemMessage?.content.length ?? 0,
+    },
+    history: historyMessages.map((message, index) => ({
+      message: `HISTORY_${index + 1}`,
+      role: message.role,
+      chars: message.content.length,
+    })),
+    currentUser: {
+      chars: currentUserContent.length,
+    },
+    contextBlocks: {
+      document1: {
+        exists: currentUserContent.includes('[CONTEXT DOCUMENT 1]'),
+        chars: document1Chars,
+      },
+      document2: {
+        exists: currentUserContent.includes('[CONTEXT DOCUMENT 2]'),
+        chars: document2Chars,
+      },
+    },
+    markers: {
+      projectFolderTestPresent: currentUserContent.includes(
+        'PROJECT-FOLDER-TEST',
+      ),
+      operationFolderTestPresent: currentUserContent.includes(
+        'OPERATION-FOLDER-TEST',
+      ),
+    },
+    boundaries: {
+      document1ClosingMarkerExists: document1EndIndex >= 0,
+      document2ClosingMarkerExists: currentUserContent.includes(
+        '[/CONTEXT DOCUMENT 2]',
+      ),
+      document2StartsAfterDocument1Ends:
+        document2StartIndex >= 0 &&
+        document1EndIndex >= 0 &&
+        document2StartIndex > document1EndIndex,
+      userQuestionStartsAfterProjectContext:
+        userQuestionStartIndex >= 0 &&
+        projectContextEndIndex >= 0 &&
+        userQuestionStartIndex > projectContextEndIndex,
+    },
+  });
+}
+
+function logLocalResponseDiagnostic(input: {
+  model: string;
+  responseBody: unknown;
+}): void {
+  if (!isDevelopmentEnvironment()) {
+    return;
+  }
+
+  if (typeof input.responseBody !== 'object' || input.responseBody === null) {
+    console.info('[Mimora Local Response Diagnostic]', {
+      model: input.model,
+      responseShape: typeof input.responseBody,
+    });
+    return;
+  }
+
+  const response = input.responseBody as {
+    done?: unknown;
+    done_reason?: unknown;
+    message?: { content?: unknown } | null;
+    prompt_eval_count?: unknown;
+    eval_count?: unknown;
+  };
+
+  console.info('[Mimora Local Response Diagnostic]', {
+    model: input.model,
+    done: typeof response.done === 'boolean' ? response.done : undefined,
+    doneReason:
+      typeof response.done_reason === 'string'
+        ? response.done_reason
+        : undefined,
+    promptEvalCount:
+      typeof response.prompt_eval_count === 'number'
+        ? response.prompt_eval_count
+        : undefined,
+    evalCount:
+      typeof response.eval_count === 'number' ? response.eval_count : undefined,
+    responseChars:
+      typeof response.message?.content === 'string'
+        ? response.message.content.length
+        : 0,
+  });
+}
+
 function extractOllamaError(value: unknown): string | undefined {
   if (typeof value === 'string') {
     const errorText = value.trim();
@@ -314,6 +472,11 @@ export class OllamaProvider implements ChatLLMProvider {
     );
 
     try {
+      logFinalLocalPromptDiagnostic({
+        model: this.model,
+        request,
+      });
+
       const response = await fetch(createChatUrl(this.endpoint), {
         method: 'POST',
         headers: {
@@ -368,6 +531,11 @@ export class OllamaProvider implements ChatLLMProvider {
       } catch {
         throw new Error('Local AI 응답 형식이 올바르지 않습니다.');
       }
+
+      logLocalResponseDiagnostic({
+        model: this.model,
+        responseBody,
+      });
 
       return parseChatResponse(responseBody);
     } catch (error) {

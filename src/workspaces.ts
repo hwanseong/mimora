@@ -21,6 +21,10 @@ export type WorkspaceSection = {
 export const allWorkspaceId = '__all__';
 export const legacyAllWorkspaceId = 'all';
 
+export function isAllWorkspaceScope(workspaceId: string): boolean {
+  return workspaceId === allWorkspaceId || workspaceId === legacyAllWorkspaceId;
+}
+
 export const defaultWorkspace: Workspace = {
   id: allWorkspaceId,
   name: '전체 업무',

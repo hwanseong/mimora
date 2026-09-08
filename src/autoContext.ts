@@ -28,4 +28,5 @@ export type AutoContextRetrievalInput = {
   query: string;
   workspaceId?: string;
   limit?: number;
+  includeArchived?: boolean;
 };

@@ -6,6 +6,7 @@ import type {
 } from '../src/autoContext';
 import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
+import { createRegistryStatusService } from './registryStatus';
 import { parseMimoraDocumentMetadata } from '../src/metadata/mimoraMetadataParser';
 import type {
   DocumentMetadataValidationIssue,
@@ -17,7 +18,8 @@ import type {
   VaultSearchInput,
   VaultSearchResult,
 } from '../src/vaultFiles';
-import { allWorkspaceId } from '../src/workspaces';
+import { allWorkspaceId, isAllWorkspaceScope } from '../src/workspaces';
+import type { WorkspaceStatus } from '../src/workspace/types';
 
 type SettingsStore = ReturnType<typeof createSettingsStore>;
 
@@ -432,6 +434,7 @@ type ScoredAutoContext = AutoRetrievedContext & {
   matchedTokenCount: number;
   phraseMatched: boolean;
   exactMeaningfulTokenMatch: boolean;
+  exactSubstringMatch: boolean;
   exactMatchedTokenCount: number;
   scoreBeforeExactBoost: number;
   exactMatchBonus: number;
@@ -440,6 +443,17 @@ type ScoredAutoContext = AutoRetrievedContext & {
 type VaultRetrieval = {
   candidateCount: number;
   results: ScoredAutoContext[];
+  pipeline: RetrievalPipelineCounts;
+};
+
+type WorkspaceStatusMap = Map<string, WorkspaceStatus>;
+
+type RetrievalPipelineCounts = {
+  allMarkdownCandidates: number;
+  metadataParsedCandidates: number;
+  lifecycleEligibleCandidates: number;
+  queryMatchedCandidates: number;
+  aboveThresholdCandidates: number;
 };
 
 type ParsedDocumentMetadata = {
@@ -447,8 +461,258 @@ type ParsedDocumentMetadata = {
   issues: DocumentMetadataValidationIssue[];
 };
 
+type DocumentEligibilityResult = {
+  eligible: boolean;
+  reason:
+    | 'selected-workspace-match'
+    | 'selected-workspace-mismatch'
+    | 'workspace-less'
+    | 'active-workspace-linked'
+    | 'archived-only-included'
+    | 'archived-only-excluded'
+    | 'unknown-workspace-only';
+  workspaceLookups: Array<{
+    workspaceId: string;
+    workspaceFound: boolean;
+    workspaceStatus?: WorkspaceStatus;
+  }>;
+};
+
+function isDevelopmentEnvironment(): boolean {
+  return (
+    process.env.NODE_ENV === 'development' ||
+    Boolean(process.env.VITE_DEV_SERVER_URL)
+  );
+}
+
 function shouldApplyWorkspaceFilter(workspaceId: string): boolean {
-  return workspaceId !== allWorkspaceId;
+  return !isAllWorkspaceScope(workspaceId);
+}
+
+function createEmptyRetrievalPipelineCounts(): RetrievalPipelineCounts {
+  return {
+    allMarkdownCandidates: 0,
+    metadataParsedCandidates: 0,
+    lifecycleEligibleCandidates: 0,
+    queryMatchedCandidates: 0,
+    aboveThresholdCandidates: 0,
+  };
+}
+
+function mergeRetrievalPipelineCounts(
+  items: RetrievalPipelineCounts[],
+): RetrievalPipelineCounts {
+  return items.reduce<RetrievalPipelineCounts>(
+    (total, item) => ({
+      allMarkdownCandidates:
+        total.allMarkdownCandidates + item.allMarkdownCandidates,
+      metadataParsedCandidates:
+        total.metadataParsedCandidates + item.metadataParsedCandidates,
+      lifecycleEligibleCandidates:
+        total.lifecycleEligibleCandidates + item.lifecycleEligibleCandidates,
+      queryMatchedCandidates:
+        total.queryMatchedCandidates + item.queryMatchedCandidates,
+      aboveThresholdCandidates:
+        total.aboveThresholdCandidates + item.aboveThresholdCandidates,
+    }),
+    createEmptyRetrievalPipelineCounts(),
+  );
+}
+
+function isArchivedDebugQuery(query: string): boolean {
+  return query.includes('ARCHIVED-ONLY-777');
+}
+
+function createWorkspaceStatusMap(
+  workspaces: Array<{ id: string; status: WorkspaceStatus }>,
+): WorkspaceStatusMap {
+  return new Map(
+    workspaces.map((workspace) => [workspace.id, workspace.status]),
+  );
+}
+
+function isDocumentEligibleForSearch(input: {
+  selectedWorkspaceId: string;
+  workspaceIds: string[];
+  workspaceStatusMap: WorkspaceStatusMap;
+  includeArchived: boolean;
+}): DocumentEligibilityResult {
+  const workspaceLookups = input.workspaceIds.map((workspaceId) => {
+    const workspaceStatus = input.workspaceStatusMap.get(workspaceId);
+
+    return {
+      workspaceId,
+      workspaceFound: Boolean(workspaceStatus),
+      ...(workspaceStatus ? { workspaceStatus } : {}),
+    };
+  });
+
+  if (shouldApplyWorkspaceFilter(input.selectedWorkspaceId)) {
+    const eligible = input.workspaceIds.includes(input.selectedWorkspaceId);
+
+    return {
+      eligible,
+      reason: eligible
+        ? 'selected-workspace-match'
+        : 'selected-workspace-mismatch',
+      workspaceLookups,
+    };
+  }
+
+  if (input.workspaceIds.length === 0) {
+    return {
+      eligible: true,
+      reason: 'workspace-less',
+      workspaceLookups,
+    };
+  }
+
+  const statuses = workspaceLookups.map((lookup) => lookup.workspaceStatus);
+
+  if (statuses.some((status) => status && status !== 'archived')) {
+    return {
+      eligible: true,
+      reason: 'active-workspace-linked',
+      workspaceLookups,
+    };
+  }
+
+  if (
+    statuses.length > 0 &&
+    statuses.every((status) => status === 'archived')
+  ) {
+    return {
+      eligible: input.includeArchived,
+      reason: input.includeArchived
+        ? 'archived-only-included'
+        : 'archived-only-excluded',
+      workspaceLookups,
+    };
+  }
+
+  return {
+    eligible: false,
+    reason: 'unknown-workspace-only',
+    workspaceLookups,
+  };
+}
+
+function isArchivedScopeDiagnosticDocument(input: {
+  metadata: MimoraDocumentMetadata;
+  content: string;
+}): boolean {
+  return (
+    input.metadata.documentId === 'DOC-2026-0201' ||
+    input.content.includes('ARCHIVED-ONLY-777') ||
+    input.content.includes('ACTIVE-ARCHIVED-WORKSPACE-TEST') ||
+    input.content.includes('NO-WORKSPACE-SEARCH-TEST')
+  );
+}
+
+function logArchivedScopeDocumentMetadata(input: {
+  metadata: MimoraDocumentMetadata;
+  content: string;
+  file: VaultFile;
+}): void {
+  if (!isDevelopmentEnvironment()) {
+    return;
+  }
+
+  if (
+    !isArchivedScopeDiagnosticDocument({
+      metadata: input.metadata,
+      content: input.content,
+    })
+  ) {
+    return;
+  }
+
+  console.info('[Archived Debug]', {
+    stage: 'document-metadata',
+    documentId: input.metadata.documentId ?? null,
+    relativePath: input.file.relativePath,
+    workspaceIdsCount: input.metadata.workspaceIds.length,
+    workspaceIds: input.metadata.workspaceIds,
+    containsMarker: input.content.includes('ARCHIVED-ONLY-777'),
+    containsActiveArchivedTestMarker: input.content.includes(
+      'ACTIVE-ARCHIVED-WORKSPACE-TEST',
+    ),
+    containsWorkspaceLessTestMarker: input.content.includes(
+      'NO-WORKSPACE-SEARCH-TEST',
+    ),
+  });
+}
+
+function logArchivedScopeEligibility(input: {
+  metadata: MimoraDocumentMetadata;
+  content: string;
+  file: VaultFile;
+  selectedWorkspaceId: string;
+  includeArchived: boolean;
+  eligibility: DocumentEligibilityResult;
+}): void {
+  if (!isDevelopmentEnvironment()) {
+    return;
+  }
+
+  if (
+    !isArchivedScopeDiagnosticDocument({
+      metadata: input.metadata,
+      content: input.content,
+    })
+  ) {
+    return;
+  }
+
+  console.info('[Archived Debug]', {
+    stage: 'eligibility',
+    documentId: input.metadata.documentId ?? null,
+    relativePath: input.file.relativePath,
+    selectedWorkspaceId: input.selectedWorkspaceId,
+    includeArchived: input.includeArchived,
+    workspaceStatuses: input.eligibility.workspaceLookups.map(
+      (lookup) => lookup.workspaceStatus ?? 'unknown',
+    ),
+    eligibleByLifecycle: input.eligibility.eligible,
+    reason: input.eligibility.reason,
+    workspaceLookups: input.eligibility.workspaceLookups,
+  });
+}
+
+function logArchivedScopeScore(input: {
+  metadata: MimoraDocumentMetadata;
+  content: string;
+  file: VaultFile;
+  eligibility: DocumentEligibilityResult;
+  score: number;
+  exactMeaningfulTokenMatch: boolean;
+  exactSubstringMatch: boolean;
+  includedAfterThreshold: boolean;
+}): void {
+  if (!isDevelopmentEnvironment()) {
+    return;
+  }
+
+  if (
+    !isArchivedScopeDiagnosticDocument({
+      metadata: input.metadata,
+      content: input.content,
+    })
+  ) {
+    return;
+  }
+
+  console.info('[Archived Debug]', {
+    stage: 'scoring',
+    documentId: input.metadata.documentId ?? null,
+    relativePath: input.file.relativePath,
+    eligibleByLifecycle: input.eligibility.eligible,
+    exactMatch:
+      input.exactMeaningfulTokenMatch || input.exactSubstringMatch,
+    score: input.score,
+    threshold: AUTO_CONTEXT_MIN_SCORE,
+    includedAfterThreshold: input.includedAfterThreshold,
+  });
 }
 
 function createMetadataResultFields(metadataResult: ParsedDocumentMetadata): {
@@ -626,6 +890,10 @@ function getExactTokens(value: string): Set<string> {
   );
 }
 
+function isStrongLookupToken(token: string): boolean {
+  return token.length >= 4 && /[\p{Script=Latin}\p{N}_-]/u.test(token);
+}
+
 function calculateRetrievalScore(
   file: VaultFile,
   content: string,
@@ -636,6 +904,7 @@ function calculateRetrievalScore(
   phraseMatched: boolean;
   score: number;
   exactMeaningfulTokenMatch: boolean;
+  exactSubstringMatch: boolean;
   exactMatchedTokenCount: number;
   scoreBeforeExactBoost: number;
   exactMatchBonus: number;
@@ -679,6 +948,7 @@ function calculateRetrievalScore(
   let matchedTokenCount = 0;
   let exactMatchedTokenCount = 0;
   let exactMatchBonusTotal = 0;
+  let exactSubstringMatchedTokenCount = 0;
 
   for (const token of tokens) {
     let tokenMatched = false;
@@ -715,7 +985,10 @@ function calculateRetrievalScore(
       exactTokens.headings.has(token) ? 26 : 0,
       exactTokens.fileName.has(token) ? 24 : 0,
       exactTokens.folderPath.has(token) ? 20 : 0,
-      exactTokens.body.has(token) ? 16 : 0,
+      exactTokens.body.has(token) ||
+      (isStrongLookupToken(token) && body.includes(token))
+        ? 16
+        : 0,
     ];
     const exactMatchBonus = Math.max(...exactMatchBonuses);
 
@@ -723,6 +996,10 @@ function calculateRetrievalScore(
       score += exactMatchBonus;
       exactMatchBonusTotal += exactMatchBonus;
       exactMatchedTokenCount += 1;
+
+      if (!exactTokens.body.has(token) && body.includes(token)) {
+        exactSubstringMatchedTokenCount += 1;
+      }
     }
   }
 
@@ -735,6 +1012,7 @@ function calculateRetrievalScore(
   }
 
   const exactMeaningfulTokenMatch = exactMatchedTokenCount > 0;
+  const exactSubstringMatch = exactSubstringMatchedTokenCount > 0;
   const scoreBeforeExactBoost = score - exactMatchBonusTotal;
 
   if (exactMeaningfulTokenMatch) {
@@ -746,6 +1024,7 @@ function calculateRetrievalScore(
     phraseMatched,
     score,
     exactMeaningfulTokenMatch,
+    exactSubstringMatch,
     exactMatchedTokenCount,
     scoreBeforeExactBoost,
     exactMatchBonus: exactMatchBonusTotal,
@@ -787,41 +1066,63 @@ async function retrieveFromVault(
   phrase: string,
   tokens: string[],
   workspaceId: string,
+  workspaceStatusMap: WorkspaceStatusMap,
+  includeArchived: boolean,
 ): Promise<VaultRetrieval> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
   const results: ScoredAutoContext[] = [];
+  const pipeline = createEmptyRetrievalPipelineCounts();
 
   await walkMarkdownFiles(rootPath, rootPath, [], files);
+  pipeline.allMarkdownCandidates = files.length;
 
   for (const file of files) {
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
       const metadataResult = parseMimoraDocumentMetadata(content);
+      pipeline.metadataParsedCandidates += 1;
+      const eligibility = isDocumentEligibleForSearch({
+        selectedWorkspaceId: workspaceId,
+        workspaceIds: metadataResult.metadata.workspaceIds,
+        workspaceStatusMap,
+        includeArchived,
+      });
 
-      if (
-        shouldApplyWorkspaceFilter(workspaceId) &&
-        !metadataResult.metadata.workspaceIds.includes(workspaceId)
-      ) {
+      logArchivedScopeDocumentMetadata({
+        metadata: metadataResult.metadata,
+        content,
+        file,
+      });
+
+      logArchivedScopeEligibility({
+        metadata: metadataResult.metadata,
+        content,
+        file,
+        selectedWorkspaceId: workspaceId,
+        includeArchived,
+        eligibility,
+      });
+
+      if (!eligibility.eligible) {
         continue;
       }
+
+      pipeline.lifecycleEligibleCandidates += 1;
 
       const {
         matchedTokenCount,
         phraseMatched,
         score,
         exactMeaningfulTokenMatch,
+        exactSubstringMatch,
         exactMatchedTokenCount,
         scoreBeforeExactBoost,
         exactMatchBonus,
       } =
         calculateRetrievalScore(file, content, phrase, tokens);
-
-      if (score <= 0) {
-        continue;
-      }
-
-      results.push({
+      const scoreMeetsCandidateThreshold = score > 0;
+      const scoredContext: ScoredAutoContext = {
         documentId: createVaultDocumentId(vault.id, file.relativePath),
         ...createMetadataResultFields(metadataResult),
         vaultId: vault.id,
@@ -834,18 +1135,47 @@ async function retrieveFromVault(
         matchedTokenCount,
         phraseMatched,
         exactMeaningfulTokenMatch,
+        exactSubstringMatch,
         exactMatchedTokenCount,
         scoreBeforeExactBoost,
         exactMatchBonus,
         snippet: createAutoContextSnippet(content, query, tokens),
         content,
+      };
+      const includedAfterThreshold =
+        scoreMeetsCandidateThreshold &&
+        meetsAutoContextThreshold(scoredContext, tokens.length);
+
+      if (scoreMeetsCandidateThreshold) {
+        pipeline.queryMatchedCandidates += 1;
+      }
+
+      if (includedAfterThreshold) {
+        pipeline.aboveThresholdCandidates += 1;
+      }
+
+      logArchivedScopeScore({
+        metadata: metadataResult.metadata,
+        content,
+        file,
+        eligibility,
+        score,
+        exactMeaningfulTokenMatch,
+        exactSubstringMatch,
+        includedAfterThreshold,
       });
+
+      if (!scoreMeetsCandidateThreshold) {
+        continue;
+      }
+
+      results.push(scoredContext);
     } catch (error) {
       console.warn('Skipped an unreadable Vault file during retrieval.', error);
     }
   }
 
-  return { candidateCount: files.length, results };
+  return { candidateCount: files.length, results, pipeline };
 }
 
 function meetsAutoContextThreshold(
@@ -859,7 +1189,7 @@ function meetsAutoContextThreshold(
 
   const meetsScoreThreshold =
     result.score >= AUTO_CONTEXT_MIN_SCORE ||
-    (result.exactMeaningfulTokenMatch &&
+    ((result.exactMeaningfulTokenMatch || result.exactSubstringMatch) &&
       result.score >= EXACT_MATCH_MIN_SCORE);
 
   return meetsScoreThreshold && hasEnoughTokenCoverage;
@@ -887,6 +1217,7 @@ function logRetrievalDiagnostics(input: {
     matchedTokens: result.matchedTokenCount,
     exactMatchedTokens: result.exactMatchedTokenCount,
     exactMeaningfulTokenMatch: result.exactMeaningfulTokenMatch,
+    exactSubstringMatch: result.exactSubstringMatch,
     previouslyBelowScoreThreshold:
       result.scoreBeforeExactBoost < AUTO_CONTEXT_MIN_SCORE,
     status: meetsAutoContextThreshold(result, input.queryTokenCount)
@@ -995,10 +1326,13 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
     query,
     workspaceId,
     limit: Math.min(Math.max(requestedLimit, 1), 10),
+    includeArchived: candidate.includeArchived === true,
   };
 }
 
 export function createVaultFilesService(settingsStore: SettingsStore) {
+  const registryStatusService = createRegistryStatusService(settingsStore);
+
   return {
     async listVaultFiles(vaultId: unknown): Promise<VaultFile[]> {
       const vault = await getVault(settingsStore, vaultId);
@@ -1070,6 +1404,35 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
       }
 
       const { phrase, tokens } = preprocessRetrievalQuery(retrievalInput.query);
+      const workspaceRegistry =
+        isAllWorkspaceScope(retrievalInput.workspaceId)
+          ? await registryStatusService.loadWorkspaceRegistry()
+          : null;
+      const workspaceStatusMap = createWorkspaceStatusMap(
+        workspaceRegistry?.workspaces ?? [],
+      );
+
+      if (isDevelopmentEnvironment()) {
+        const archivedTestWorkspaceStatus =
+          workspaceStatusMap.get('WS-2025-0001');
+
+        console.info('[Archived Debug]', {
+          stage: 'retrieveAutoContext:main',
+          workspaceId: retrievalInput.workspaceId,
+          requestIncludeArchived: retrievalInput.includeArchived,
+          retrievalIncludeArchived: retrievalInput.includeArchived,
+          isAllWorkspace: isAllWorkspaceScope(retrievalInput.workspaceId),
+          workspaceRegistryState: workspaceRegistry?.state ?? null,
+          queryTokens: tokens,
+        });
+        console.info('[Archived Debug]', {
+          stage: 'workspace-lookup',
+          workspaceId: 'WS-2025-0001',
+          found: Boolean(archivedTestWorkspaceStatus),
+          status: archivedTestWorkspaceStatus ?? null,
+        });
+      }
+
       const vaultRetrievals = await Promise.all(
         settings.vaults.map(async (vault) => {
           try {
@@ -1081,6 +1444,8 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 phrase,
                 tokens,
                 retrievalInput.workspaceId,
+                workspaceStatusMap,
+                retrievalInput.includeArchived,
               ),
             };
           } catch (error) {
@@ -1090,6 +1455,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
               retrieval: {
                 candidateCount: 0,
                 results: [] as ScoredAutoContext[],
+                pipeline: createEmptyRetrievalPipelineCounts(),
               },
             };
           }
@@ -1124,14 +1490,37 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
         queryTokens: tokens,
       });
 
-      return scoredResults
+      const acceptedResults = scoredResults
         .filter((result) => meetsAutoContextThreshold(result, tokens.length))
-        .slice(0, retrievalInput.limit)
+        .slice(0, retrievalInput.limit);
+
+      if (isDevelopmentEnvironment() && isArchivedDebugQuery(retrievalInput.query)) {
+        const pipeline = mergeRetrievalPipelineCounts(
+          vaultRetrievals.map((result) => result.retrieval.pipeline),
+        );
+
+        console.info('[Archived Debug]', {
+          stage: 'pipeline-counts',
+          workspaceId: retrievalInput.workspaceId,
+          retrievalIncludeArchived: retrievalInput.includeArchived,
+          ...pipeline,
+          finalAutoContextCount: acceptedResults.length,
+          finalDocumentIds: acceptedResults.map(
+            (result) => result.mimoraDocumentId ?? null,
+          ),
+          finalRelativePaths: acceptedResults.map(
+            (result) => result.relativePath,
+          ),
+        });
+      }
+
+      return acceptedResults
         .map(
           ({
             matchedTokenCount: _matchedTokenCount,
             phraseMatched: _phraseMatched,
             exactMeaningfulTokenMatch: _exactMeaningfulTokenMatch,
+            exactSubstringMatch: _exactSubstringMatch,
             exactMatchedTokenCount: _exactMatchedTokenCount,
             scoreBeforeExactBoost: _scoreBeforeExactBoost,
             exactMatchBonus: _exactMatchBonus,

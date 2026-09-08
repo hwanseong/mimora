@@ -75,6 +75,7 @@ export function ChatMessages({
         createExternalPayloadPreview({
           workspaceId,
           effectiveSecurity: message.routingDecision.security,
+          model: settings.externalAI.model,
           question: message.content,
           manualContexts: message.manualContext ?? [],
           autoContexts: message.autoContext ?? [],

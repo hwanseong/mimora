@@ -35,6 +35,7 @@ import type { WorkspaceRegistryParseResult } from './registry/workspaceRegistryT
 import type {
   AddVaultInput,
   MimoraSettings,
+  SearchScopeSettings,
   UpdateVaultInput,
   VaultDirectorySelection,
 } from './settings';
@@ -74,6 +75,9 @@ type MimoraApi = {
       input: ExternalAIChatInput,
     ) => Promise<ExternalAIChatResult>;
     updateAIMode: (aiMode: AIMode) => Promise<MimoraSettings>;
+    updateSearchScope: (
+      input: SearchScopeSettings,
+    ) => Promise<MimoraSettings>;
     updateRegistryHomeVault: (
       homeVaultId: string | null,
     ) => Promise<MimoraSettings>;

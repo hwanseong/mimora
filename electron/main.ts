@@ -51,6 +51,7 @@ import {
   type AddVaultInput,
   type MimoraIpcResult,
   type MimoraSettings,
+  type SearchScopeSettings,
   type UpdateVaultInput,
   type VaultDirectorySelection,
 } from '../src/settings';
@@ -116,6 +117,32 @@ async function getWorkspaceTypeForRequest(
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '설정 처리 중 오류가 발생했습니다.';
+}
+
+function logArchivedRetrievalIpcInput(input: unknown): void {
+  if (!devServerUrl && process.env.NODE_ENV !== 'development') {
+    return;
+  }
+
+  if (!input || typeof input !== 'object') {
+    return;
+  }
+
+  const candidate = input as {
+    query?: unknown;
+    workspaceId?: unknown;
+    includeArchived?: unknown;
+  };
+  const query = typeof candidate.query === 'string' ? candidate.query : '';
+
+  console.info('[Archived Debug]', {
+    stage: 'retrieveAutoContext:ipc',
+    workspaceId:
+      typeof candidate.workspaceId === 'string' ? candidate.workspaceId : null,
+    requestIncludeArchived: candidate.includeArchived === true,
+    retrievalIncludeArchived: candidate.includeArchived === true,
+    questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
+  });
 }
 
 async function toIpcResult<T>(
@@ -194,6 +221,15 @@ function registerSettingsHandlers(): void {
       aiMode: unknown,
     ): Promise<MimoraIpcResult<MimoraSettings>> =>
       toIpcResult(() => settingsStore.updateAIMode(aiMode as AIMode)),
+  );
+
+  ipcMain.handle(
+    'settings:updateSearchScope',
+    async (
+      _event,
+      input: SearchScopeSettings,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateSearchScopeSettings(input)),
   );
 
   ipcMain.handle(
@@ -700,7 +736,7 @@ function registerLocalAIHandlers(): void {
 
         const contextBuildStartedTime = performance.now();
         const { workspaceId, request, sources, diagnostics } =
-          buildLocalAIChatRequest(input);
+          buildLocalAIChatRequest(input, { model: settings.localAI.model });
         const contextBuildMs = performance.now() - contextBuildStartedTime;
         const requestStartedAt = new Date();
         const requestStartedTime = performance.now();
@@ -791,8 +827,10 @@ function registerVaultFileHandlers(): void {
     async (
       _event,
       input: unknown,
-    ): Promise<MimoraIpcResult<AutoRetrievedContext[]>> =>
-      toIpcResult(() => vaultFilesService.retrieveAutoContext(input)),
+    ): Promise<MimoraIpcResult<AutoRetrievedContext[]>> => {
+      logArchivedRetrievalIpcInput(input);
+      return toIpcResult(() => vaultFilesService.retrieveAutoContext(input));
+    },
   );
 }
 

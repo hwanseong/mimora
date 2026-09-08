@@ -15,6 +15,7 @@ import {
   vaultTypeOptions,
   type AddVaultInput,
   type MimoraSettings,
+  type SearchScopeSettings,
   type UpdateVaultInput,
   type VaultConfig,
   type VaultSecurity,
@@ -62,6 +63,7 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
   return {
     vaults: settings.vaults.map((vault) => ({ ...vault })),
     registry: { ...settings.registry },
+    search: { ...settings.search },
     localAI: { ...settings.localAI },
     externalAI: { ...settings.externalAI },
     aiMode: settings.aiMode,
@@ -75,6 +77,31 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
         ...(rule.keywords ? { keywords: [...rule.keywords] } : {}),
       })),
     },
+  };
+}
+
+function parseSearchScopeSettings(value: unknown): {
+  search: SearchScopeSettings;
+  migrated: boolean;
+} {
+  if (typeof value !== 'object' || value === null) {
+    return {
+      search: { ...defaultSettings.search },
+      migrated: true,
+    };
+  }
+
+  const includeArchived = (value as Partial<SearchScopeSettings>)
+    .includeArchived;
+
+  return {
+    search: {
+      includeArchived:
+        typeof includeArchived === 'boolean'
+          ? includeArchived
+          : defaultSettings.search.includeArchived,
+    },
+    migrated: typeof includeArchived !== 'boolean',
   };
 }
 
@@ -584,6 +611,7 @@ function migrateLegacySettings(
   return {
     vaults,
     registry: { ...defaultRegistrySettings },
+    search: { ...defaultSettings.search },
     localAI: { ...defaultLocalAISettings },
     externalAI: { ...defaultExternalAISettings },
     aiMode: 'auto',
@@ -628,6 +656,9 @@ function parseSettings(
       (parsedSettings as Partial<MimoraSettings>).registry,
       vaults,
     );
+    const parsedSearch = parseSearchScopeSettings(
+      (parsedSettings as Partial<MimoraSettings>).search,
+    );
     const localAI = parseLocalAISettings(
       (parsedSettings as Partial<MimoraSettings>).localAI,
     );
@@ -650,6 +681,7 @@ function parseSettings(
       settings: {
         vaults,
         registry: parsedRegistry.registry,
+        search: parsedSearch.search,
         localAI: localAI ?? { ...defaultLocalAISettings },
         externalAI: externalAI ?? { ...defaultExternalAISettings },
         aiMode,
@@ -660,6 +692,7 @@ function parseSettings(
         localAI === null ||
         externalAI === null ||
         parsedRegistry.migrated ||
+        parsedSearch.migrated ||
         !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode) ||
         parsedMasking.migrated ||
         parsedSecretDetection.migrated,
@@ -896,6 +929,17 @@ export function createSettingsStore({
         return persistSettings({
           ...settings,
           aiMode: input,
+        });
+      }),
+
+    updateSearchScopeSettings: (input: unknown) =>
+      runExclusive(async () => {
+        const parsedSearch = parseSearchScopeSettings(input);
+        const settings = await loadSettings();
+
+        return persistSettings({
+          ...settings,
+          search: parsedSearch.search,
         });
       }),
 

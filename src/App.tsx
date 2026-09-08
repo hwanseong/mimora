@@ -36,9 +36,11 @@ import {
   createSelectableWorkspaces,
   createWorkspaceSections,
   defaultWorkspace,
+  isAllWorkspaceScope,
   toSelectableWorkspace,
   type Workspace,
 } from './workspaces';
+import type { SearchScopeSettings } from './settings';
 import {
   evaluateSecurity,
   routeAIRequest,
@@ -88,6 +90,10 @@ export function App() {
   const [message, setMessage] = useState('');
   const [aiMode, setAIMode] = useState<AIMode>('auto');
   const [isSavingAIMode, setIsSavingAIMode] = useState(false);
+  const [searchScope, setSearchScope] = useState<SearchScopeSettings>({
+    includeArchived: false,
+  });
+  const [isSavingSearchScope, setIsSavingSearchScope] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
   const [chatHistoryStatus, setChatHistoryStatus] = useState<
     'loading' | 'ready' | 'error'
@@ -137,6 +143,14 @@ export function App() {
     latestRoutingDecision?.security ??
     evaluateSecurity(selectedWorkspace.type, currentContexts).security;
 
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.info('[Archived Debug]', {
+        uiIncludeArchived: searchScope.includeArchived,
+      });
+    }
+  }, [searchScope.includeArchived]);
+
   async function refreshWorkspaceRegistry(): Promise<void> {
     try {
       const workspaceRegistry = await window.mimora.loadWorkspaceRegistry();
@@ -179,6 +193,7 @@ export function App() {
       .then((settings) => {
         if (isMounted) {
           setAIMode(settings.aiMode);
+          setSearchScope(settings.search);
         }
       })
       .catch((error: unknown) => {
@@ -303,6 +318,20 @@ export function App() {
     const targetWorkspaceId = selectedWorkspace.id;
     const targetWorkspaceType = selectedWorkspace.type;
     const targetAIMode = aiMode;
+    const targetIncludeArchived =
+      isAllWorkspaceScope(targetWorkspaceId) && searchScope.includeArchived;
+
+    if (import.meta.env.DEV) {
+      console.info('[Archived Debug]', {
+        stage: 'sendMessage',
+        workspaceId: targetWorkspaceId,
+        uiIncludeArchived: searchScope.includeArchived,
+        requestIncludeArchived: targetIncludeArchived,
+        questionContainsArchivedMarker:
+          trimmedMessage.includes('ARCHIVED-ONLY-777'),
+      });
+    }
+
     const previousMessages = (chatSessions[targetWorkspaceId] ?? []).slice(
       -RECENT_HISTORY_MESSAGE_LIMIT,
     );
@@ -336,6 +365,7 @@ export function App() {
       trimmedMessage,
       previousMessages,
       manualContexts,
+      targetIncludeArchived,
       endToEndStartedTime,
     );
   }
@@ -387,6 +417,7 @@ export function App() {
       ...('metadata' in context && context.metadata
         ? { metadata: context.metadata }
         : {}),
+      ...('score' in context ? { relevanceScore: context.score } : {}),
       content: context.content,
     };
   }
@@ -630,6 +661,7 @@ export function App() {
     query: string,
     previousMessages: ChatMessage[],
     manualContexts: AttachedContext[],
+    includeArchived: boolean,
     endToEndStartedTime: number,
   ): Promise<void> {
     let autoContext: AutoRetrievedContext[] = [];
@@ -637,10 +669,21 @@ export function App() {
     const retrievalStartedTime = performance.now();
 
     try {
+      if (import.meta.env.DEV) {
+        console.info('[Archived Debug]', {
+          stage: 'retrieveAutoContext:renderer',
+          workspaceId,
+          requestIncludeArchived: includeArchived,
+          retrievalIncludeArchived: includeArchived,
+          questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
+        });
+      }
+
       autoContext = await window.mimora.retrieveAutoContext({
         query,
         workspaceId,
         limit: 5,
+        includeArchived,
       });
     } catch (error) {
       autoContextError =
@@ -676,6 +719,7 @@ export function App() {
         preview = createExternalPayloadPreview({
           workspaceId,
           effectiveSecurity,
+          model: settings.externalAI.model,
           question: query,
           manualContexts,
           autoContexts: autoContext,
@@ -873,6 +917,7 @@ export function App() {
     const preview = createExternalPayloadPreview({
       workspaceId: request.workspaceId,
       effectiveSecurity,
+      model: settings.externalAI.model,
       question: request.query,
       manualContexts: request.manualContexts,
       autoContexts: request.autoContexts,
@@ -1250,6 +1295,30 @@ export function App() {
     }
   }
 
+  async function handleChangeIncludeArchived(
+    includeArchived: boolean,
+  ): Promise<void> {
+    const nextSearchScope: SearchScopeSettings = { includeArchived };
+
+    setSearchScope(nextSearchScope);
+    setIsSavingSearchScope(true);
+
+    try {
+      const settings = await window.mimora.updateSearchScope(nextSearchScope);
+      setSearchScope(settings.search);
+    } catch (error) {
+      console.error('[Mimora Settings] Failed to update search scope.', {
+        error: getChatErrorMessage(error),
+      });
+      setSearchScope((currentSearchScope) => ({
+        ...currentSearchScope,
+        includeArchived: !includeArchived,
+      }));
+    } finally {
+      setIsSavingSearchScope(false);
+    }
+  }
+
   function completeAutoContextRetrieval(
     workspaceId: Workspace['id'],
     userMessageId: string,
@@ -1398,9 +1467,17 @@ export function App() {
               aiMode={aiMode}
               disabled={isSavingAIMode || isCurrentWorkspaceBusy}
               effectiveSecurity={currentSecurity}
+              includeArchived={searchScope.includeArchived}
               onChangeAIMode={(nextAIMode) => {
                 void handleChangeAIMode(nextAIMode);
               }}
+              onChangeIncludeArchived={(includeArchived) => {
+                void handleChangeIncludeArchived(includeArchived);
+              }}
+              searchScopeDisabled={
+                isSavingSearchScope || isCurrentWorkspaceBusy
+              }
+              showSearchScope={isAllWorkspaceScope(selectedWorkspace.id)}
               workspaceLabel={selectedWorkspace.label}
             />
             <div className="message-area">

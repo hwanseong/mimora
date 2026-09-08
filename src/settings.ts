@@ -40,9 +40,14 @@ export type VaultConfig = {
   updatedAt: string;
 };
 
+export type SearchScopeSettings = {
+  includeArchived: boolean;
+};
+
 export type MimoraSettings = {
   vaults: VaultConfig[];
   registry: RegistrySettings;
+  search: SearchScopeSettings;
   localAI: LocalAISettings;
   externalAI: ExternalAISettings;
   aiMode: AIMode;
@@ -79,6 +84,9 @@ export type MimoraIpcResult<T> =
 export const defaultSettings: MimoraSettings = {
   vaults: [],
   registry: { ...defaultRegistrySettings },
+  search: {
+    includeArchived: false,
+  },
   localAI: { ...defaultLocalAISettings },
   externalAI: { ...defaultExternalAISettings },
   aiMode: 'auto',
