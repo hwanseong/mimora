@@ -6,6 +6,16 @@ import {
   type RegistryFileStatus,
   type RegistryStatus,
 } from '../src/registry/types';
+import { parseKnowledgeDomainRegistry } from '../src/registry/knowledgeDomainRegistryParser';
+import type {
+  KnowledgeDomainRegistryParseResult,
+  KnowledgeRegistryValidationIssue,
+} from '../src/registry/knowledgeDomainRegistryTypes';
+import { parseKnowledgeTypeRegistry } from '../src/registry/knowledgeTypeRegistryParser';
+import type {
+  KnowledgeTypeRegistryParseResult,
+  KnowledgeTypeRegistryValidationIssue,
+} from '../src/registry/knowledgeTypeRegistryTypes';
 import { parseWorkspaceRegistry } from '../src/registry/workspaceRegistryParser';
 import type {
   WorkspaceRegistryParseResult,
@@ -59,6 +69,42 @@ function createWorkspaceRegistryResult(
     state,
     registryVersion: null,
     workspaces: [],
+    issues,
+    valid: false,
+    message,
+  };
+}
+
+function createKnowledgeDomainRegistryResult(
+  state: KnowledgeDomainRegistryParseResult['state'],
+  message: string,
+  issue?: KnowledgeRegistryValidationIssue,
+): KnowledgeDomainRegistryParseResult {
+  const issues = issue ? [issue] : [];
+
+  return {
+    state,
+    registryVersion: null,
+    registry: null,
+    domains: [],
+    issues,
+    valid: false,
+    message,
+  };
+}
+
+function createKnowledgeTypeRegistryResult(
+  state: KnowledgeTypeRegistryParseResult['state'],
+  message: string,
+  issue?: KnowledgeTypeRegistryValidationIssue,
+): KnowledgeTypeRegistryParseResult {
+  const issues = issue ? [issue] : [];
+
+  return {
+    state,
+    registryVersion: null,
+    registry: null,
+    types: [],
     issues,
     valid: false,
     message,
@@ -223,5 +269,143 @@ export function createRegistryStatusService(settingsReader: SettingsReader) {
         );
       }
     },
+
+    loadKnowledgeDomainRegistry:
+      async (): Promise<KnowledgeDomainRegistryParseResult> => {
+        const settings = await settingsReader.getSettings();
+        const homeVaultId = settings.registry.homeVaultId;
+
+        if (!homeVaultId) {
+          return createKnowledgeDomainRegistryResult(
+            'unavailable',
+            'Registry Home Vault가 지정되지 않았습니다.',
+          );
+        }
+
+        const homeVault = settings.vaults.find(
+          (vault) => vault.id === homeVaultId,
+        );
+
+        if (!homeVault || !(await exists(homeVault.path))) {
+          return createKnowledgeDomainRegistryResult(
+            'inaccessible',
+            'Registry Home Vault에 접근할 수 없습니다.',
+          );
+        }
+
+        const registryPath = path.resolve(
+          homeVault.path,
+          registryFileRelativePaths['knowledge-domains'],
+        );
+
+        if (!(await exists(registryPath))) {
+          return createKnowledgeDomainRegistryResult(
+            'not-found',
+            'Knowledge Domain Registry 파일을 찾을 수 없습니다.',
+            {
+              severity: 'error',
+              code: 'knowledge-domain-registry-not-found',
+              message: 'Knowledge Domain Registry 파일을 찾을 수 없습니다.',
+            },
+          );
+        }
+
+        try {
+          const decoded = decodeRegistryMarkdown(await readFile(registryPath));
+
+          if (!decoded.ok) {
+            return createKnowledgeDomainRegistryResult(
+              'loaded-with-errors',
+              decoded.message,
+              {
+                severity: 'error',
+                code: 'knowledge-domain-registry-unsupported-encoding',
+                message: decoded.message,
+              },
+            );
+          }
+
+          return parseKnowledgeDomainRegistry(decoded.text);
+        } catch {
+          return createKnowledgeDomainRegistryResult(
+            'loaded-with-errors',
+            'Knowledge Domain Registry 파일을 읽거나 파싱할 수 없습니다.',
+            {
+              severity: 'error',
+              code: 'knowledge-domain-registry-read-failed',
+              message: 'Knowledge Domain Registry 파일을 읽거나 파싱할 수 없습니다.',
+            },
+          );
+        }
+      },
+
+    loadKnowledgeTypeRegistry:
+      async (): Promise<KnowledgeTypeRegistryParseResult> => {
+        const settings = await settingsReader.getSettings();
+        const homeVaultId = settings.registry.homeVaultId;
+
+        if (!homeVaultId) {
+          return createKnowledgeTypeRegistryResult(
+            'unavailable',
+            'Registry Home Vault가 지정되지 않았습니다.',
+          );
+        }
+
+        const homeVault = settings.vaults.find(
+          (vault) => vault.id === homeVaultId,
+        );
+
+        if (!homeVault || !(await exists(homeVault.path))) {
+          return createKnowledgeTypeRegistryResult(
+            'inaccessible',
+            'Registry Home Vault에 접근할 수 없습니다.',
+          );
+        }
+
+        const registryPath = path.resolve(
+          homeVault.path,
+          registryFileRelativePaths['knowledge-types'],
+        );
+
+        if (!(await exists(registryPath))) {
+          return createKnowledgeTypeRegistryResult(
+            'not-found',
+            'Knowledge Type Registry 파일을 찾을 수 없습니다.',
+            {
+              severity: 'error',
+              code: 'knowledge-type-registry-not-found',
+              message: 'Knowledge Type Registry 파일을 찾을 수 없습니다.',
+            },
+          );
+        }
+
+        try {
+          const decoded = decodeRegistryMarkdown(await readFile(registryPath));
+
+          if (!decoded.ok) {
+            return createKnowledgeTypeRegistryResult(
+              'loaded-with-errors',
+              decoded.message,
+              {
+                severity: 'error',
+                code: 'knowledge-type-registry-unsupported-encoding',
+                message: decoded.message,
+              },
+            );
+          }
+
+          return parseKnowledgeTypeRegistry(decoded.text);
+        } catch {
+          return createKnowledgeTypeRegistryResult(
+            'loaded-with-errors',
+            'Knowledge Type Registry 파일을 읽거나 파싱할 수 없습니다.',
+            {
+              severity: 'error',
+              code: 'knowledge-type-registry-read-failed',
+              message: 'Knowledge Type Registry 파일을 읽거나 파싱할 수 없습니다.',
+            },
+          );
+        }
+      },
   };
 }

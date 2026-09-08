@@ -21,6 +21,8 @@ import { MaskingSettingsSection } from './MaskingSettingsSection';
 import { ExternalAISettingsSection } from './ExternalAISettingsSection';
 import { SecretDetectionSettingsSection } from './SecretDetectionSettingsSection';
 import type { RegistryStatus } from '../registry/types';
+import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistryParseResult } from '../registry/knowledgeTypeRegistryTypes';
 import type { WorkspaceRegistryParseResult } from '../registry/workspaceRegistryTypes';
 
 type VaultFormState = {
@@ -75,7 +77,15 @@ export function SettingsView({
     useState<RegistryStatus | null>(null);
   const [workspaceRegistry, setWorkspaceRegistry] =
     useState<WorkspaceRegistryParseResult | null>(null);
+  const [knowledgeDomainRegistry, setKnowledgeDomainRegistry] =
+    useState<KnowledgeDomainRegistryParseResult | null>(null);
+  const [knowledgeTypeRegistry, setKnowledgeTypeRegistry] =
+    useState<KnowledgeTypeRegistryParseResult | null>(null);
   const [showWorkspaceRegistryIssues, setShowWorkspaceRegistryIssues] =
+    useState(false);
+  const [showKnowledgeDomainRegistryIssues, setShowKnowledgeDomainRegistryIssues] =
+    useState(false);
+  const [showKnowledgeTypeRegistryIssues, setShowKnowledgeTypeRegistryIssues] =
     useState(false);
 
   const isEditing = Boolean(formState?.id);
@@ -105,15 +115,24 @@ export function SettingsView({
         if (isMounted) {
           setSettings(loadedSettings);
           setLocalAIForm({ ...loadedSettings.localAI });
-          const [loadedRegistryStatus, loadedWorkspaceRegistry] =
+          const [
+            loadedRegistryStatus,
+            loadedWorkspaceRegistry,
+            loadedKnowledgeDomainRegistry,
+            loadedKnowledgeTypeRegistry,
+          ] =
             await Promise.all([
               window.mimora.getRegistryStatus(),
               window.mimora.loadWorkspaceRegistry(),
+              window.mimora.loadKnowledgeDomainRegistry(),
+              window.mimora.loadKnowledgeTypeRegistry(),
             ]);
 
           if (isMounted) {
             setRegistryStatus(loadedRegistryStatus);
             setWorkspaceRegistry(loadedWorkspaceRegistry);
+            setKnowledgeDomainRegistry(loadedKnowledgeDomainRegistry);
+            setKnowledgeTypeRegistry(loadedKnowledgeTypeRegistry);
           }
         }
       } catch (error) {
@@ -135,12 +154,21 @@ export function SettingsView({
   }, []);
 
   async function refreshRegistryStatus(): Promise<void> {
-    const [nextRegistryStatus, nextWorkspaceRegistry] = await Promise.all([
+    const [
+      nextRegistryStatus,
+      nextWorkspaceRegistry,
+      nextKnowledgeDomainRegistry,
+      nextKnowledgeTypeRegistry,
+    ] = await Promise.all([
       window.mimora.getRegistryStatus(),
       window.mimora.loadWorkspaceRegistry(),
+      window.mimora.loadKnowledgeDomainRegistry(),
+      window.mimora.loadKnowledgeTypeRegistry(),
     ]);
     setRegistryStatus(nextRegistryStatus);
     setWorkspaceRegistry(nextWorkspaceRegistry);
+    setKnowledgeDomainRegistry(nextKnowledgeDomainRegistry);
+    setKnowledgeTypeRegistry(nextKnowledgeTypeRegistry);
   }
 
   function getConnectionInput() {
@@ -370,6 +398,104 @@ export function SettingsView({
     return fileExists ? '● found' : '○ not found';
   }
 
+  function getKnowledgeDomainRegistryStatusText(): string {
+    if (!knowledgeDomainRegistry) {
+      return 'not loaded';
+    }
+
+    if (knowledgeDomainRegistry.state === 'loaded') {
+      return `loaded · ${knowledgeDomainRegistry.domains.length} Domains`;
+    }
+
+    if (knowledgeDomainRegistry.state === 'loaded-with-errors') {
+      const errorCount = knowledgeDomainRegistry.issues.filter(
+        (issue) => issue.severity === 'error',
+      ).length;
+      return `validation errors: ${errorCount}`;
+    }
+
+    if (knowledgeDomainRegistry.state === 'not-found') {
+      return 'not found';
+    }
+
+    if (knowledgeDomainRegistry.state === 'inaccessible') {
+      return 'inaccessible';
+    }
+
+    return 'unavailable';
+  }
+
+  function getKnowledgeTypeRegistryStatusText(): string {
+    if (!knowledgeTypeRegistry) {
+      return 'not loaded';
+    }
+
+    if (knowledgeTypeRegistry.state === 'loaded') {
+      return `loaded · ${knowledgeTypeRegistry.types.length} Types`;
+    }
+
+    if (knowledgeTypeRegistry.state === 'loaded-with-errors') {
+      const errorCount = knowledgeTypeRegistry.issues.filter(
+        (issue) => issue.severity === 'error',
+      ).length;
+      return `validation errors: ${errorCount}`;
+    }
+
+    if (knowledgeTypeRegistry.state === 'not-found') {
+      return 'not found';
+    }
+
+    if (knowledgeTypeRegistry.state === 'inaccessible') {
+      return 'inaccessible';
+    }
+
+    return 'unavailable';
+  }
+
+  function getRegistryFileStatusClass(fileKey: string): string {
+    if (fileKey === 'workspaces') {
+      return workspaceRegistry?.state === 'loaded'
+        ? 'found'
+        : workspaceRegistry?.state === 'loaded-with-errors'
+          ? 'warning'
+          : 'missing';
+    }
+
+    if (fileKey === 'knowledge-domains') {
+      return knowledgeDomainRegistry?.state === 'loaded'
+        ? 'found'
+        : knowledgeDomainRegistry?.state === 'loaded-with-errors'
+          ? 'warning'
+          : 'missing';
+    }
+
+    if (fileKey === 'knowledge-types') {
+      return knowledgeTypeRegistry?.state === 'loaded'
+        ? 'found'
+        : knowledgeTypeRegistry?.state === 'loaded-with-errors'
+          ? 'warning'
+          : 'missing';
+    }
+
+    return 'missing';
+  }
+
+  function getRegistryFileStatusLabel(fileKey: string, fileExists: boolean): string {
+    if (fileKey === 'workspaces') {
+      return getWorkspaceRegistryStatusText();
+    }
+
+    if (fileKey === 'knowledge-domains') {
+      return getKnowledgeDomainRegistryStatusText();
+    }
+
+    if (fileKey === 'knowledge-types') {
+      return getKnowledgeTypeRegistryStatusText();
+    }
+
+    return getRegistryFileStatusText(fileExists);
+  }
+
   return (
     <section className="settings-view" aria-labelledby="settings-heading">
       <div className="settings-header">
@@ -571,22 +697,8 @@ export function SettingsView({
                 <span>{file.relativePath}</span>
               </div>
               <div className="registry-file-status">
-                <span
-                  className={
-                    file.key === 'workspaces'
-                      ? workspaceRegistry?.state === 'loaded'
-                        ? 'found'
-                        : workspaceRegistry?.state === 'loaded-with-errors'
-                          ? 'warning'
-                          : 'missing'
-                      : file.exists
-                        ? 'found'
-                        : 'missing'
-                  }
-                >
-                  {file.key === 'workspaces'
-                    ? getWorkspaceRegistryStatusText()
-                    : getRegistryFileStatusText(file.exists)}
+                <span className={getRegistryFileStatusClass(file.key)}>
+                  {getRegistryFileStatusLabel(file.key, file.exists)}
                 </span>
                 {file.key === 'workspaces' &&
                 workspaceRegistry &&
@@ -596,6 +708,36 @@ export function SettingsView({
                     onClick={() => {
                       setShowWorkspaceRegistryIssues(
                         !showWorkspaceRegistryIssues,
+                      );
+                    }}
+                    type="button"
+                  >
+                    문제 보기
+                  </button>
+                ) : null}
+                {file.key === 'knowledge-domains' &&
+                knowledgeDomainRegistry &&
+                knowledgeDomainRegistry.issues.length > 0 ? (
+                  <button
+                    className="registry-issues-toggle"
+                    onClick={() => {
+                      setShowKnowledgeDomainRegistryIssues(
+                        !showKnowledgeDomainRegistryIssues,
+                      );
+                    }}
+                    type="button"
+                  >
+                    문제 보기
+                  </button>
+                ) : null}
+                {file.key === 'knowledge-types' &&
+                knowledgeTypeRegistry &&
+                knowledgeTypeRegistry.issues.length > 0 ? (
+                  <button
+                    className="registry-issues-toggle"
+                    onClick={() => {
+                      setShowKnowledgeTypeRegistryIssues(
+                        !showKnowledgeTypeRegistryIssues,
                       );
                     }}
                     type="button"
@@ -619,6 +761,50 @@ export function SettingsView({
                   <strong>
                     {issue.severity === 'error' ? '⛔' : '⚠'}
                     {issue.workspaceId ? ` ${issue.workspaceId}` : ''}
+                  </strong>
+                  <span>
+                    {issue.message}
+                    {issue.row ? ` · row ${issue.row}` : ''}
+                    {issue.field ? ` · ${issue.field}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {showKnowledgeDomainRegistryIssues &&
+        knowledgeDomainRegistry &&
+        knowledgeDomainRegistry.issues.length > 0 ? (
+          <div className="registry-issues">
+            <h3>Knowledge Domain Registry Issues</h3>
+            <ul>
+              {knowledgeDomainRegistry.issues.map((issue, index) => (
+                <li className={issue.severity} key={`${issue.code}-${index}`}>
+                  <strong>
+                    {issue.severity === 'error' ? '오류' : '경고'}
+                    {issue.canonicalName ? ` ${issue.canonicalName}` : ''}
+                  </strong>
+                  <span>
+                    {issue.message}
+                    {issue.row ? ` · row ${issue.row}` : ''}
+                    {issue.field ? ` · ${issue.field}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {showKnowledgeTypeRegistryIssues &&
+        knowledgeTypeRegistry &&
+        knowledgeTypeRegistry.issues.length > 0 ? (
+          <div className="registry-issues">
+            <h3>Knowledge Type Registry Issues</h3>
+            <ul>
+              {knowledgeTypeRegistry.issues.map((issue, index) => (
+                <li className={issue.severity} key={`${issue.code}-${index}`}>
+                  <strong>
+                    {issue.severity === 'error' ? '오류' : '경고'}
+                    {issue.canonicalName ? ` ${issue.canonicalName}` : ''}
                   </strong>
                   <span>
                     {issue.message}

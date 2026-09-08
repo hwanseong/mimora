@@ -1,5 +1,13 @@
 import { workspaceIdPattern } from '../workspace/types';
 import {
+  resolveKnowledgeDomain,
+} from '../registry/knowledgeDomainRegistryParser';
+import type { KnowledgeDomainRegistry } from '../registry/knowledgeDomainRegistryTypes';
+import {
+  resolveKnowledgeType,
+} from '../registry/knowledgeTypeRegistryParser';
+import type { KnowledgeTypeRegistry } from '../registry/knowledgeTypeRegistryTypes';
+import {
   documentIdPattern,
   type ContentOrigin,
   type DocumentMetadataValidationIssue,
@@ -113,6 +121,10 @@ function getKnownWorkspaceIdSet(
   return knownWorkspaceIds ? new Set(knownWorkspaceIds) : null;
 }
 
+function uniqueValues(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
 function createIssue(
   issue: DocumentMetadataValidationIssue,
 ): DocumentMetadataValidationIssue {
@@ -222,6 +234,8 @@ export function parseMimoraDocumentMetadata(
   markdown: string,
   options: {
     knownWorkspaceIds?: Iterable<string>;
+    knowledgeDomainRegistry?: KnowledgeDomainRegistry | null;
+    knowledgeTypeRegistry?: KnowledgeTypeRegistry | null;
   } = {},
 ): MimoraMetadataParseResult {
   const normalizedMarkdown = normalizeMarkdownText(markdown);
@@ -335,12 +349,71 @@ export function parseMimoraDocumentMetadata(
     }
   }
 
-  metadata.knowledgeDomains = splitListValue(
+  const rawKnowledgeDomains = splitListValue(
     table.values.get('knowledge_domains') ?? '',
   );
-  metadata.knowledgeTypes = splitListValue(
-    table.values.get('knowledge_type') ?? '',
-  );
+  metadata.rawKnowledgeDomains = rawKnowledgeDomains;
+
+  if (options.knowledgeDomainRegistry) {
+    const normalizedDomains: string[] = [];
+
+    for (const rawKnowledgeDomain of rawKnowledgeDomains) {
+      const resolvedDomain = resolveKnowledgeDomain(
+        rawKnowledgeDomain,
+        options.knowledgeDomainRegistry,
+      );
+
+      if (resolvedDomain.canonicalName) {
+        normalizedDomains.push(resolvedDomain.canonicalName);
+      } else {
+        issues.push(
+          createIssue({
+            severity: 'warning',
+            code: 'unknown-knowledge-domain',
+            message: 'Knowledge Domain Registry에 존재하지 않는 domain입니다.',
+            field: 'knowledge_domains',
+            documentId,
+          }),
+        );
+      }
+    }
+
+    metadata.knowledgeDomains = uniqueValues(normalizedDomains);
+  } else {
+    metadata.knowledgeDomains = rawKnowledgeDomains;
+  }
+
+  const rawKnowledgeTypes = splitListValue(table.values.get('knowledge_type') ?? '');
+  metadata.rawKnowledgeTypes = rawKnowledgeTypes;
+
+  if (options.knowledgeTypeRegistry) {
+    const normalizedTypes: string[] = [];
+
+    for (const rawKnowledgeType of rawKnowledgeTypes) {
+      const resolvedType = resolveKnowledgeType(
+        rawKnowledgeType,
+        options.knowledgeTypeRegistry,
+      );
+
+      if (resolvedType) {
+        normalizedTypes.push(resolvedType);
+      } else {
+        issues.push(
+          createIssue({
+            severity: 'warning',
+            code: 'unknown-knowledge-type',
+            message: 'Knowledge Type Registry에 존재하지 않는 type입니다.',
+            field: 'knowledge_type',
+            documentId,
+          }),
+        );
+      }
+    }
+
+    metadata.knowledgeTypes = uniqueValues(normalizedTypes);
+  } else {
+    metadata.knowledgeTypes = rawKnowledgeTypes;
+  }
 
   const security = table.values.get('security')?.trim() as
     | DocumentSecurity

@@ -12,6 +12,8 @@ import type {
   DocumentMetadataValidationIssue,
   MimoraDocumentMetadata,
 } from '../src/metadata/types';
+import type { KnowledgeDomainRegistry } from '../src/registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistry } from '../src/registry/knowledgeTypeRegistryTypes';
 import type {
   VaultFile,
   VaultFileContent,
@@ -352,6 +354,7 @@ function createSearchSnippet(content: string, matchIndex: number, query: string)
 async function searchVault(
   vault: VaultConfig,
   query: string,
+  metadataRegistryOptions: MetadataRegistryOptions = {},
 ): Promise<VaultSearchResult[]> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -363,7 +366,10 @@ async function searchVault(
   for (const file of files) {
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
-      const metadataResult = parseMimoraDocumentMetadata(content);
+      const metadataResult = parseMimoraDocumentMetadata(
+        content,
+        metadataRegistryOptions,
+      );
       const baseResult = {
         vaultId: vault.id,
         vaultName: vault.name,
@@ -459,6 +465,11 @@ type RetrievalPipelineCounts = {
 type ParsedDocumentMetadata = {
   metadata: MimoraDocumentMetadata;
   issues: DocumentMetadataValidationIssue[];
+};
+
+type MetadataRegistryOptions = {
+  knowledgeDomainRegistry?: KnowledgeDomainRegistry | null;
+  knowledgeTypeRegistry?: KnowledgeTypeRegistry | null;
 };
 
 type DocumentEligibilityResult = {
@@ -1068,6 +1079,7 @@ async function retrieveFromVault(
   workspaceId: string,
   workspaceStatusMap: WorkspaceStatusMap,
   includeArchived: boolean,
+  metadataRegistryOptions: MetadataRegistryOptions = {},
 ): Promise<VaultRetrieval> {
   const rootPath = await resolveVaultRoot(vault);
   const files: VaultFile[] = [];
@@ -1080,7 +1092,10 @@ async function retrieveFromVault(
   for (const file of files) {
     try {
       const { content } = await readMarkdownFile(rootPath, file.relativePath);
-      const metadataResult = parseMimoraDocumentMetadata(content);
+      const metadataResult = parseMimoraDocumentMetadata(
+        content,
+        metadataRegistryOptions,
+      );
       pipeline.metadataParsedCandidates += 1;
       const eligibility = isDocumentEligibleForSearch({
         selectedWorkspaceId: workspaceId,
@@ -1333,6 +1348,22 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
 export function createVaultFilesService(settingsStore: SettingsStore) {
   const registryStatusService = createRegistryStatusService(settingsStore);
 
+  async function loadMetadataRegistryOptions(): Promise<MetadataRegistryOptions> {
+    const [domainRegistry, typeRegistry] = await Promise.all([
+      registryStatusService
+        .loadKnowledgeDomainRegistry()
+        .catch(() => null),
+      registryStatusService
+        .loadKnowledgeTypeRegistry()
+        .catch(() => null),
+    ]);
+
+    return {
+      knowledgeDomainRegistry: domainRegistry?.registry ?? null,
+      knowledgeTypeRegistry: typeRegistry?.registry ?? null,
+    };
+  }
+
   return {
     async listVaultFiles(vaultId: unknown): Promise<VaultFile[]> {
       const vault = await getVault(settingsStore, vaultId);
@@ -1358,6 +1389,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
     async searchVaultFiles(input: unknown): Promise<VaultSearchResult[]> {
       const searchInput = validateSearchInput(input);
       const settings = await settingsStore.getSettings();
+      const metadataRegistryOptions = await loadMetadataRegistryOptions();
 
       if (settings.vaults.length === 0) {
         throw new Error('등록된 Vault가 없습니다. 설정에서 Vault를 추가하세요.');
@@ -1365,7 +1397,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
 
       if (searchInput.scope === 'current') {
         const vault = await getVault(settingsStore, searchInput.vaultId);
-        return searchVault(vault, searchInput.query);
+        return searchVault(vault, searchInput.query, metadataRegistryOptions);
       }
 
       const vaultSearches = await Promise.all(
@@ -1373,7 +1405,11 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
           try {
             return {
               searched: true,
-              results: await searchVault(vault, searchInput.query),
+              results: await searchVault(
+                vault,
+                searchInput.query,
+                metadataRegistryOptions,
+              ),
             };
           } catch (error) {
             console.warn('Skipped an unavailable Vault during search.', error);
@@ -1404,6 +1440,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
       }
 
       const { phrase, tokens } = preprocessRetrievalQuery(retrievalInput.query);
+      const metadataRegistryOptions = await loadMetadataRegistryOptions();
       const workspaceRegistry =
         isAllWorkspaceScope(retrievalInput.workspaceId)
           ? await registryStatusService.loadWorkspaceRegistry()
@@ -1446,6 +1483,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 retrievalInput.workspaceId,
                 workspaceStatusMap,
                 retrievalInput.includeArchived,
+                metadataRegistryOptions,
               ),
             };
           } catch (error) {

@@ -41,6 +41,8 @@ import type {
   UpdateSecretRuleInput,
 } from '../src/security/secretDetector';
 import type { RegistryStatus } from '../src/registry/types';
+import type { KnowledgeDomainRegistryParseResult } from '../src/registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistryParseResult } from '../src/registry/knowledgeTypeRegistryTypes';
 import type { WorkspaceRegistryParseResult } from '../src/registry/workspaceRegistryTypes';
 import type {
   VaultFile,
@@ -194,6 +196,18 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('registry:loadWorkspaces') as Promise<
         MimoraIpcResult<WorkspaceRegistryParseResult>
+      >
+    ).then(unwrapIpcResult),
+  loadKnowledgeDomainRegistry: () =>
+    (
+      ipcRenderer.invoke('registry:loadKnowledgeDomains') as Promise<
+        MimoraIpcResult<KnowledgeDomainRegistryParseResult>
+      >
+    ).then(unwrapIpcResult),
+  loadKnowledgeTypeRegistry: () =>
+    (
+      ipcRenderer.invoke('registry:loadKnowledgeTypes') as Promise<
+        MimoraIpcResult<KnowledgeTypeRegistryParseResult>
       >
     ).then(unwrapIpcResult),
   addMaskingEntry: (input: AddMaskingEntryInput) =>

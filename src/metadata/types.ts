@@ -6,7 +6,9 @@ export type MimoraDocumentMetadata = {
   documentId?: string;
   workspaceIds: string[];
   originWorkspaceId?: string | null;
+  rawKnowledgeDomains?: string[];
   knowledgeDomains: string[];
+  rawKnowledgeTypes?: string[];
   knowledgeTypes: string[];
   security?: DocumentSecurity;
   contentOrigin?: ContentOrigin;

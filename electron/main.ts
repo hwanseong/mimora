@@ -40,6 +40,8 @@ import type {
   UpdateMaskingEntryInput,
 } from '../src/security/maskingEngine';
 import type { RegistryStatus } from '../src/registry/types';
+import type { KnowledgeDomainRegistryParseResult } from '../src/registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistryParseResult } from '../src/registry/knowledgeTypeRegistryTypes';
 import type { WorkspaceRegistryParseResult } from '../src/registry/workspaceRegistryTypes';
 import {
   detectSecrets,
@@ -328,6 +330,18 @@ function registerRegistryHandlers(): void {
     'registry:loadWorkspaces',
     async (): Promise<MimoraIpcResult<WorkspaceRegistryParseResult>> =>
       toIpcResult(() => registryStatusService.loadWorkspaceRegistry()),
+  );
+
+  ipcMain.handle(
+    'registry:loadKnowledgeDomains',
+    async (): Promise<MimoraIpcResult<KnowledgeDomainRegistryParseResult>> =>
+      toIpcResult(() => registryStatusService.loadKnowledgeDomainRegistry()),
+  );
+
+  ipcMain.handle(
+    'registry:loadKnowledgeTypes',
+    async (): Promise<MimoraIpcResult<KnowledgeTypeRegistryParseResult>> =>
+      toIpcResult(() => registryStatusService.loadKnowledgeTypeRegistry()),
   );
 }
 

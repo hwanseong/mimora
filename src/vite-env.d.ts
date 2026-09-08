@@ -31,6 +31,8 @@ import type {
   UpdateSecretRuleInput,
 } from './security/secretDetector';
 import type { RegistryStatus } from './registry/types';
+import type { KnowledgeDomainRegistryParseResult } from './registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistryParseResult } from './registry/knowledgeTypeRegistryTypes';
 import type { WorkspaceRegistryParseResult } from './registry/workspaceRegistryTypes';
 import type {
   AddVaultInput,
@@ -83,6 +85,8 @@ type MimoraApi = {
     ) => Promise<MimoraSettings>;
     getRegistryStatus: () => Promise<RegistryStatus>;
     loadWorkspaceRegistry: () => Promise<WorkspaceRegistryParseResult>;
+    loadKnowledgeDomainRegistry: () => Promise<KnowledgeDomainRegistryParseResult>;
+    loadKnowledgeTypeRegistry: () => Promise<KnowledgeTypeRegistryParseResult>;
     addMaskingEntry: (
       input: AddMaskingEntryInput,
     ) => Promise<MimoraSettings>;
