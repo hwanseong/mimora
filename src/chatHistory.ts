@@ -6,6 +6,7 @@ import {
   aiModeOptions,
   type RoutingDecision,
 } from './security/securityRouter';
+import type { SearchScopeSnapshot } from './searchScope';
 import {
   isChatHistoryWorkspaceId,
   normalizeChatHistoryWorkspaceId,
@@ -23,6 +24,7 @@ export type PersistedChatMessage = Pick<
 > & {
   requestStatus?: 'completed' | 'error';
   requestedMode?: ChatMessage['requestedMode'];
+  searchScopeSnapshot?: SearchScopeSnapshot;
   generationStatus?: 'complete' | 'error';
   generationErrorDetail?: string;
   sources?: LLMContextSource[];
@@ -193,6 +195,20 @@ function sanitizeResponseUnmasking(
   return replacementCount > 0 ? { replacements, replacementCount } : undefined;
 }
 
+function sanitizeSearchScopeSnapshot(
+  value: unknown,
+): SearchScopeSnapshot | undefined {
+  if (!isRecord(value) || typeof value.includeArchived !== 'boolean') {
+    return undefined;
+  }
+
+  return {
+    includeArchived: value.includeArchived,
+    domain: typeof value.domain === 'string' ? value.domain : null,
+    type: typeof value.type === 'string' ? value.type : null,
+  };
+}
+
 function sanitizeUsage(value: unknown): OpenAIUsage | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -235,6 +251,9 @@ function sanitizePersistedMessage(value: unknown): PersistedChatMessage | null {
     ? (value.requestedMode as PersistedChatMessage['requestedMode'])
     : undefined;
   const sources = sanitizeSources(value.sources);
+  const searchScopeSnapshot = sanitizeSearchScopeSnapshot(
+    value.searchScopeSnapshot,
+  );
   const routingDecision =
     value.role === 'assistant'
       ? sanitizeRoutingDecision(value.routingDecision)
@@ -243,6 +262,7 @@ function sanitizePersistedMessage(value: unknown): PersistedChatMessage | null {
   const usage = sanitizeUsage(value.usage);
 
   if (requestedMode) message.requestedMode = requestedMode;
+  if (searchScopeSnapshot) message.searchScopeSnapshot = searchScopeSnapshot;
   if (value.requestStatus === 'completed' || value.requestStatus === 'error') {
     message.requestStatus = value.requestStatus;
   }

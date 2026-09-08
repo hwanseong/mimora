@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import type { AutoRetrievedContext } from '../autoContext';
+import type { SearchScopeSnapshot } from '../searchScope';
 import { vaultSecurityLabels, vaultTypeLabels } from '../settings';
 
 export function AutoContextPanel({
   contexts,
   error,
+  searchScopeSnapshot,
   status,
 }: {
   contexts: AutoRetrievedContext[];
   error?: string;
+  searchScopeSnapshot?: SearchScopeSnapshot;
   status: 'loading' | 'complete' | 'error';
 }) {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
@@ -42,6 +45,12 @@ export function AutoContextPanel({
     (context) =>
       context.vaultType === 'private' || context.security === 'sensitive',
   );
+  const hasSearchScopeSnapshot = Boolean(
+    searchScopeSnapshot &&
+      (searchScopeSnapshot.includeArchived ||
+        searchScopeSnapshot.domain ||
+        searchScopeSnapshot.type),
+  );
 
   return (
     <details className="auto-context-details">
@@ -50,6 +59,18 @@ export function AutoContextPanel({
         {containsSensitive ? <span>🔒 Sensitive 포함</span> : null}
       </summary>
       <div className="auto-context-body">
+        {hasSearchScopeSnapshot && searchScopeSnapshot ? (
+          <small className="auto-context-scope">
+            Search Scope · Archived:{' '}
+            {searchScopeSnapshot.includeArchived ? 'Included' : 'Excluded'}
+            {searchScopeSnapshot.domain
+              ? ` · Domain: ${searchScopeSnapshot.domain}`
+              : ''}
+            {searchScopeSnapshot.type
+              ? ` · Type: ${searchScopeSnapshot.type}`
+              : ''}
+          </small>
+        ) : null}
         <div className="auto-context-documents">
           {contexts.map((context) => (
             <button

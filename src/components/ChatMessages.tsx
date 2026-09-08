@@ -146,6 +146,7 @@ export function ChatMessages({
                 <AutoContextPanel
                   contexts={message.autoContext ?? []}
                   error={message.autoContextError}
+                  searchScopeSnapshot={message.searchScopeSnapshot}
                   status={message.autoContextStatus}
                 />
               ) : null}

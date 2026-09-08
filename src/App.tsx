@@ -46,6 +46,12 @@ import {
 } from './knowledgeSearch';
 import type { KnowledgeDomain } from './registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeType } from './registry/knowledgeTypeRegistryTypes';
+import {
+  createKnowledgeSearchFiltersFromScope,
+  createGlobalSearchScope,
+  createSearchScopeSnapshot,
+  selectSearchScopeHistoryMessages,
+} from './searchScope';
 import type { SearchScopeSettings } from './settings';
 import {
   evaluateSecurity,
@@ -107,6 +113,14 @@ export function App() {
   const [knowledgeTypeOptions, setKnowledgeTypeOptions] = useState<
     KnowledgeType[]
   >([]);
+  const [
+    isKnowledgeDomainRegistryAvailable,
+    setIsKnowledgeDomainRegistryAvailable,
+  ] = useState(false);
+  const [
+    isKnowledgeTypeRegistryAvailable,
+    setIsKnowledgeTypeRegistryAvailable,
+  ] = useState(false);
   const [isSavingSearchScope, setIsSavingSearchScope] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
   const [chatHistoryStatus, setChatHistoryStatus] = useState<
@@ -141,6 +155,14 @@ export function App() {
   );
   const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
   const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
+  const globalSearchScope = useMemo(
+    () =>
+      createGlobalSearchScope(
+        searchScope.includeArchived,
+        knowledgeSearchFilters,
+      ),
+    [knowledgeSearchFilters, searchScope.includeArchived],
+  );
   const currentWorkspaceRequestStatus =
     workspaceRequestStatuses[selectedWorkspace.id] ?? 'idle';
   const isCurrentWorkspaceBusy = isChatRequestBusy(
@@ -199,6 +221,8 @@ export function App() {
 
         setKnowledgeDomainOptions(domainRegistry.domains);
         setKnowledgeTypeOptions(typeRegistry.types);
+        setIsKnowledgeDomainRegistryAvailable(Boolean(domainRegistry.registry));
+        setIsKnowledgeTypeRegistryAvailable(Boolean(typeRegistry.registry));
       })
       .catch(() => {
         if (!isMounted) {
@@ -207,6 +231,8 @@ export function App() {
 
         setKnowledgeDomainOptions([]);
         setKnowledgeTypeOptions([]);
+        setIsKnowledgeDomainRegistryAvailable(false);
+        setIsKnowledgeTypeRegistryAvailable(false);
       });
 
     return () => {
@@ -361,13 +387,33 @@ export function App() {
     const targetWorkspaceId = selectedWorkspace.id;
     const targetWorkspaceType = selectedWorkspace.type;
     const targetAIMode = aiMode;
-    const targetIncludeArchived =
-      isAllWorkspaceScope(targetWorkspaceId) && searchScope.includeArchived;
-    const targetKnowledgeFilters = isAllWorkspaceScope(targetWorkspaceId)
-      ? knowledgeSearchFilters
-      : emptyKnowledgeSearchFilters;
+    const isAllWorkspaceRequest = isAllWorkspaceScope(targetWorkspaceId);
+    const targetGlobalSearchScope = createGlobalSearchScope(
+      isAllWorkspaceRequest && globalSearchScope.includeArchived,
+      isAllWorkspaceRequest
+        ? createKnowledgeSearchFiltersFromScope(globalSearchScope)
+        : emptyKnowledgeSearchFilters,
+    );
+    const targetIncludeArchived = targetGlobalSearchScope.includeArchived;
+    const targetKnowledgeFilters =
+      createKnowledgeSearchFiltersFromScope(targetGlobalSearchScope);
+    const targetSearchScopeSnapshot =
+      createSearchScopeSnapshot(targetGlobalSearchScope);
+
+    const previousMessages = selectSearchScopeHistoryMessages(
+      chatSessions[targetWorkspaceId] ?? [],
+      targetSearchScopeSnapshot,
+      RECENT_HISTORY_MESSAGE_LIMIT,
+    );
 
     if (import.meta.env.DEV) {
+      console.info('[Mimora Search Scope]', {
+        workspaceId: targetWorkspaceId,
+        includeArchived: targetSearchScopeSnapshot.includeArchived,
+        domain: targetSearchScopeSnapshot.domain,
+        type: targetSearchScopeSnapshot.type,
+        scopedHistoryMessages: previousMessages.length,
+      });
       console.info('[Archived Debug]', {
         stage: 'sendMessage',
         workspaceId: targetWorkspaceId,
@@ -378,9 +424,6 @@ export function App() {
       });
     }
 
-    const previousMessages = (chatSessions[targetWorkspaceId] ?? []).slice(
-      -RECENT_HISTORY_MESSAGE_LIMIT,
-    );
     const manualContexts = [
       ...(workspaceContextsRef.current[targetWorkspaceId] ?? []),
     ];
@@ -390,11 +433,13 @@ export function App() {
       autoContextStatus: 'loading',
       manualContext: manualContexts,
       requestedMode: targetAIMode,
+      searchScopeSnapshot: targetSearchScopeSnapshot,
     };
     const assistantMessage: ChatMessage = {
       ...createMessage('assistant', '참고 문서를 찾는 중입니다...'),
       requestStatus: 'retrieving-context',
       requestedMode: targetAIMode,
+      searchScopeSnapshot: targetSearchScopeSnapshot,
       generationStatus: 'loading',
     };
 
@@ -1368,6 +1413,14 @@ export function App() {
     }
   }
 
+  function handleResetGlobalSearchScope(): void {
+    setKnowledgeSearchFilters(emptyKnowledgeSearchFilters);
+
+    if (searchScope.includeArchived) {
+      void handleChangeIncludeArchived(false);
+    }
+  }
+
   function completeAutoContextRetrieval(
     workspaceId: Workspace['id'],
     userMessageId: string,
@@ -1517,6 +1570,12 @@ export function App() {
               disabled={isSavingAIMode || isCurrentWorkspaceBusy}
               effectiveSecurity={currentSecurity}
               includeArchived={searchScope.includeArchived}
+              isKnowledgeDomainRegistryAvailable={
+                isKnowledgeDomainRegistryAvailable
+              }
+              isKnowledgeTypeRegistryAvailable={
+                isKnowledgeTypeRegistryAvailable
+              }
               knowledgeDomainOptions={knowledgeDomainOptions}
               knowledgeFilters={knowledgeSearchFilters}
               knowledgeTypeOptions={knowledgeTypeOptions}
@@ -1527,6 +1586,7 @@ export function App() {
                 void handleChangeIncludeArchived(includeArchived);
               }}
               onChangeKnowledgeFilters={setKnowledgeSearchFilters}
+              onResetSearchScope={handleResetGlobalSearchScope}
               searchScopeDisabled={
                 isSavingSearchScope || isCurrentWorkspaceBusy
               }

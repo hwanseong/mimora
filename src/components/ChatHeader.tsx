@@ -13,12 +13,15 @@ export function ChatHeader({
   effectiveSecurity,
   disabled = false,
   includeArchived = false,
+  isKnowledgeDomainRegistryAvailable = true,
+  isKnowledgeTypeRegistryAvailable = true,
   knowledgeDomainOptions = [],
   knowledgeFilters,
   knowledgeTypeOptions = [],
   onChangeAIMode,
   onChangeIncludeArchived,
   onChangeKnowledgeFilters,
+  onResetSearchScope,
   searchScopeDisabled = false,
   showSearchScope = false,
 }: {
@@ -27,17 +30,22 @@ export function ChatHeader({
   effectiveSecurity: EffectiveSecurity;
   disabled?: boolean;
   includeArchived?: boolean;
+  isKnowledgeDomainRegistryAvailable?: boolean;
+  isKnowledgeTypeRegistryAvailable?: boolean;
   knowledgeDomainOptions?: KnowledgeDomain[];
   knowledgeFilters?: KnowledgeSearchFilters;
   knowledgeTypeOptions?: KnowledgeType[];
   onChangeAIMode: (aiMode: AIMode) => void;
   onChangeIncludeArchived?: (includeArchived: boolean) => void;
   onChangeKnowledgeFilters?: (filters: KnowledgeSearchFilters) => void;
+  onResetSearchScope?: () => void;
   searchScopeDisabled?: boolean;
   showSearchScope?: boolean;
 }) {
   const selectedDomain = knowledgeFilters?.domains[0] ?? '';
   const selectedType = knowledgeFilters?.types[0] ?? '';
+  const knowledgeRegistryUnavailable =
+    !isKnowledgeDomainRegistryAvailable || !isKnowledgeTypeRegistryAvailable;
 
   return (
     <header className="chat-header">
@@ -65,7 +73,11 @@ export function ChatHeader({
             <label>
               <span>Domain</span>
               <select
-                disabled={searchScopeDisabled || !onChangeKnowledgeFilters}
+                disabled={
+                  searchScopeDisabled ||
+                  !onChangeKnowledgeFilters ||
+                  !isKnowledgeDomainRegistryAvailable
+                }
                 onChange={(event) => {
                   onChangeKnowledgeFilters?.({
                     domains: event.target.value ? [event.target.value] : [],
@@ -85,7 +97,11 @@ export function ChatHeader({
             <label>
               <span>Type</span>
               <select
-                disabled={searchScopeDisabled || !onChangeKnowledgeFilters}
+                disabled={
+                  searchScopeDisabled ||
+                  !onChangeKnowledgeFilters ||
+                  !isKnowledgeTypeRegistryAvailable
+                }
                 onChange={(event) => {
                   onChangeKnowledgeFilters?.({
                     domains: selectedDomain ? [selectedDomain] : [],
@@ -102,6 +118,22 @@ export function ChatHeader({
                 ))}
               </select>
             </label>
+            <button
+              className="knowledge-filter-reset"
+              disabled={
+                searchScopeDisabled ||
+                (!includeArchived && !selectedDomain && !selectedType)
+              }
+              onClick={onResetSearchScope}
+              type="button"
+            >
+              필터 초기화
+            </button>
+            {knowledgeRegistryUnavailable ? (
+              <span className="knowledge-filter-status">
+                Knowledge Registry unavailable
+              </span>
+            ) : null}
           </div>
         ) : null}
       </div>

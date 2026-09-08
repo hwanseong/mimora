@@ -13,11 +13,13 @@ import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
 import { createRegistryStatusService } from './registryStatus';
 import { parseMimoraDocumentMetadata } from '../src/metadata/mimoraMetadataParser';
+import { resolveKnowledgeDomain } from '../src/registry/knowledgeDomainRegistryParser';
 import type {
   DocumentMetadataValidationIssue,
   MimoraDocumentMetadata,
 } from '../src/metadata/types';
 import type { KnowledgeDomainRegistry } from '../src/registry/knowledgeDomainRegistryTypes';
+import { resolveKnowledgeType } from '../src/registry/knowledgeTypeRegistryParser';
 import type { KnowledgeTypeRegistry } from '../src/registry/knowledgeTypeRegistryTypes';
 import type {
   VaultFile,
@@ -481,6 +483,7 @@ type RetrievalPipelineCounts = {
   allMarkdownCandidates: number;
   metadataParsedCandidates: number;
   lifecycleEligibleCandidates: number;
+  knowledgeEligibleCandidates: number;
   queryMatchedCandidates: number;
   aboveThresholdCandidates: number;
 };
@@ -513,6 +516,48 @@ function documentMatchesKnowledgeFilters(
     filters.types.every((type) => metadata.knowledgeTypes.includes(type));
 
   return matchesDomains && matchesTypes;
+}
+
+function uniqueValues(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function normalizeKnowledgeFiltersForMetadataRegistry(
+  filters: Partial<KnowledgeSearchFilters> | null | undefined,
+  metadataRegistryOptions: MetadataRegistryOptions,
+): KnowledgeSearchFilters {
+  const normalizedFilters = normalizeKnowledgeSearchFilters(filters);
+
+  return {
+    domains: uniqueValues(
+      normalizedFilters.domains.map((domain) => {
+        if (!metadataRegistryOptions.knowledgeDomainRegistry) {
+          return domain;
+        }
+
+        return (
+          resolveKnowledgeDomain(
+            domain,
+            metadataRegistryOptions.knowledgeDomainRegistry,
+          ).canonicalName ?? domain
+        );
+      }),
+    ),
+    types: uniqueValues(
+      normalizedFilters.types.map((type) => {
+        if (!metadataRegistryOptions.knowledgeTypeRegistry) {
+          return type;
+        }
+
+        return (
+          resolveKnowledgeType(
+            type,
+            metadataRegistryOptions.knowledgeTypeRegistry,
+          ) ?? type
+        );
+      }),
+    ),
+  };
 }
 
 type DocumentEligibilityResult = {
@@ -548,6 +593,7 @@ function createEmptyRetrievalPipelineCounts(): RetrievalPipelineCounts {
     allMarkdownCandidates: 0,
     metadataParsedCandidates: 0,
     lifecycleEligibleCandidates: 0,
+    knowledgeEligibleCandidates: 0,
     queryMatchedCandidates: 0,
     aboveThresholdCandidates: 0,
   };
@@ -564,6 +610,8 @@ function mergeRetrievalPipelineCounts(
         total.metadataParsedCandidates + item.metadataParsedCandidates,
       lifecycleEligibleCandidates:
         total.lifecycleEligibleCandidates + item.lifecycleEligibleCandidates,
+      knowledgeEligibleCandidates:
+        total.knowledgeEligibleCandidates + item.knowledgeEligibleCandidates,
       queryMatchedCandidates:
         total.queryMatchedCandidates + item.queryMatchedCandidates,
       aboveThresholdCandidates:
@@ -1173,6 +1221,8 @@ async function retrieveFromVault(
         continue;
       }
 
+      pipeline.knowledgeEligibleCandidates += 1;
+
       const {
         matchedTokenCount,
         phraseMatched,
@@ -1264,6 +1314,8 @@ function logRetrievalDiagnostics(input: {
   results: ScoredAutoContext[];
   queryTokenCount: number;
   queryTokens: string[];
+  knowledgeFilters: KnowledgeSearchFilters;
+  pipeline: RetrievalPipelineCounts;
 }): void {
   if (
     process.env.NODE_ENV !== 'development' &&
@@ -1291,7 +1343,9 @@ function logRetrievalDiagnostics(input: {
   console.info('[Mimora Retrieval]', {
     queryChars: input.queryChars,
     queryTokens: input.queryTokens,
+    knowledgeFilters: input.knowledgeFilters,
     scannedCandidates: input.candidateCount,
+    pipeline: input.pipeline,
     matchedCandidates: input.results.length,
     exactMatchCandidates: input.results.filter(
       (result) => result.exactMeaningfulTokenMatch,
@@ -1444,14 +1498,24 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
       const searchInput = validateSearchInput(input);
       const settings = await settingsStore.getSettings();
       const metadataRegistryOptions = await loadMetadataRegistryOptions();
+      const requestedKnowledgeFilters = normalizeKnowledgeSearchFilters(
+        searchInput.knowledgeFilters,
+      );
+      const effectiveKnowledgeFilters =
+        normalizeKnowledgeFiltersForMetadataRegistry(
+          requestedKnowledgeFilters,
+          metadataRegistryOptions,
+        );
 
       if (isDevelopmentEnvironment()) {
         console.info('[Mimora Knowledge Filter]', {
           stage: 'searchVaultFiles',
-          selectedDomain: searchInput.knowledgeFilters?.domains[0] ?? '',
-          selectedType: searchInput.knowledgeFilters?.types[0] ?? '',
-          requestDomains: searchInput.knowledgeFilters?.domains ?? [],
-          requestTypes: searchInput.knowledgeFilters?.types ?? [],
+          selectedDomain: effectiveKnowledgeFilters.domains[0] ?? '',
+          selectedType: effectiveKnowledgeFilters.types[0] ?? '',
+          requestDomains: requestedKnowledgeFilters.domains,
+          requestTypes: requestedKnowledgeFilters.types,
+          effectiveDomains: effectiveKnowledgeFilters.domains,
+          effectiveTypes: effectiveKnowledgeFilters.types,
         });
       }
 
@@ -1465,7 +1529,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
           vault,
           searchInput.query,
           metadataRegistryOptions,
-          searchInput.knowledgeFilters,
+          effectiveKnowledgeFilters,
         );
       }
 
@@ -1478,7 +1542,7 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
                 vault,
                 searchInput.query,
                 metadataRegistryOptions,
-                searchInput.knowledgeFilters,
+                effectiveKnowledgeFilters,
               ),
             };
           } catch (error) {
@@ -1511,10 +1575,15 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
 
       const { phrase, tokens } = preprocessRetrievalQuery(retrievalInput.query);
       const metadataRegistryOptions = await loadMetadataRegistryOptions();
+      const normalizedKnowledgeFilters =
+        normalizeKnowledgeFiltersForMetadataRegistry(
+          retrievalInput.knowledgeFilters,
+          metadataRegistryOptions,
+        );
       const effectiveKnowledgeFilters = isAllWorkspaceScope(
         retrievalInput.workspaceId,
       )
-        ? retrievalInput.knowledgeFilters
+        ? normalizedKnowledgeFilters
         : normalizeKnowledgeSearchFilters();
       const workspaceRegistry =
         isAllWorkspaceScope(retrievalInput.workspaceId)
@@ -1536,6 +1605,8 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
           isAllWorkspace: isAllWorkspaceScope(retrievalInput.workspaceId),
           workspaceRegistryState: workspaceRegistry?.state ?? null,
           queryTokens: tokens,
+          requestKnowledgeFilters: retrievalInput.knowledgeFilters,
+          effectiveKnowledgeFilters,
         });
         console.info('[Archived Debug]', {
           stage: 'workspace-lookup',
@@ -1602,6 +1673,10 @@ export function createVaultFilesService(settingsStore: SettingsStore) {
         results: scoredResults,
         queryTokenCount: tokens.length,
         queryTokens: tokens,
+        knowledgeFilters: effectiveKnowledgeFilters,
+        pipeline: mergeRetrievalPipelineCounts(
+          vaultRetrievals.map((result) => result.retrieval.pipeline),
+        ),
       });
 
       const acceptedResults = scoredResults

@@ -9,6 +9,7 @@ import type {
   OpenAIUsage,
 } from './externalAI';
 import type { ExternalPayloadPreview } from './security/externalPayloadPreview';
+import type { SearchScopeSnapshot } from './searchScope';
 import type { SecretDetection } from './security/secretDetector';
 import type {
   ResponseUnmaskingSnapshotEntry,
@@ -77,6 +78,7 @@ export type ChatMessage = {
   autoContextError?: string;
   requestStatus?: ChatRequestStatus;
   requestedMode?: AIMode;
+  searchScopeSnapshot?: SearchScopeSnapshot;
   generationStatus?: 'loading' | 'complete' | 'error';
   generationErrorDetail?: string;
   sources?: LLMContextSource[];

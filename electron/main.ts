@@ -134,6 +134,10 @@ function logArchivedRetrievalIpcInput(input: unknown): void {
     query?: unknown;
     workspaceId?: unknown;
     includeArchived?: unknown;
+    knowledgeFilters?: {
+      domains?: unknown;
+      types?: unknown;
+    };
   };
   const query = typeof candidate.query === 'string' ? candidate.query : '';
 
@@ -143,6 +147,12 @@ function logArchivedRetrievalIpcInput(input: unknown): void {
       typeof candidate.workspaceId === 'string' ? candidate.workspaceId : null,
     requestIncludeArchived: candidate.includeArchived === true,
     retrievalIncludeArchived: candidate.includeArchived === true,
+    requestDomains: Array.isArray(candidate.knowledgeFilters?.domains)
+      ? candidate.knowledgeFilters.domains
+      : [],
+    requestTypes: Array.isArray(candidate.knowledgeFilters?.types)
+      ? candidate.knowledgeFilters.types
+      : [],
     questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
   });
 }
