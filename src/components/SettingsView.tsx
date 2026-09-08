@@ -20,6 +20,8 @@ import {
 import { MaskingSettingsSection } from './MaskingSettingsSection';
 import { ExternalAISettingsSection } from './ExternalAISettingsSection';
 import { SecretDetectionSettingsSection } from './SecretDetectionSettingsSection';
+import type { RegistryStatus } from '../registry/types';
+import type { WorkspaceRegistryParseResult } from '../registry/workspaceRegistryTypes';
 
 type VaultFormState = {
   id?: string;
@@ -65,9 +67,20 @@ export function SettingsView() {
   const [isRefreshingModels, setIsRefreshingModels] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isSavingLocalAI, setIsSavingLocalAI] = useState(false);
+  const [registryStatus, setRegistryStatus] =
+    useState<RegistryStatus | null>(null);
+  const [workspaceRegistry, setWorkspaceRegistry] =
+    useState<WorkspaceRegistryParseResult | null>(null);
+  const [showWorkspaceRegistryIssues, setShowWorkspaceRegistryIssues] =
+    useState(false);
 
   const isEditing = Boolean(formState?.id);
   const sortedVaults = useMemo(() => settings.vaults, [settings.vaults]);
+  const registryHomeVault = settings.registry.homeVaultId
+    ? settings.vaults.find((vault) => vault.id === settings.registry.homeVaultId)
+    : null;
+  const deleteTargetIsRegistryHome =
+    Boolean(deleteTarget) && deleteTarget?.id === settings.registry.homeVaultId;
   const configuredModelMissing = Boolean(
     modelsLoaded &&
       localAIForm.model &&
@@ -88,6 +101,16 @@ export function SettingsView() {
         if (isMounted) {
           setSettings(loadedSettings);
           setLocalAIForm({ ...loadedSettings.localAI });
+          const [loadedRegistryStatus, loadedWorkspaceRegistry] =
+            await Promise.all([
+              window.mimora.getRegistryStatus(),
+              window.mimora.loadWorkspaceRegistry(),
+            ]);
+
+          if (isMounted) {
+            setRegistryStatus(loadedRegistryStatus);
+            setWorkspaceRegistry(loadedWorkspaceRegistry);
+          }
         }
       } catch (error) {
         if (isMounted) {
@@ -106,6 +129,15 @@ export function SettingsView() {
       isMounted = false;
     };
   }, []);
+
+  async function refreshRegistryStatus(): Promise<void> {
+    const [nextRegistryStatus, nextWorkspaceRegistry] = await Promise.all([
+      window.mimora.getRegistryStatus(),
+      window.mimora.loadWorkspaceRegistry(),
+    ]);
+    setRegistryStatus(nextRegistryStatus);
+    setWorkspaceRegistry(nextWorkspaceRegistry);
+  }
 
   function getConnectionInput() {
     return {
@@ -255,6 +287,7 @@ export function SettingsView() {
 
       setSettings(nextSettings);
       setFormState(null);
+      await refreshRegistryStatus();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
@@ -267,9 +300,67 @@ export function SettingsView() {
       const nextSettings = await window.mimora.deleteVault(vault.id);
       setSettings(nextSettings);
       setDeleteTarget(null);
+      await refreshRegistryStatus();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
+  }
+
+  async function updateRegistryHomeVault(homeVaultId: string): Promise<void> {
+    setErrorMessage(null);
+
+    try {
+      const nextSettings = await window.mimora.updateRegistryHomeVault(
+        homeVaultId || null,
+      );
+      setSettings(nextSettings);
+      await refreshRegistryStatus();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  }
+
+  function getRegistryMessage(): string {
+    if (!settings.registry.homeVaultId) {
+      return 'Registry Home Vault가 지정되지 않았습니다.';
+    }
+
+    if (!registryHomeVault || registryStatus?.homeVaultAvailable === false) {
+      return 'Registry Home Vault에 접근할 수 없습니다.';
+    }
+
+    return 'Registry Home Vault에 접근할 수 있습니다.';
+  }
+
+  function getWorkspaceRegistryStatusText(): string {
+    if (!workspaceRegistry) {
+      return '○ not loaded';
+    }
+
+    if (workspaceRegistry.state === 'loaded') {
+      return `● loaded · ${workspaceRegistry.workspaces.length} Workspaces`;
+    }
+
+    if (workspaceRegistry.state === 'loaded-with-errors') {
+      const errorCount = workspaceRegistry.issues.filter(
+        (issue) => issue.severity === 'error',
+      ).length;
+      return `⚠ validation errors: ${errorCount}`;
+    }
+
+    if (workspaceRegistry.state === 'not-found') {
+      return '○ not found';
+    }
+
+    if (workspaceRegistry.state === 'inaccessible') {
+      return '○ inaccessible';
+    }
+
+    return '○ unavailable';
+  }
+
+  function getRegistryFileStatusText(fileExists: boolean): string {
+    return fileExists ? '● found' : '○ not found';
   }
 
   return (
@@ -429,6 +520,111 @@ export function SettingsView() {
         settings={settings}
       />
 
+      <section className="registry-card" aria-labelledby="registry-heading">
+        <div className="registry-header">
+          <div>
+            <h2 id="registry-heading">Registry</h2>
+            <p>{getRegistryMessage()}</p>
+          </div>
+        </div>
+
+        <label className="registry-home-field">
+          <span>Registry Home Vault</span>
+          <select
+            disabled={settings.vaults.length === 0}
+            onChange={(event) => {
+              void updateRegistryHomeVault(event.target.value);
+            }}
+            value={settings.registry.homeVaultId ?? ''}
+          >
+            <option value="">
+              {settings.vaults.length === 0
+                ? '등록된 Vault가 없습니다'
+                : '선택하지 않음'}
+            </option>
+            {settings.vaults.map((vault) => (
+              <option key={vault.id} value={vault.id}>
+                {vault.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="registry-file-list">
+          {(registryStatus?.files ?? []).map((file) => (
+            <div className="registry-file-row" key={file.key}>
+              <div>
+                <strong>
+                  {file.key === 'workspaces'
+                    ? 'Workspace Registry'
+                    : file.key === 'knowledge-domains'
+                      ? 'Knowledge Domains'
+                      : 'Knowledge Types'}
+                </strong>
+                <span>{file.relativePath}</span>
+              </div>
+              <div className="registry-file-status">
+                <span
+                  className={
+                    file.key === 'workspaces'
+                      ? workspaceRegistry?.state === 'loaded'
+                        ? 'found'
+                        : workspaceRegistry?.state === 'loaded-with-errors'
+                          ? 'warning'
+                          : 'missing'
+                      : file.exists
+                        ? 'found'
+                        : 'missing'
+                  }
+                >
+                  {file.key === 'workspaces'
+                    ? getWorkspaceRegistryStatusText()
+                    : getRegistryFileStatusText(file.exists)}
+                </span>
+                {file.key === 'workspaces' &&
+                workspaceRegistry &&
+                workspaceRegistry.issues.length > 0 ? (
+                  <button
+                    className="registry-issues-toggle"
+                    onClick={() => {
+                      setShowWorkspaceRegistryIssues(
+                        !showWorkspaceRegistryIssues,
+                      );
+                    }}
+                    type="button"
+                  >
+                    문제 보기
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {showWorkspaceRegistryIssues &&
+        workspaceRegistry &&
+        workspaceRegistry.issues.length > 0 ? (
+          <div className="registry-issues">
+            <h3>Workspace Registry Issues</h3>
+            <ul>
+              {workspaceRegistry.issues.map((issue, index) => (
+                <li className={issue.severity} key={`${issue.code}-${index}`}>
+                  <strong>
+                    {issue.severity === 'error' ? '⛔' : '⚠'}
+                    {issue.workspaceId ? ` ${issue.workspaceId}` : ''}
+                  </strong>
+                  <span>
+                    {issue.message}
+                    {issue.row ? ` · row ${issue.row}` : ''}
+                    {issue.field ? ` · ${issue.field}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </section>
+
       <MaskingSettingsSection
         onSettingsChange={setSettings}
         settings={settings}
@@ -535,6 +731,13 @@ export function SettingsView() {
             '{deleteTarget.name}' Vault 등록을 삭제하시겠습니까?
             <br />
             실제 Obsidian Vault 폴더나 파일은 삭제되지 않습니다.
+            {deleteTargetIsRegistryHome ? (
+              <>
+                <br />
+                이 Vault는 Registry Home Vault로 지정되어 있으며, 삭제 시
+                Registry Home 지정이 해제됩니다.
+              </>
+            ) : null}
           </p>
           <div className="form-actions">
             <button

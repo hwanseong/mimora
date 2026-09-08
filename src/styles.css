@@ -1856,7 +1856,8 @@ button {
   line-height: 1.4;
 }
 
-.local-ai-card {
+.local-ai-card,
+.registry-card {
   display: grid;
   gap: 12px;
   width: min(900px, 100%);
@@ -2126,7 +2127,8 @@ button {
   resize: vertical;
 }
 
-.local-ai-header {
+.local-ai-header,
+.registry-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -2135,20 +2137,181 @@ button {
 
 .local-ai-header h2,
 .local-ai-header p,
+.registry-header h2,
+.registry-header p,
 .local-ai-messages p {
   margin: 0;
 }
 
-.local-ai-header h2 {
+.local-ai-header h2,
+.registry-header h2 {
   color: #111827;
   font-size: 15px;
   line-height: 1.25;
 }
 
-.local-ai-header p {
+.local-ai-header p,
+.registry-header p {
   margin-top: 3px;
   color: #667085;
   font-size: 12px;
+}
+
+.registry-home-field {
+  display: grid;
+  gap: 6px;
+}
+
+.registry-home-field > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.registry-home-field select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  padding: 6px 9px;
+  font: inherit;
+  outline: 0;
+}
+
+.registry-home-field select:focus {
+  border-color: #b8c0cc;
+  box-shadow: 0 0 0 3px rgb(32 41 56 / 8%);
+}
+
+.registry-home-field select:disabled {
+  background: #f8fafc;
+  color: #7b8494;
+}
+
+.registry-file-list {
+  display: grid;
+  gap: 6px;
+}
+
+.registry-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #eceef2;
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+
+.registry-file-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.registry-file-row strong {
+  color: #111827;
+  font-size: 12.5px;
+}
+
+.registry-file-row span {
+  color: #667085;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.registry-file-status {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.registry-file-status > span {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+
+.registry-file-status > span.found {
+  color: #237a4b;
+}
+
+.registry-file-status > span.missing {
+  color: #7b8494;
+}
+
+.registry-file-status > span.warning {
+  color: #9a6700;
+}
+
+.registry-issues-toggle {
+  min-height: 24px;
+  border: 1px solid #e2e5ea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475467;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.registry-issues-toggle:hover {
+  border-color: #cfd5df;
+  background: #f9fafb;
+}
+
+.registry-issues {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #eceef2;
+  border-radius: 8px;
+  background: #fafafa;
+  padding: 10px;
+}
+
+.registry-issues h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.registry-issues ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.registry-issues li {
+  display: grid;
+  gap: 2px;
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: #ffffff;
+}
+
+.registry-issues li.error {
+  border: 1px solid #e6b4b1;
+}
+
+.registry-issues li.warning {
+  border: 1px solid #ead49a;
+}
+
+.registry-issues li strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.registry-issues li span {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .local-ai-connection {

@@ -15,6 +15,10 @@ import {
   createDefaultSecretDetectionSettings,
   type SecretDetectionSettings,
 } from './security/secretDetector';
+import {
+  defaultRegistrySettings,
+  type RegistrySettings,
+} from './registry/types';
 
 export const vaultTypeOptions = ['work', 'private', 'knowledge'] as const;
 export const vaultSecurityOptions = [
@@ -38,6 +42,7 @@ export type VaultConfig = {
 
 export type MimoraSettings = {
   vaults: VaultConfig[];
+  registry: RegistrySettings;
   localAI: LocalAISettings;
   externalAI: ExternalAISettings;
   aiMode: AIMode;
@@ -73,6 +78,7 @@ export type MimoraIpcResult<T> =
 
 export const defaultSettings: MimoraSettings = {
   vaults: [],
+  registry: { ...defaultRegistrySettings },
   localAI: { ...defaultLocalAISettings },
   externalAI: { ...defaultExternalAISettings },
   aiMode: 'auto',

@@ -41,6 +41,10 @@ import {
   type SecretDetectionSettings,
   type UpdateSecretRuleInput,
 } from '../src/security/secretDetector';
+import {
+  defaultRegistrySettings,
+  type RegistrySettings,
+} from '../src/registry/types';
 
 type LegacyVaultSettings = {
   workVaultPath?: unknown;
@@ -57,6 +61,7 @@ type SettingsStoreOptions = {
 function cloneSettings(settings: MimoraSettings): MimoraSettings {
   return {
     vaults: settings.vaults.map((vault) => ({ ...vault })),
+    registry: { ...settings.registry },
     localAI: { ...settings.localAI },
     externalAI: { ...settings.externalAI },
     aiMode: settings.aiMode,
@@ -70,6 +75,46 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
         ...(rule.keywords ? { keywords: [...rule.keywords] } : {}),
       })),
     },
+  };
+}
+
+function parseRegistrySettings(
+  value: unknown,
+  vaults: VaultConfig[],
+): {
+  registry: RegistrySettings;
+  migrated: boolean;
+} {
+  if (typeof value !== 'object' || value === null) {
+    return {
+      registry: { ...defaultRegistrySettings },
+      migrated: true,
+    };
+  }
+
+  const homeVaultId = (value as Partial<RegistrySettings>).homeVaultId;
+
+  if (homeVaultId === null || homeVaultId === undefined) {
+    return {
+      registry: { homeVaultId: null },
+      migrated: homeVaultId === undefined,
+    };
+  }
+
+  if (typeof homeVaultId !== 'string') {
+    return {
+      registry: { homeVaultId: null },
+      migrated: true,
+    };
+  }
+
+  const homeVaultExists = vaults.some((vault) => vault.id === homeVaultId);
+
+  return {
+    registry: {
+      homeVaultId: homeVaultExists ? homeVaultId : null,
+    },
+    migrated: !homeVaultExists,
   };
 }
 
@@ -538,6 +583,7 @@ function migrateLegacySettings(
 
   return {
     vaults,
+    registry: { ...defaultRegistrySettings },
     localAI: { ...defaultLocalAISettings },
     externalAI: { ...defaultExternalAISettings },
     aiMode: 'auto',
@@ -566,6 +612,22 @@ function parseSettings(
   const parsedSettings = JSON.parse(rawContent) as unknown;
 
   if (isMimoraSettings(parsedSettings)) {
+    const vaults = parsedSettings.vaults.filter(
+      (vault): vault is VaultConfig =>
+        typeof vault === 'object' &&
+        vault !== null &&
+        typeof vault.id === 'string' &&
+        typeof vault.name === 'string' &&
+        isVaultType(vault.type) &&
+        isVaultSecurity(vault.security) &&
+        typeof vault.path === 'string' &&
+        typeof vault.createdAt === 'string' &&
+        typeof vault.updatedAt === 'string',
+    );
+    const parsedRegistry = parseRegistrySettings(
+      (parsedSettings as Partial<MimoraSettings>).registry,
+      vaults,
+    );
     const localAI = parseLocalAISettings(
       (parsedSettings as Partial<MimoraSettings>).localAI,
     );
@@ -586,18 +648,8 @@ function parseSettings(
 
     return {
       settings: {
-        vaults: parsedSettings.vaults.filter(
-          (vault): vault is VaultConfig =>
-            typeof vault === 'object' &&
-            vault !== null &&
-            typeof vault.id === 'string' &&
-            typeof vault.name === 'string' &&
-            isVaultType(vault.type) &&
-            isVaultSecurity(vault.security) &&
-            typeof vault.path === 'string' &&
-            typeof vault.createdAt === 'string' &&
-            typeof vault.updatedAt === 'string',
-        ),
+        vaults,
+        registry: parsedRegistry.registry,
         localAI: localAI ?? { ...defaultLocalAISettings },
         externalAI: externalAI ?? { ...defaultExternalAISettings },
         aiMode,
@@ -607,6 +659,7 @@ function parseSettings(
       migrated:
         localAI === null ||
         externalAI === null ||
+        parsedRegistry.migrated ||
         !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode) ||
         parsedMasking.migrated ||
         parsedSecretDetection.migrated,
@@ -723,11 +776,7 @@ export function createSettingsStore({
 
         const now = getNow();
         const nextSettings: MimoraSettings = {
-          localAI: settings.localAI,
-          externalAI: settings.externalAI,
-          aiMode: settings.aiMode,
-          masking: settings.masking,
-          secretDetection: settings.secretDetection,
+          ...settings,
           vaults: [
             ...settings.vaults,
             {
@@ -757,11 +806,7 @@ export function createSettingsStore({
         ensureUniqueVaultPath(settings, vaultInput.path, platform, input.id);
 
         const nextSettings: MimoraSettings = {
-          localAI: settings.localAI,
-          externalAI: settings.externalAI,
-          aiMode: settings.aiMode,
-          masking: settings.masking,
-          secretDetection: settings.secretDetection,
+          ...settings,
           vaults: settings.vaults.map((vault) =>
             vault.id === input.id
               ? {
@@ -786,11 +831,11 @@ export function createSettingsStore({
         }
 
         const nextSettings: MimoraSettings = {
-          localAI: settings.localAI,
-          externalAI: settings.externalAI,
-          aiMode: settings.aiMode,
-          masking: settings.masking,
-          secretDetection: settings.secretDetection,
+          ...settings,
+          registry:
+            settings.registry.homeVaultId === id
+              ? { homeVaultId: null }
+              : settings.registry,
           vaults: settings.vaults.filter((vault) => vault.id !== id),
         };
 
@@ -803,12 +848,29 @@ export function createSettingsStore({
         const localAI = validateLocalAISettings(input);
 
         return persistSettings({
-          vaults: settings.vaults,
+          ...settings,
           localAI,
-          externalAI: settings.externalAI,
-          aiMode: settings.aiMode,
-          masking: settings.masking,
-          secretDetection: settings.secretDetection,
+        });
+      }),
+
+    updateRegistryHomeVault: (homeVaultId: unknown) =>
+      runExclusive(async () => {
+        if (homeVaultId !== null && typeof homeVaultId !== 'string') {
+          throw new Error('Registry Home Vault 설정값이 올바르지 않습니다.');
+        }
+
+        const settings = await loadSettings();
+
+        if (
+          homeVaultId &&
+          !settings.vaults.some((vault) => vault.id === homeVaultId)
+        ) {
+          throw new Error('Registry Home Vault를 찾을 수 없습니다.');
+        }
+
+        return persistSettings({
+          ...settings,
+          registry: { homeVaultId },
         });
       }),
 

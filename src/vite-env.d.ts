@@ -30,6 +30,8 @@ import type {
   AddSecretRuleInput,
   UpdateSecretRuleInput,
 } from './security/secretDetector';
+import type { RegistryStatus } from './registry/types';
+import type { WorkspaceRegistryParseResult } from './registry/workspaceRegistryTypes';
 import type {
   AddVaultInput,
   MimoraSettings,
@@ -72,6 +74,11 @@ type MimoraApi = {
       input: ExternalAIChatInput,
     ) => Promise<ExternalAIChatResult>;
     updateAIMode: (aiMode: AIMode) => Promise<MimoraSettings>;
+    updateRegistryHomeVault: (
+      homeVaultId: string | null,
+    ) => Promise<MimoraSettings>;
+    getRegistryStatus: () => Promise<RegistryStatus>;
+    loadWorkspaceRegistry: () => Promise<WorkspaceRegistryParseResult>;
     addMaskingEntry: (
       input: AddMaskingEntryInput,
     ) => Promise<MimoraSettings>;

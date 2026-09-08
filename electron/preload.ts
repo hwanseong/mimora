@@ -39,6 +39,8 @@ import type {
   AddSecretRuleInput,
   UpdateSecretRuleInput,
 } from '../src/security/secretDetector';
+import type { RegistryStatus } from '../src/registry/types';
+import type { WorkspaceRegistryParseResult } from '../src/registry/workspaceRegistryTypes';
 import type {
   VaultFile,
   VaultFileContent,
@@ -167,6 +169,24 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('settings:updateAIMode', aiMode) as Promise<
         MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  updateRegistryHomeVault: (homeVaultId: string | null) =>
+    (
+      ipcRenderer.invoke('settings:updateRegistryHomeVault', homeVaultId) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
+  getRegistryStatus: () =>
+    (
+      ipcRenderer.invoke('registry:getStatus') as Promise<
+        MimoraIpcResult<RegistryStatus>
+      >
+    ).then(unwrapIpcResult),
+  loadWorkspaceRegistry: () =>
+    (
+      ipcRenderer.invoke('registry:loadWorkspaces') as Promise<
+        MimoraIpcResult<WorkspaceRegistryParseResult>
       >
     ).then(unwrapIpcResult),
   addMaskingEntry: (input: AddMaskingEntryInput) =>

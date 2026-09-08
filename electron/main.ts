@@ -36,6 +36,8 @@ import type {
   AddMaskingEntryInput,
   UpdateMaskingEntryInput,
 } from '../src/security/maskingEngine';
+import type { RegistryStatus } from '../src/registry/types';
+import type { WorkspaceRegistryParseResult } from '../src/registry/workspaceRegistryTypes';
 import {
   detectSecrets,
   getSecretRules,
@@ -56,6 +58,7 @@ import type {
 } from '../src/chatHistory';
 import { createChatHistoryStore } from './chatHistoryStore';
 import { createSettingsStore } from './settingsStore';
+import { createRegistryStatusService } from './registryStatus';
 import { createVaultFilesService } from './vaultFiles';
 import { createLLMProvider } from './llm/createLLMProvider';
 import { OpenAIProvider } from './llm/OpenAIProvider';
@@ -89,6 +92,7 @@ const chatHistoryStore = createChatHistoryStore({
   safeStorage,
 });
 const vaultFilesService = createVaultFilesService(settingsStore);
+const registryStatusService = createRegistryStatusService(settingsStore);
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : '설정 처리 중 오류가 발생했습니다.';
@@ -173,6 +177,15 @@ function registerSettingsHandlers(): void {
   );
 
   ipcMain.handle(
+    'settings:updateRegistryHomeVault',
+    async (
+      _event,
+      homeVaultId: string | null,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateRegistryHomeVault(homeVaultId)),
+  );
+
+  ipcMain.handle(
     'settings:addMaskingEntry',
     async (
       _event,
@@ -245,6 +258,20 @@ function registerSettingsHandlers(): void {
         suggestedName: path.basename(selectedPath),
       };
     },
+  );
+}
+
+function registerRegistryHandlers(): void {
+  ipcMain.handle(
+    'registry:getStatus',
+    async (): Promise<MimoraIpcResult<RegistryStatus>> =>
+      toIpcResult(() => registryStatusService.getRegistryStatus()),
+  );
+
+  ipcMain.handle(
+    'registry:loadWorkspaces',
+    async (): Promise<MimoraIpcResult<WorkspaceRegistryParseResult>> =>
+      toIpcResult(() => registryStatusService.loadWorkspaceRegistry()),
   );
 }
 
@@ -780,6 +807,7 @@ function createMainWindow(): void {
 }
 
 registerSettingsHandlers();
+registerRegistryHandlers();
 registerChatHistoryHandlers();
 registerVaultFileHandlers();
 registerLocalAIHandlers();
