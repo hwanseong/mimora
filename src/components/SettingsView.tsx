@@ -171,6 +171,17 @@ export function SettingsView({
     setKnowledgeTypeRegistry(nextKnowledgeTypeRegistry);
   }
 
+  async function handleReloadRegistry(): Promise<void> {
+    setErrorMessage(null);
+
+    try {
+      await refreshRegistryStatus();
+      await onWorkspaceRegistryChanged?.();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  }
+
   function getConnectionInput() {
     return {
       provider: localAIForm.provider,
@@ -356,6 +367,18 @@ export function SettingsView({
   }
 
   function getRegistryMessage(): string {
+    if (registryStatus?.runtime.mode === 'normal') {
+      return 'Registry Markdown을 정상적으로 사용 중입니다.';
+    }
+
+    if (registryStatus?.runtime.mode === 'degraded') {
+      return 'Registry를 현재 읽을 수 없어 마지막 정상 상태를 사용 중입니다.';
+    }
+
+    if (registryStatus?.runtime.mode === 'unresolved') {
+      return 'Registry를 확인할 수 없습니다.';
+    }
+
     if (!settings.registry.homeVaultId) {
       return 'Registry Home Vault가 지정되지 않았습니다.';
     }
@@ -365,6 +388,48 @@ export function SettingsView({
     }
 
     return 'Registry Home Vault에 접근할 수 있습니다.';
+  }
+
+  function getRegistryModeLabel(): string {
+    if (!registryStatus) {
+      return 'Loading';
+    }
+
+    return registryStatus.runtime.mode === 'normal'
+      ? 'Normal'
+      : registryStatus.runtime.mode === 'degraded'
+        ? 'Degraded'
+        : 'Unresolved';
+  }
+
+  function getRegistryRuntimeDetail(): string {
+    if (!registryStatus) {
+      return 'Registry 상태를 불러오는 중입니다.';
+    }
+
+    if (registryStatus.runtime.mode === 'normal') {
+      return `Workspace Registry · ${registryStatus.runtime.workspaceCount} / Knowledge Domains · ${registryStatus.runtime.knowledgeDomainCount} / Knowledge Types · ${registryStatus.runtime.knowledgeTypeCount}`;
+    }
+
+    if (registryStatus.runtime.mode === 'degraded') {
+      return `Using cached registry · Last successful load: ${
+        registryStatus.runtime.lastSuccessfulLoad ?? 'unknown'
+      }`;
+    }
+
+    return 'No valid Registry available';
+  }
+
+  function getRegistryRuntimeIssueText(): string {
+    const issues = registryStatus?.runtime.issues ?? [];
+
+    if (issues.length === 0) {
+      return '';
+    }
+
+    return issues
+      .map((issue) => `${issue.registry}: ${issue.message}`)
+      .join(' / ');
   }
 
   function getWorkspaceRegistryStatusText(): string {
@@ -453,6 +518,18 @@ export function SettingsView({
   }
 
   function getRegistryFileStatusClass(fileKey: string): string {
+    if (registryStatus?.runtime.mode === 'degraded') {
+      return registryStatus.runtime.issues.some(
+        (issue) => issue.registry === fileKey,
+      )
+        ? 'warning'
+        : 'found';
+    }
+
+    if (registryStatus?.runtime.mode === 'unresolved') {
+      return 'missing';
+    }
+
     if (fileKey === 'workspaces') {
       return workspaceRegistry?.state === 'loaded'
         ? 'found'
@@ -481,6 +558,14 @@ export function SettingsView({
   }
 
   function getRegistryFileStatusLabel(fileKey: string, fileExists: boolean): string {
+    if (registryStatus?.runtime.mode === 'degraded') {
+      return registryStatus.runtime.issues.some(
+        (issue) => issue.registry === fileKey,
+      )
+        ? 'cached · current issue'
+        : 'cached';
+    }
+
     if (fileKey === 'workspaces') {
       return getWorkspaceRegistryStatusText();
     }
@@ -659,6 +744,27 @@ export function SettingsView({
             <h2 id="registry-heading">Registry</h2>
             <p>{getRegistryMessage()}</p>
           </div>
+          <button
+            className="secondary-button"
+            onClick={() => {
+              void handleReloadRegistry();
+            }}
+            type="button"
+          >
+            Registry 다시 읽기
+          </button>
+        </div>
+
+        <div
+          className={`registry-runtime-status ${
+            registryStatus?.runtime.mode ?? 'unresolved'
+          }`}
+        >
+          <strong>Mode: {getRegistryModeLabel()}</strong>
+          <span>{getRegistryRuntimeDetail()}</span>
+          {getRegistryRuntimeIssueText() ? (
+            <small>{getRegistryRuntimeIssueText()}</small>
+          ) : null}
         </div>
 
         <label className="registry-home-field">

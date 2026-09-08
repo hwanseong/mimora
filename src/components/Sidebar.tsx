@@ -1,4 +1,5 @@
 import type { Workspace, WorkspaceSection, WorkspaceStatus } from '../workspaces';
+import type { RegistryRuntimeMode } from '../registry/types';
 
 const statusLabels: Partial<Record<WorkspaceStatus, string>> = {
   planned: 'Planned',
@@ -52,6 +53,7 @@ export function Sidebar({
   onOpenRecentChats,
   onOpenVaultBrowser,
   onOpenSettings,
+  registryRuntimeMode = 'normal',
   workspaceSections,
   selectedWorkspaceId,
   onSelectWorkspace,
@@ -62,6 +64,7 @@ export function Sidebar({
   onOpenRecentChats: () => void;
   onOpenVaultBrowser: () => void;
   onOpenSettings: () => void;
+  registryRuntimeMode?: RegistryRuntimeMode;
   workspaceSections: WorkspaceSection[];
   selectedWorkspaceId: string;
   onSelectWorkspace: (workspace: Workspace) => void;
@@ -70,6 +73,13 @@ export function Sidebar({
     <aside className="sidebar" aria-label="Mimora 탐색">
       <div className="sidebar-top">
         <div className="logo-text">Mimora</div>
+        {registryRuntimeMode !== 'normal' ? (
+          <div className={`sidebar-registry-status ${registryRuntimeMode}`}>
+            {registryRuntimeMode === 'degraded'
+              ? 'Registry cache 사용 중'
+              : 'Registry 확인 필요'}
+          </div>
+        ) : null}
         {workspaceSections.map((section) => (
           <NavSection
             items={section.items}

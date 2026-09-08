@@ -1,4 +1,9 @@
 import type { Workspace } from '../workspace/types';
+import type {
+  RegistryRuntimeIssue,
+  RegistryRuntimeMode,
+  RegistryRuntimeSource,
+} from './types';
 
 export type WorkspaceRegistryFrontmatter = {
   registryType: 'workspaces';
@@ -41,4 +46,8 @@ export type WorkspaceRegistryParseResult = {
   issues: WorkspaceRegistryValidationIssue[];
   valid: boolean;
   message?: string;
+  runtimeMode?: RegistryRuntimeMode;
+  source?: RegistryRuntimeSource;
+  lastSuccessfulLoad?: string;
+  runtimeIssues?: RegistryRuntimeIssue[];
 };

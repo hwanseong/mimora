@@ -1,4 +1,9 @@
 import type { RegistryValidationSeverity } from './workspaceRegistryTypes';
+import type {
+  RegistryRuntimeIssue,
+  RegistryRuntimeMode,
+  RegistryRuntimeSource,
+} from './types';
 
 export type KnowledgeTypeRegistryFrontmatter = {
   registryType: 'knowledge-types';
@@ -43,4 +48,8 @@ export type KnowledgeTypeRegistryParseResult = {
   issues: KnowledgeTypeRegistryValidationIssue[];
   valid: boolean;
   message?: string;
+  runtimeMode?: RegistryRuntimeMode;
+  source?: RegistryRuntimeSource;
+  lastSuccessfulLoad?: string;
+  runtimeIssues?: RegistryRuntimeIssue[];
 };

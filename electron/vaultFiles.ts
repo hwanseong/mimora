@@ -1512,8 +1512,13 @@ function validateAutoContextInput(input: unknown): Required<AutoContextRetrieval
   };
 }
 
-export function createVaultFilesService(settingsStore: SettingsStore) {
-  const registryStatusService = createRegistryStatusService(settingsStore);
+export function createVaultFilesService(
+  settingsStore: SettingsStore,
+  options: { getRegistryCachePath?: () => string } = {},
+) {
+  const registryStatusService = createRegistryStatusService(settingsStore, {
+    getCachePath: options.getRegistryCachePath,
+  });
 
   async function loadMetadataRegistryOptions(): Promise<MetadataRegistryOptions> {
     const [domainRegistry, typeRegistry] = await Promise.all([

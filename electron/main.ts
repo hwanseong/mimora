@@ -85,9 +85,14 @@ const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
 const openAICredentialFileName = 'openai-api-key.safe';
 const chatHistoryFileName = 'chat-history.dat';
+const registryCacheFileName = 'registry-runtime-cache.json';
 
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), settingsFileName);
+}
+
+function getRegistryCachePath(): string {
+  return path.join(app.getPath('userData'), registryCacheFileName);
 }
 
 const settingsStore = createSettingsStore({
@@ -102,9 +107,13 @@ const chatHistoryStore = createChatHistoryStore({
   getHistoryPath: () => path.join(app.getPath('userData'), chatHistoryFileName),
   safeStorage,
 });
-const vaultFilesService = createVaultFilesService(settingsStore);
 const derivedKnowledgeService = createDerivedKnowledgeService(settingsStore);
-const registryStatusService = createRegistryStatusService(settingsStore);
+const registryStatusService = createRegistryStatusService(settingsStore, {
+  getCachePath: getRegistryCachePath,
+});
+const vaultFilesService = createVaultFilesService(settingsStore, {
+  getRegistryCachePath,
+});
 
 async function getWorkspaceTypeForRequest(
   workspaceId: string,

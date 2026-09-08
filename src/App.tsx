@@ -47,6 +47,7 @@ import {
 } from './knowledgeSearch';
 import type { KnowledgeDomain } from './registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeType } from './registry/knowledgeTypeRegistryTypes';
+import type { RegistryRuntimeMode } from './registry/types';
 import {
   createDerivedKnowledgeSuggestion,
   deriveSecurityFromSources,
@@ -114,6 +115,8 @@ export function App() {
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
   const [registryWorkspaces, setRegistryWorkspaces] = useState<Workspace[]>([]);
+  const [registryRuntimeMode, setRegistryRuntimeMode] =
+    useState<RegistryRuntimeMode>('unresolved');
   const [isWorkspaceRegistryUnavailable, setIsWorkspaceRegistryUnavailable] =
     useState(false);
   const [message, setMessage] = useState('');
@@ -231,11 +234,13 @@ export function App() {
         workspaceRegistry.workspaces.map(toSelectableWorkspace);
 
       setRegistryWorkspaces(loadedWorkspaces);
+      setRegistryRuntimeMode(workspaceRegistry.runtimeMode ?? 'unresolved');
       setIsWorkspaceRegistryUnavailable(
         workspaceRegistry.state !== 'loaded' && loadedWorkspaces.length === 0,
       );
     } catch {
       setRegistryWorkspaces([]);
+      setRegistryRuntimeMode('unresolved');
       setIsWorkspaceRegistryUnavailable(true);
     }
   }
@@ -1957,6 +1962,7 @@ export function App() {
         }}
         selectedWorkspaceId={activeView === 'chat' ? selectedWorkspace.id : ''}
         onSelectWorkspace={handleSelectWorkspace}
+        registryRuntimeMode={registryRuntimeMode}
         workspaceSections={workspaceSections}
       />
       <main
