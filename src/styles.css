@@ -1318,6 +1318,12 @@ button {
   color: #805338;
 }
 
+.security-badge.private {
+  border-color: #ddd6ce;
+  background: #faf8f5;
+  color: #704b36;
+}
+
 .message-row.assistant .message-content.is-loading {
   color: #667085;
 }
@@ -1415,6 +1421,11 @@ button {
 .routing-security.sensitive {
   color: #805338;
   font-weight: 650;
+}
+
+.routing-security.private {
+  color: #704b36;
+  font-weight: 700;
 }
 
 .message-sources {

@@ -47,7 +47,10 @@ export function AutoContextPanel({
     null;
   const containsSensitive = contexts.some(
     (context) =>
-      context.vaultType === 'private' || context.security === 'sensitive',
+      context.vaultType === 'private' ||
+      context.security === 'sensitive' ||
+      context.documentSecurity === 'private' ||
+      context.metadata?.security === 'private',
   );
   const hasSearchScopeSnapshot = Boolean(
     searchScopeSnapshot &&
@@ -86,6 +89,9 @@ export function AutoContextPanel({
         <div className="auto-context-documents">
           {contexts.map((context) => {
             const isAiDerived = isAiDerivedDocument(context.metadata);
+            const isPrivateDocument =
+              context.documentSecurity === 'private' ||
+              context.metadata?.security === 'private';
 
             return (
               <button
@@ -105,6 +111,9 @@ export function AutoContextPanel({
                 <span>{context.fileName}</span>
                 {isAiDerived ? (
                   <span className="ai-derived-inline-badge">AI Wiki</span>
+                ) : null}
+                {isPrivateDocument ? (
+                  <span className="ai-derived-inline-badge">Private</span>
                 ) : null}
               </button>
             );

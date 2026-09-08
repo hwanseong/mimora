@@ -15,6 +15,9 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
           const isProtected =
             source.vaultType === 'private' ||
             source.security === 'sensitive';
+          const isPrivateDocument =
+            source.documentSecurity === 'private' ||
+            source.metadata?.security === 'private';
           const isAiDerived = isAiDerivedDocument(source.metadata);
 
           return (
@@ -26,6 +29,9 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
               <span> · {source.vaultName}</span>
               {isAiDerived ? (
                 <span className="ai-derived-source-badge">AI Wiki</span>
+              ) : null}
+              {isPrivateDocument ? (
+                <span className="ai-derived-source-badge">Private</span>
               ) : null}
               {isProtected ? <span>Protected</span> : null}
             </li>

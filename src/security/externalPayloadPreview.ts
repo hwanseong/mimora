@@ -35,6 +35,7 @@ export type ExternalPreviewDocument = {
   vaultName: string;
   vaultType: VaultType;
   security: VaultSecurity;
+  documentSecurity?: MimoraDocumentMetadata['security'];
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;
@@ -70,6 +71,7 @@ export type ExternalPreviewContextInput = {
   vaultName: string;
   vaultType: VaultType;
   security: VaultSecurity;
+  documentSecurity?: MimoraDocumentMetadata['security'];
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;
@@ -235,6 +237,8 @@ export function createExternalPayloadPreview(input: {
         vaultName: document.vaultName,
         vaultType: document.vaultType,
         security: document.security,
+        documentSecurity:
+          document.documentSecurity ?? document.metadata?.security,
         relativePath: document.relativePath,
         fileName: document.fileName,
         metadata: document.metadata,

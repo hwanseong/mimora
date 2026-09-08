@@ -1,7 +1,7 @@
 import type { ChatMessage, ChatSessions } from './chat';
 import type { OpenAIUsage } from './externalAI';
 import type { LLMContextSource } from './llmChat';
-import type { MimoraDocumentMetadata } from './metadata/types';
+import type { DocumentSecurity, MimoraDocumentMetadata } from './metadata/types';
 import type { ResponseUnmaskingInfo } from './chat';
 import {
   aiModeOptions,
@@ -142,11 +142,16 @@ function sanitizeSources(value: unknown): LLMContextSource[] | undefined {
       vaultName,
       vaultType,
       security,
+      documentSecurity,
       relativePath,
       fileName,
       metadata,
     } = source;
     const sanitizedMetadata = sanitizeDocumentMetadata(metadata);
+    const sanitizedDocumentSecurity: DocumentSecurity | undefined =
+      documentSecurity === 'normal' || documentSecurity === 'private'
+        ? documentSecurity
+        : sanitizedMetadata?.security;
 
     return typeof vaultId === 'string' &&
       typeof vaultName === 'string' &&
@@ -164,6 +169,9 @@ function sanitizeSources(value: unknown): LLMContextSource[] | undefined {
             vaultName,
             vaultType: vaultType as LLMContextSource['vaultType'],
             security: security as LLMContextSource['security'],
+            ...(sanitizedDocumentSecurity
+              ? { documentSecurity: sanitizedDocumentSecurity }
+              : {}),
             relativePath,
             fileName,
             ...(sanitizedMetadata ? { metadata: sanitizedMetadata } : {}),
@@ -183,17 +191,21 @@ function sanitizeRoutingDecision(value: unknown): RoutingDecision | undefined {
   const numberKeys = [
     'sensitiveContextCount',
     'personalContextCount',
-    'privateVaultContextCount',
     'manualContextCount',
     'autoContextCount',
   ] as const;
+  const privateVaultContextCount =
+    optionalNumber(value.privateVaultContextCount) ?? 0;
+  const privateDocumentContextCount =
+    optionalNumber(value.privateDocumentContextCount) ?? 0;
 
   if (
     !aiModeOptions.includes(value.mode as (typeof aiModeOptions)[number]) ||
     (value.provider !== 'local' && value.provider !== 'openai') ||
     (value.security !== 'internal' &&
       value.security !== 'personal' &&
-      value.security !== 'sensitive') ||
+      value.security !== 'sensitive' &&
+      value.security !== 'private') ||
     typeof value.reason !== 'string' ||
     typeof value.safetyStatus !== 'string' ||
     typeof value.approved !== 'boolean' ||
@@ -209,7 +221,8 @@ function sanitizeRoutingDecision(value: unknown): RoutingDecision | undefined {
     reason: value.reason as RoutingDecision['reason'],
     sensitiveContextCount: value.sensitiveContextCount as number,
     personalContextCount: value.personalContextCount as number,
-    privateVaultContextCount: value.privateVaultContextCount as number,
+    privateDocumentContextCount,
+    privateVaultContextCount,
     manualContextCount: value.manualContextCount as number,
     autoContextCount: value.autoContextCount as number,
     safetyStatus: value.safetyStatus as RoutingDecision['safetyStatus'],

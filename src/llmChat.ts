@@ -71,6 +71,7 @@ export type LLMContextDocument = {
   vaultName: string;
   vaultType: VaultType;
   security: VaultSecurity;
+  documentSecurity?: MimoraDocumentMetadata['security'];
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;

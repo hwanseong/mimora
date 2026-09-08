@@ -474,6 +474,8 @@ function registerOpenAIHandlers(): void {
             relativePath: document.relativePath,
             vaultType: document.vaultType,
             security: document.security,
+            documentSecurity:
+              document.documentSecurity ?? document.metadata?.security,
           })),
         ).security;
         const secretDetection = detectSecrets(
@@ -522,6 +524,11 @@ function registerOpenAIHandlers(): void {
           status: safety.status,
           mode: input.mode,
           approved: input.approved,
+          hasPrivateDocument: input.documents.some(
+            (document) =>
+              document.documentSecurity === 'private' ||
+              document.metadata?.security === 'private',
+          ),
         });
         let status: 'success' | 'failure' = 'failure';
 
@@ -598,6 +605,7 @@ function isExternalDocumentMetadata(
     'vaultName',
     'vaultType',
     'security',
+    'documentSecurity',
     'relativePath',
     'fileName',
     'metadata',
@@ -610,6 +618,9 @@ function isExternalDocumentMetadata(
     typeof document.vaultName === 'string' &&
     ['work', 'private', 'knowledge'].includes(document.vaultType ?? '') &&
     ['internal', 'sensitive', 'personal'].includes(document.security ?? '') &&
+    (document.documentSecurity === undefined ||
+      document.documentSecurity === 'normal' ||
+      document.documentSecurity === 'private') &&
     typeof document.relativePath === 'string' &&
     typeof document.fileName === 'string' &&
     (document.metadata === undefined ||

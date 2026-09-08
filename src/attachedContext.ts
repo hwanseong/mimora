@@ -1,4 +1,5 @@
 import type { VaultSecurity, VaultType } from './settings';
+import type { MimoraDocumentMetadata } from './metadata/types';
 
 export type AttachedContext = {
   id: string;
@@ -6,6 +7,8 @@ export type AttachedContext = {
   vaultName: string;
   vaultType: VaultType;
   security: VaultSecurity;
+  documentSecurity?: MimoraDocumentMetadata['security'];
+  metadata?: MimoraDocumentMetadata;
   relativePath: string;
   fileName: string;
   content: string;

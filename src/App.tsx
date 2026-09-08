@@ -427,6 +427,10 @@ export function App() {
   }
 
   function getManualContextMetadata(context: AttachedContext) {
+    if (context.metadata) {
+      return context.metadata;
+    }
+
     return parseMimoraDocumentMetadata(context.content, {
       knowledgeDomainRegistry: getKnowledgeDomainRegistryForDraft(),
       knowledgeTypeRegistry: getKnowledgeTypeRegistryForDraft(),
@@ -811,6 +815,9 @@ export function App() {
       vaultName: context.vaultName,
       vaultType: context.vaultType,
       security: context.security,
+      ...('documentSecurity' in context && context.documentSecurity
+        ? { documentSecurity: context.documentSecurity }
+        : {}),
       relativePath: context.relativePath,
       fileName: context.fileName,
       ...('snippet' in context ? { snippet: context.snippet } : {}),
@@ -845,6 +852,9 @@ export function App() {
           vaultName: context.vaultName,
           vaultType: context.vaultType,
           security: context.security,
+          ...('documentSecurity' in context && context.documentSecurity
+            ? { documentSecurity: context.documentSecurity }
+            : {}),
         relativePath: context.relativePath,
         fileName: context.fileName,
         ...('metadata' in context && context.metadata
@@ -975,6 +985,16 @@ export function App() {
     request: PendingExternalRequest,
     routingDecision: RoutingDecision,
   ): Promise<void> {
+    if (
+      request.preview.documents.some(
+        (document) =>
+          document.documentSecurity === 'private' ||
+          document.metadata?.security === 'private',
+      )
+    ) {
+      throw new Error('Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.');
+    }
+
     setWorkspaceRequestStatus(request.workspaceId, 'calling-external');
     completeAssistantMessage(request.workspaceId, request.assistantMessageId, {
       content: 'OpenAI가 분석 중입니다...',
@@ -995,6 +1015,7 @@ export function App() {
         vaultName: document.vaultName,
         vaultType: document.vaultType,
         security: document.security,
+        documentSecurity: document.documentSecurity,
         relativePath: document.relativePath,
         fileName: document.fileName,
         metadata: document.metadata,
@@ -1226,7 +1247,31 @@ export function App() {
           inFlight: false,
         };
 
-        if (preview.status === 'block') {
+        if (preview.status === 'block' && hasPrivateDocumentPreview(preview)) {
+          pendingExternalRequestsRef.current.set(assistantMessageId, request);
+          saveExternalApprovalForTurn(
+            workspaceId,
+            userMessageId,
+            assistantMessageId,
+            { required: false, approved: false },
+          );
+          completeAssistantMessage(workspaceId, assistantMessageId, {
+            content: 'Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.',
+            generationStatus: 'complete',
+            requestStatus: 'completed',
+            sources: getContextSources(manualContexts, autoContext),
+            routingDecision,
+            externalSafetyAction: {
+              status: 'block',
+              requestMessageId: userMessageId,
+              reasons: preview.safety.checks
+                .filter((check) => check.status === 'fail')
+                .map((check) => check.message),
+              secretDetections: preview.secretDetection.detections,
+            },
+          });
+          setWorkspaceRequestStatus(workspaceId, 'completed');
+        } else if (preview.status === 'block') {
           pendingExternalRequestsRef.current.set(assistantMessageId, request);
           saveExternalApprovalForTurn(
             workspaceId,
@@ -1346,6 +1391,14 @@ export function App() {
 
     if (!request) {
       return { ok: false, error: '승인할 External 요청을 찾을 수 없습니다.' };
+    }
+
+    if (hasPrivateDocumentPreview(request.preview)) {
+      return {
+        ok: false,
+        error: 'Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.',
+        preview: request.preview,
+      };
     }
 
     if (request.preview.status === 'block') {
@@ -1636,6 +1689,24 @@ export function App() {
       totalMatches: preview.secretDetection.totalCount,
       matchedRules: matchedRuleIds,
     });
+  }
+
+  function hasPrivateDocumentPreview(preview: ExternalPayloadPreview): boolean {
+    return preview.documents.some(
+      (document) =>
+        document.documentSecurity === 'private' ||
+        document.metadata?.security === 'private',
+    );
+  }
+
+  function getExternalBlockMessage(preview: ExternalPayloadPreview): string {
+    if (hasPrivateDocumentPreview(preview)) {
+      return 'Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.';
+    }
+
+    return preview.secretDetection.detected
+      ? '외부 AI 전송 차단\n\nSecret / Credential 정보가 감지되었습니다.'
+      : '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.';
   }
 
   function saveRoutingDecisionForTurn(

@@ -31,6 +31,12 @@ export function ExternalPayloadPreviewModal({
   isProcessing?: boolean;
   actionError?: string | null;
 }) {
+  const hasPrivateDocument = preview.documents.some(
+    (document) =>
+      document.documentSecurity === 'private' ||
+      document.metadata?.security === 'private',
+  );
+
   return (
     <div className="external-preview-backdrop" role="presentation">
       <section
@@ -60,6 +66,12 @@ export function ExternalPayloadPreviewModal({
         </header>
 
         <div className="external-preview-body">
+        {hasPrivateDocument ? (
+          <div className="external-preview-status block">
+            <strong>External transmission prohibited</strong>
+            <span>Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.</span>
+          </div>
+        ) : null}
         <div className={`external-preview-status ${preview.status}`}>
           <strong>
             {preview.status === 'pass'
@@ -229,7 +241,9 @@ export function ExternalPayloadPreviewModal({
                 {isProcessing ? '처리 중…' : 'Local AI로 처리'}
               </button>
             ) : null}
-            {preview.status === 'review-required' && onApprove ? (
+            {preview.status === 'review-required' &&
+            !hasPrivateDocument &&
+            onApprove ? (
               <button
                 className="primary-button"
                 disabled={isProcessing}

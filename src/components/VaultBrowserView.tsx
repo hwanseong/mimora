@@ -536,6 +536,10 @@ export function VaultBrowserView({
       vaultName: selectedFileVault.name,
       vaultType: selectedFileVault.type,
       security: selectedFileVault.security,
+      documentSecurity: selectedFileMetadata?.metadata.security,
+      ...(selectedFileMetadata?.metadata
+        ? { metadata: selectedFileMetadata.metadata }
+        : {}),
       relativePath: selectedFile.relativePath,
       fileName: selectedFile.name,
       content: fileContent.content,

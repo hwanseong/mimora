@@ -1,3 +1,4 @@
+import type { DocumentSecurity } from '../metadata/types';
 import type { VaultSecurity, VaultType } from '../settings';
 import type { WorkspaceType } from '../workspaces';
 import type { PayloadSafetyStatus } from './outboundPayloadSafety';
@@ -5,7 +6,7 @@ import type { PayloadSafetyStatus } from './outboundPayloadSafety';
 export const aiModeOptions = ['auto', 'local', 'external'] as const;
 
 export type AIMode = (typeof aiModeOptions)[number];
-export type EffectiveSecurity = 'internal' | 'personal' | 'sensitive';
+export type EffectiveSecurity = 'internal' | 'personal' | 'sensitive' | 'private';
 export type RoutingProvider = 'local' | 'openai';
 export type RoutingSafetyStatus = PayloadSafetyStatus | 'not-evaluated';
 export type RoutingReason =
@@ -13,10 +14,12 @@ export type RoutingReason =
   | 'forced-external'
   | 'external-review-required'
   | 'external-safety-block'
+  | 'external-private-content-block'
   | 'auto-external-pass'
   | 'safety-gate-not-pass'
   | 'user-approved'
   | 'user-selected-local-fallback'
+  | 'private-document'
   | 'private-workspace'
   | 'private-vault'
   | 'sensitive-context'
@@ -31,6 +34,7 @@ export type RoutingDecision = {
   reason: RoutingReason;
   sensitiveContextCount: number;
   personalContextCount: number;
+  privateDocumentContextCount: number;
   privateVaultContextCount: number;
   manualContextCount: number;
   autoContextCount: number;
@@ -43,12 +47,14 @@ export type SecurityContextMetadata = {
   relativePath: string;
   security: VaultSecurity;
   vaultType: VaultType;
+  documentSecurity?: DocumentSecurity;
 };
 
 export type ContextSecuritySummary = {
   security: EffectiveSecurity;
   sensitiveContextCount: number;
   personalContextCount: number;
+  privateDocumentContextCount: number;
   privateVaultContextCount: number;
 };
 
@@ -56,6 +62,7 @@ export const effectiveSecurityLabels: Record<EffectiveSecurity, string> = {
   internal: 'Internal',
   personal: 'Personal',
   sensitive: 'Sensitive',
+  private: 'Private',
 };
 
 export const routingReasonLabels: Record<RoutingReason, string> = {
@@ -63,10 +70,12 @@ export const routingReasonLabels: Record<RoutingReason, string> = {
   'forced-external': 'Explicit External',
   'external-review-required': 'Review required',
   'external-safety-block': 'Safety BLOCK',
+  'external-private-content-block': 'Private content BLOCK',
   'auto-external-pass': 'Safety PASS',
   'safety-gate-not-pass': 'Safety policy fallback',
   'user-approved': 'User Approved',
   'user-selected-local-fallback': 'User selected Local fallback',
+  'private-document': 'Private document context · Local-only policy',
   'private-workspace': 'Private Workspace · Local-only policy',
   'private-vault': 'Private Vault context · Local-only policy',
   'sensitive-context': 'Sensitive context · Local-only policy',
@@ -75,11 +84,12 @@ export const routingReasonLabels: Record<RoutingReason, string> = {
   'default-local': 'Default Local',
 };
 
-export function inspectContextSecurity(
+function deduplicateContexts(
   contexts: SecurityContextMetadata[],
-): ContextSecuritySummary {
+): SecurityContextMetadata[] {
   const seenContexts = new Set<string>();
-  const distinctContexts = contexts.filter((context) => {
+
+  return contexts.filter((context) => {
     const contextKey = JSON.stringify([context.vaultId, context.relativePath]);
 
     if (seenContexts.has(contextKey)) {
@@ -89,6 +99,15 @@ export function inspectContextSecurity(
     seenContexts.add(contextKey);
     return true;
   });
+}
+
+export function inspectContextSecurity(
+  contexts: SecurityContextMetadata[],
+): ContextSecuritySummary {
+  const distinctContexts = deduplicateContexts(contexts);
+  const privateDocumentContextCount = distinctContexts.filter(
+    (context) => context.documentSecurity === 'private',
+  ).length;
   const sensitiveContextCount = distinctContexts.filter(
     (context) => context.security === 'sensitive',
   ).length;
@@ -99,17 +118,49 @@ export function inspectContextSecurity(
     (context) => context.vaultType === 'private',
   ).length;
   const security: EffectiveSecurity =
-    privateVaultContextCount > 0 || sensitiveContextCount > 0
-      ? 'sensitive'
-      : personalContextCount > 0
-        ? 'personal'
-        : 'internal';
+    privateDocumentContextCount > 0
+      ? 'private'
+      : privateVaultContextCount > 0 || sensitiveContextCount > 0
+        ? 'sensitive'
+        : personalContextCount > 0
+          ? 'personal'
+          : 'internal';
 
   return {
     security,
     sensitiveContextCount,
     personalContextCount,
+    privateDocumentContextCount,
     privateVaultContextCount,
+  };
+}
+
+export function evaluateEffectiveSecurity(input: {
+  documentSecurity?: DocumentSecurity;
+  vaultSecurity?: VaultSecurity;
+  workspaceType?: WorkspaceType;
+  contextDocuments?: SecurityContextMetadata[];
+}): ContextSecuritySummary {
+  const summary = inspectContextSecurity(input.contextDocuments ?? []);
+  const hasPrivateDocument =
+    input.documentSecurity === 'private' ||
+    summary.privateDocumentContextCount > 0;
+  const hasSensitiveVault = input.vaultSecurity === 'sensitive';
+  const hasPersonalVault = input.vaultSecurity === 'personal';
+  const security: EffectiveSecurity = hasPrivateDocument
+    ? 'private'
+    : input.workspaceType === 'private' ||
+        summary.privateVaultContextCount > 0 ||
+        summary.sensitiveContextCount > 0 ||
+        hasSensitiveVault
+      ? 'sensitive'
+      : summary.personalContextCount > 0 || hasPersonalVault
+        ? 'personal'
+        : 'internal';
+
+  return {
+    ...summary,
+    security,
   };
 }
 
@@ -117,11 +168,10 @@ export function evaluateSecurity(
   workspaceType: WorkspaceType,
   contexts: SecurityContextMetadata[],
 ): ContextSecuritySummary {
-  const summary = inspectContextSecurity(contexts);
-
-  return workspaceType === 'private'
-    ? { ...summary, security: 'sensitive' }
-    : summary;
+  return evaluateEffectiveSecurity({
+    workspaceType,
+    contextDocuments: contexts,
+  });
 }
 
 export function routeAIRequest(input: {
@@ -140,6 +190,14 @@ export function routeAIRequest(input: {
 
   if (input.mode === 'local') {
     reason = 'forced-local';
+  } else if (
+    input.mode === 'external' &&
+    security.privateDocumentContextCount > 0
+  ) {
+    provider = 'openai';
+    reason = 'external-private-content-block';
+  } else if (security.privateDocumentContextCount > 0) {
+    reason = 'private-document';
   } else if (input.mode === 'external') {
     provider = 'openai';
     reason =
@@ -172,6 +230,7 @@ export function routeAIRequest(input: {
     reason,
     sensitiveContextCount: security.sensitiveContextCount,
     personalContextCount: security.personalContextCount,
+    privateDocumentContextCount: security.privateDocumentContextCount,
     privateVaultContextCount: security.privateVaultContextCount,
     manualContextCount: input.manualContexts.length,
     autoContextCount: input.autoContexts.length,

@@ -1,5 +1,5 @@
 import type { VaultSecurity, VaultType } from '../settings';
-import type { MimoraDocumentMetadata } from '../metadata/types';
+import type { DocumentSecurity, MimoraDocumentMetadata } from '../metadata/types';
 import {
   findRemainingRegisteredEntityIds,
   type MaskingEntry,
@@ -35,7 +35,15 @@ export function authorizeExternalSend(input: {
   status: PayloadSafetyStatus;
   mode: 'auto' | 'external';
   approved: boolean;
+  hasPrivateDocument?: boolean;
 }): ExternalSendAuthorization {
+  if (input.hasPrivateDocument) {
+    return {
+      allowed: false,
+      message: 'Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.',
+    };
+  }
+
   if (input.status === 'block') {
     return {
       allowed: false,
@@ -63,6 +71,7 @@ export type OutboundPayloadDocumentMetadata = {
   vaultName: string;
   vaultType: VaultType;
   security: VaultSecurity;
+  documentSecurity?: DocumentSecurity;
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;
@@ -155,7 +164,9 @@ export function evaluateOutboundPayload(input: {
     (document) => document.vaultType === 'private',
   );
   const hasPrivateDocument = documents.some(
-    (document) => document.metadata?.security === 'private',
+    (document) =>
+      document.documentSecurity === 'private' ||
+      document.metadata?.security === 'private',
   );
   const hasSensitiveContext = documents.some(
     (document) => document.security === 'sensitive',
