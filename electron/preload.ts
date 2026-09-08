@@ -9,6 +9,10 @@ import type {
   PersistedChatHistory,
 } from '../src/chatHistory';
 import type {
+  SaveDerivedKnowledgeInput,
+  SaveDerivedKnowledgeResult,
+} from '../src/derivedKnowledge';
+import type {
   ConnectionTestResult,
   LLMModel,
   LocalAIConnectionInput,
@@ -282,6 +286,12 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('vaultFiles:retrieveAutoContext', input) as Promise<
         MimoraIpcResult<AutoRetrievedContext[]>
+      >
+    ).then(unwrapIpcResult),
+  saveDerivedKnowledgeDraft: (input: SaveDerivedKnowledgeInput) =>
+    (
+      ipcRenderer.invoke('derivedKnowledge:saveDraft', input) as Promise<
+        MimoraIpcResult<SaveDerivedKnowledgeResult>
       >
     ).then(unwrapIpcResult),
 });

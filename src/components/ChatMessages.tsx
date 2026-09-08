@@ -15,6 +15,7 @@ export function ChatMessages({
   messages,
   workspaceId,
   onApproveExternal,
+  onCreateDerivedKnowledgeDraft,
   onUseLocalAI,
 }: {
   messages: ChatMessage[];
@@ -22,6 +23,7 @@ export function ChatMessages({
   onApproveExternal: (
     assistantMessageId: string,
   ) => Promise<ExternalActionResult>;
+  onCreateDerivedKnowledgeDraft: (assistantMessageId: string) => void;
   onUseLocalAI: (assistantMessageId: string) => Promise<void>;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -166,6 +168,19 @@ export function ChatMessages({
               ) : null}
               {message.role === 'assistant' && message.sources ? (
                 <SourcesList sources={message.sources} />
+              ) : null}
+              {message.role === 'assistant' &&
+              message.generationStatus === 'complete' &&
+              message.content.trim() ? (
+                <button
+                  className="derived-draft-trigger"
+                  onClick={() => {
+                    onCreateDerivedKnowledgeDraft(message.id);
+                  }}
+                  type="button"
+                >
+                  AI Wiki 초안
+                </button>
               ) : null}
               {message.role === 'assistant' && message.routingDecision ? (
                 <RoutingStatus

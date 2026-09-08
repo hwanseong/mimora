@@ -26,6 +26,7 @@ import { ChatHeader } from './components/ChatHeader';
 import { ChatInput } from './components/ChatInput';
 import { ChatMessages } from './components/ChatMessages';
 import { ContextPanel } from './components/ContextPanel';
+import { DerivedKnowledgeDraftModal } from './components/DerivedKnowledgeDraftModal';
 import { QuickPromptBar } from './components/QuickPromptBar';
 import { RecentChatsView } from './components/RecentChatsView';
 import { SettingsView } from './components/SettingsView';
@@ -47,12 +48,27 @@ import {
 import type { KnowledgeDomain } from './registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeType } from './registry/knowledgeTypeRegistryTypes';
 import {
+  createDerivedKnowledgeSuggestion,
+  deriveSecurityFromSources,
+  normalizeDerivedKnowledgeDraft,
+  type DerivedKnowledgeDraft,
+  type DerivedKnowledgeSource,
+} from './derivedKnowledge';
+import { parseMimoraDocumentMetadata } from './metadata/mimoraMetadataParser';
+import type { KnowledgeDomainRegistry } from './registry/knowledgeDomainRegistryTypes';
+import type { KnowledgeTypeRegistry } from './registry/knowledgeTypeRegistryTypes';
+import {
   createKnowledgeSearchFiltersFromScope,
   createGlobalSearchScope,
   createSearchScopeSnapshot,
   selectSearchScopeHistoryMessages,
 } from './searchScope';
-import type { SearchScopeSettings } from './settings';
+import type {
+  SearchScopeSettings,
+  VaultConfig,
+  VaultSecurity,
+  VaultType,
+} from './settings';
 import {
   evaluateSecurity,
   routeAIRequest,
@@ -134,6 +150,19 @@ export function App() {
   const pendingExternalRequestsRef = useRef<
     Map<string, PendingExternalRequest>
   >(new Map());
+  const [derivedDraft, setDerivedDraft] = useState<DerivedKnowledgeDraft | null>(
+    null,
+  );
+  const [derivedDraftVaults, setDerivedDraftVaults] = useState<VaultConfig[]>(
+    [],
+  );
+  const [derivedDraftError, setDerivedDraftError] = useState<string | null>(
+    null,
+  );
+  const [derivedDraftSavedPath, setDerivedDraftSavedPath] = useState<
+    string | null
+  >(null);
+  const [isSavingDerivedDraft, setIsSavingDerivedDraft] = useState(false);
   const workspaceRequestStatusesRef = useRef<Map<string, ChatRequestStatus>>(
     new Map(),
   );
@@ -364,10 +393,275 @@ export function App() {
     });
   }
 
+  function toDerivedSourceSecurity(input: {
+    vaultType: VaultType;
+    vaultSecurity: VaultSecurity;
+    documentSecurity?: 'normal' | 'private';
+  }): 'normal' | 'private' {
+    return input.documentSecurity === 'private' ||
+      input.vaultType === 'private' ||
+      input.vaultSecurity === 'personal' ||
+      input.vaultSecurity === 'sensitive'
+      ? 'private'
+      : 'normal';
+  }
+
+  function getKnowledgeDomainRegistryForDraft(): KnowledgeDomainRegistry | null {
+    return isKnowledgeDomainRegistryAvailable
+      ? { version: 1, domains: knowledgeDomainOptions }
+      : null;
+  }
+
+  function getKnowledgeTypeRegistryForDraft(): KnowledgeTypeRegistry | null {
+    return isKnowledgeTypeRegistryAvailable
+      ? { version: 1, types: knowledgeTypeOptions }
+      : null;
+  }
+
+  function getManualContextMetadata(context: AttachedContext) {
+    return parseMimoraDocumentMetadata(context.content, {
+      knowledgeDomainRegistry: getKnowledgeDomainRegistryForDraft(),
+      knowledgeTypeRegistry: getKnowledgeTypeRegistryForDraft(),
+    }).metadata;
+  }
+
+  function createDerivedSources(
+    manualContexts: AttachedContext[],
+    autoContexts: AutoRetrievedContext[],
+    assistantSources: LLMContextSource[],
+  ): DerivedKnowledgeSource[] {
+    const sources = new Map<string, DerivedKnowledgeSource>();
+
+    for (const context of manualContexts) {
+      const metadata = getManualContextMetadata(context);
+      const source: DerivedKnowledgeSource = {
+        vaultId: context.vaultId,
+        ...(metadata.documentId ? { documentId: metadata.documentId } : {}),
+        relativePath: context.relativePath,
+        workspaceIds: metadata.workspaceIds,
+        originWorkspaceId: metadata.originWorkspaceId ?? null,
+        knowledgeDomains: metadata.knowledgeDomains,
+        knowledgeTypes: metadata.knowledgeTypes,
+        security: toDerivedSourceSecurity({
+          vaultType: context.vaultType,
+          vaultSecurity: context.security,
+          documentSecurity: metadata.security,
+        }),
+      };
+
+      sources.set(`${source.vaultId}:${source.relativePath}`, source);
+    }
+
+    for (const context of autoContexts) {
+      const source: DerivedKnowledgeSource = {
+        vaultId: context.vaultId,
+        ...(context.mimoraDocumentId
+          ? { documentId: context.mimoraDocumentId }
+          : context.metadata?.documentId
+            ? { documentId: context.metadata.documentId }
+            : {}),
+        relativePath: context.relativePath,
+        workspaceIds: context.metadata?.workspaceIds ?? context.workspaceIds,
+        originWorkspaceId:
+          context.metadata?.originWorkspaceId ?? context.originWorkspaceId ?? null,
+        knowledgeDomains: context.metadata?.knowledgeDomains ?? [],
+        knowledgeTypes: context.metadata?.knowledgeTypes ?? [],
+        security: toDerivedSourceSecurity({
+          vaultType: context.vaultType,
+          vaultSecurity: context.security,
+          documentSecurity: context.metadata?.security,
+        }),
+      };
+
+      sources.set(`${source.vaultId}:${source.relativePath}`, source);
+    }
+
+    for (const context of assistantSources) {
+      const source: DerivedKnowledgeSource = {
+        vaultId: context.vaultId,
+        ...(context.metadata?.documentId
+          ? { documentId: context.metadata.documentId }
+          : {}),
+        relativePath: context.relativePath,
+        workspaceIds: context.metadata?.workspaceIds ?? [],
+        originWorkspaceId: context.metadata?.originWorkspaceId ?? null,
+        knowledgeDomains: context.metadata?.knowledgeDomains ?? [],
+        knowledgeTypes: context.metadata?.knowledgeTypes ?? [],
+        security: toDerivedSourceSecurity({
+          vaultType: context.vaultType,
+          vaultSecurity: context.security,
+          documentSecurity: context.metadata?.security,
+        }),
+      };
+
+      if (!sources.has(`${source.vaultId}:${source.relativePath}`)) {
+        sources.set(`${source.vaultId}:${source.relativePath}`, source);
+      }
+    }
+
+    return [...sources.values()];
+  }
+
+  function getFirstEligibleTargetVaultId(
+    vaults: VaultConfig[],
+    sources: DerivedKnowledgeSource[],
+  ): string {
+    const security = deriveSecurityFromSources(sources);
+    const candidates =
+      security === 'private'
+        ? vaults.filter(
+            (vault) => vault.type === 'private' || vault.security !== 'internal',
+          )
+        : vaults;
+    const sourceVault = candidates.find((vault) =>
+      sources.some((source) => source.vaultId === vault.id),
+    );
+
+    return sourceVault?.id ?? candidates[0]?.id ?? '';
+  }
+
+  function createDerivedDraftFromTurn(input: {
+    workspaceId: Workspace['id'];
+    userMessage: ChatMessage;
+    assistantMessage: ChatMessage;
+    vaults: VaultConfig[];
+  }): DerivedKnowledgeDraft {
+    const manualContexts = input.userMessage.manualContext ?? [];
+    const autoContexts = input.userMessage.autoContext ?? [];
+    const assistantSources = input.assistantMessage.sources ?? [];
+    const sourceDocuments = createDerivedSources(
+      manualContexts,
+      autoContexts,
+      assistantSources,
+    );
+    const sourceMetadata = autoContexts
+      .map((context) => context.metadata)
+      .filter((metadata): metadata is NonNullable<typeof metadata> =>
+        Boolean(metadata),
+      );
+    const manualMetadata = manualContexts.map(getManualContextMetadata);
+    const assistantSourceMetadata = assistantSources
+      .map((context) => context.metadata)
+      .filter((metadata): metadata is NonNullable<typeof metadata> =>
+        Boolean(metadata),
+      );
+    const allMetadata = [
+      ...sourceMetadata,
+      ...manualMetadata,
+      ...assistantSourceMetadata,
+    ];
+    const snapshot = input.userMessage.searchScopeSnapshot;
+
+    return createDerivedKnowledgeSuggestion({
+      question: input.userMessage.content,
+      content: input.assistantMessage.content,
+      sourceDocuments,
+      sourceMetadata: allMetadata,
+      fallbackWorkspaceId: !isAllWorkspaceScope(input.workspaceId)
+        ? input.workspaceId
+        : null,
+      fallbackKnowledgeDomain: snapshot?.domain ?? null,
+      fallbackKnowledgeType: snapshot?.type ?? null,
+      targetVaultId: getFirstEligibleTargetVaultId(
+        input.vaults,
+        sourceDocuments,
+      ),
+    });
+  }
+
   function handleSelectWorkspace(workspace: Workspace): void {
     setSelectedWorkspace(workspace);
     setActiveView('chat');
     setMessage('');
+  }
+
+  async function handleCreateDerivedKnowledgeDraft(
+    assistantMessageId: string,
+  ): Promise<void> {
+    const sessionMessages = chatSessions[selectedWorkspace.id] ?? [];
+    const assistantIndex = sessionMessages.findIndex(
+      (chatMessage) => chatMessage.id === assistantMessageId,
+    );
+    const assistantMessage = sessionMessages[assistantIndex];
+    const userMessage = [...sessionMessages.slice(0, assistantIndex)]
+      .reverse()
+      .find((chatMessage) => chatMessage.role === 'user');
+
+    if (!assistantMessage || assistantMessage.role !== 'assistant' || !userMessage) {
+      return;
+    }
+
+    setDerivedDraftError(null);
+    setDerivedDraftSavedPath(null);
+
+    try {
+      const settings = await window.mimora.getSettings();
+      const draft = createDerivedDraftFromTurn({
+        workspaceId: selectedWorkspace.id,
+        userMessage,
+        assistantMessage,
+        vaults: settings.vaults,
+      });
+
+      if (import.meta.env.DEV) {
+        const manualContextCount = userMessage.manualContext?.length ?? 0;
+        const autoContextCount = userMessage.autoContext?.length ?? 0;
+        const sourceCount = assistantMessage.sources?.length ?? 0;
+        const actualContextDocumentCount = new Set(
+          [
+            ...(userMessage.manualContext ?? []),
+            ...(userMessage.autoContext ?? []),
+            ...(assistantMessage.sources ?? []),
+          ].map((context) =>
+            JSON.stringify([context.vaultId, context.relativePath]),
+          ),
+        ).size;
+
+        console.info('[AI Wiki Draft Diagnostic]', {
+          turnId: assistantMessage.id,
+          sources: sourceCount,
+          autoContext: autoContextCount,
+          manualContext: manualContextCount,
+          actualContextDocuments: actualContextDocumentCount,
+          draftSourceDocuments: draft.sourceDocuments.length,
+        });
+      }
+
+      setDerivedDraftVaults(settings.vaults);
+      setDerivedDraft(draft);
+    } catch (error) {
+      setDerivedDraftError(
+        error instanceof Error
+          ? error.message
+          : 'AI Wiki Draft를 만들지 못했습니다.',
+      );
+    }
+  }
+
+  async function handleSaveDerivedKnowledgeDraft(): Promise<void> {
+    if (!derivedDraft) {
+      return;
+    }
+
+    setIsSavingDerivedDraft(true);
+    setDerivedDraftError(null);
+    setDerivedDraftSavedPath(null);
+
+    try {
+      const result = await window.mimora.saveDerivedKnowledgeDraft(
+        normalizeDerivedKnowledgeDraft(derivedDraft),
+      );
+
+      setDerivedDraftSavedPath(result.relativePath);
+    } catch (error) {
+      setDerivedDraftError(
+        error instanceof Error
+          ? error.message
+          : 'AI Wiki Draft를 저장하지 못했습니다.',
+      );
+    } finally {
+      setIsSavingDerivedDraft(false);
+    }
   }
 
   function handleSendMessage(): void {
@@ -1602,6 +1896,9 @@ export function App() {
                 <ChatMessages
                   messages={currentMessages}
                   onApproveExternal={handleApproveExternal}
+                  onCreateDerivedKnowledgeDraft={(assistantMessageId) => {
+                    void handleCreateDerivedKnowledgeDraft(assistantMessageId);
+                  }}
                   onUseLocalAI={handleUseLocalAI}
                   workspaceId={selectedWorkspace.id}
                 />
@@ -1631,6 +1928,29 @@ export function App() {
         )}
       </main>
       <ContextPanel />
+      {derivedDraft ? (
+        <DerivedKnowledgeDraftModal
+          draft={derivedDraft}
+          error={derivedDraftError}
+          isSaving={isSavingDerivedDraft}
+          knowledgeDomainOptions={knowledgeDomainOptions}
+          knowledgeTypeOptions={knowledgeTypeOptions}
+          onChange={(nextDraft) => {
+            setDerivedDraftSavedPath(null);
+            setDerivedDraft(normalizeDerivedKnowledgeDraft(nextDraft));
+          }}
+          onClose={() => {
+            setDerivedDraft(null);
+            setDerivedDraftError(null);
+            setDerivedDraftSavedPath(null);
+          }}
+          onSave={() => {
+            void handleSaveDerivedKnowledgeDraft();
+          }}
+          savedPath={derivedDraftSavedPath}
+          vaults={derivedDraftVaults}
+        />
+      ) : null}
     </div>
   );
 }

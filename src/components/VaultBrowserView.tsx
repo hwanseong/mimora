@@ -942,6 +942,18 @@ export function VaultBrowserView({
                       </div>
                     </div>
                     <div className="vault-metadata-row">
+                      <span>Content Origin</span>
+                      <div>
+                        {selectedFileMetadata.metadata.contentOrigin ? (
+                          <span className="vault-metadata-value">
+                            {selectedFileMetadata.metadata.contentOrigin}
+                          </span>
+                        ) : (
+                          <span className="vault-metadata-empty">None</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="vault-metadata-row">
                       <span>Origin Workspace</span>
                       <div>
                         {selectedFileMetadata.metadata.originWorkspaceId ? (

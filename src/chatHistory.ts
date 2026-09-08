@@ -1,6 +1,7 @@
 import type { ChatMessage, ChatSessions } from './chat';
 import type { OpenAIUsage } from './externalAI';
 import type { LLMContextSource } from './llmChat';
+import type { MimoraDocumentMetadata } from './metadata/types';
 import type { ResponseUnmaskingInfo } from './chat';
 import {
   aiModeOptions,
@@ -77,6 +78,54 @@ function optionalNumber(value: unknown): number | undefined {
     : undefined;
 }
 
+function sanitizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+function sanitizeDocumentMetadata(
+  value: unknown,
+): MimoraDocumentMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const metadata: MimoraDocumentMetadata = {
+    workspaceIds: sanitizeStringArray(value.workspaceIds),
+    knowledgeDomains: sanitizeStringArray(value.knowledgeDomains),
+    knowledgeTypes: sanitizeStringArray(value.knowledgeTypes),
+  };
+
+  if (typeof value.documentId === 'string') {
+    metadata.documentId = value.documentId;
+  }
+
+  if (typeof value.originWorkspaceId === 'string') {
+    metadata.originWorkspaceId = value.originWorkspaceId;
+  }
+
+  if (Array.isArray(value.rawKnowledgeDomains)) {
+    metadata.rawKnowledgeDomains = sanitizeStringArray(
+      value.rawKnowledgeDomains,
+    );
+  }
+
+  if (Array.isArray(value.rawKnowledgeTypes)) {
+    metadata.rawKnowledgeTypes = sanitizeStringArray(value.rawKnowledgeTypes);
+  }
+
+  if (value.security === 'normal' || value.security === 'private') {
+    metadata.security = value.security;
+  }
+
+  if (value.contentOrigin === 'human' || value.contentOrigin === 'ai-derived') {
+    metadata.contentOrigin = value.contentOrigin;
+  }
+
+  return metadata;
+}
+
 function sanitizeSources(value: unknown): LLMContextSource[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -87,8 +136,16 @@ function sanitizeSources(value: unknown): LLMContextSource[] | undefined {
       return [];
     }
 
-    const { vaultId, vaultName, vaultType, security, relativePath, fileName } =
-      source;
+    const {
+      vaultId,
+      vaultName,
+      vaultType,
+      security,
+      relativePath,
+      fileName,
+      metadata,
+    } = source;
+    const sanitizedMetadata = sanitizeDocumentMetadata(metadata);
 
     return typeof vaultId === 'string' &&
       typeof vaultName === 'string' &&
@@ -108,6 +165,7 @@ function sanitizeSources(value: unknown): LLMContextSource[] | undefined {
             security: security as LLMContextSource['security'],
             relativePath,
             fileName,
+            ...(sanitizedMetadata ? { metadata: sanitizedMetadata } : {}),
           },
         ]
       : [];

@@ -10,6 +10,10 @@ import type {
   PersistedChatHistory,
 } from './chatHistory';
 import type {
+  SaveDerivedKnowledgeInput,
+  SaveDerivedKnowledgeResult,
+} from './derivedKnowledge';
+import type {
   ConnectionTestResult,
   LLMModel,
   LocalAIConnectionInput,
@@ -120,6 +124,9 @@ type MimoraApi = {
     retrieveAutoContext: (
       input: AutoContextRetrievalInput,
     ) => Promise<AutoRetrievedContext[]>;
+    saveDerivedKnowledgeDraft: (
+      input: SaveDerivedKnowledgeInput,
+    ) => Promise<SaveDerivedKnowledgeResult>;
 };
 
 declare global {

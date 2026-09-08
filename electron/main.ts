@@ -62,10 +62,15 @@ import type {
   ChatHistoryLoadResult,
   ChatHistorySaveResult,
 } from '../src/chatHistory';
+import type {
+  SaveDerivedKnowledgeInput,
+  SaveDerivedKnowledgeResult,
+} from '../src/derivedKnowledge';
 import { createChatHistoryStore } from './chatHistoryStore';
 import { createSettingsStore } from './settingsStore';
 import { createRegistryStatusService } from './registryStatus';
 import { createVaultFilesService } from './vaultFiles';
+import { createDerivedKnowledgeService } from './derivedKnowledgeService';
 import { createLLMProvider } from './llm/createLLMProvider';
 import { OpenAIProvider } from './llm/OpenAIProvider';
 import { buildLocalAIChatRequest } from './llm/promptBuilder';
@@ -98,6 +103,7 @@ const chatHistoryStore = createChatHistoryStore({
   safeStorage,
 });
 const vaultFilesService = createVaultFilesService(settingsStore);
+const derivedKnowledgeService = createDerivedKnowledgeService(settingsStore);
 const registryStatusService = createRegistryStatusService(settingsStore);
 
 async function getWorkspaceTypeForRequest(
@@ -858,6 +864,19 @@ function registerVaultFileHandlers(): void {
   );
 }
 
+function registerDerivedKnowledgeHandlers(): void {
+  ipcMain.handle(
+    'derivedKnowledge:saveDraft',
+    async (
+      _event,
+      input: SaveDerivedKnowledgeInput,
+    ): Promise<MimoraIpcResult<SaveDerivedKnowledgeResult>> =>
+      toIpcResult(() =>
+        derivedKnowledgeService.saveDerivedKnowledgeDraft(input),
+      ),
+  );
+}
+
 function createMainWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1100,
@@ -891,6 +910,7 @@ registerSettingsHandlers();
 registerRegistryHandlers();
 registerChatHistoryHandlers();
 registerVaultFileHandlers();
+registerDerivedKnowledgeHandlers();
 registerLocalAIHandlers();
 registerOpenAIHandlers();
 
