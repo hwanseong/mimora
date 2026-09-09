@@ -93,4 +93,53 @@ export type ChatMessage = {
   usage?: OpenAIUsage;
 };
 
-export type ChatSessions = Record<string, ChatMessage[]>;
+export type ChatSession = {
+  sessionId: string;
+  workspaceId: string;
+  title: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
+export type ChatSessions = Record<string, ChatSession[]>;
+
+export function createChatSession(input: {
+  workspaceId: string;
+  title?: string;
+  sortOrder?: number;
+  now?: string;
+}): ChatSession {
+  const now = input.now ?? new Date().toISOString();
+  const title = input.title?.trim() || '새 대화';
+
+  return {
+    sessionId: `session-${Date.now()}-${crypto.randomUUID()}`,
+    workspaceId: input.workspaceId,
+    title,
+    sortOrder: input.sortOrder ?? 0,
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  };
+}
+
+export function sortChatSessions(sessions: ChatSession[]): ChatSession[] {
+  return [...sessions].sort(
+    (left, right) =>
+      left.sortOrder - right.sortOrder ||
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+      left.title.localeCompare(right.title),
+  );
+}
+
+export function getMostRecentChatSession(
+  sessions: ChatSession[],
+): ChatSession | undefined {
+  return [...sessions].sort(
+    (left, right) =>
+      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
+      left.sortOrder - right.sortOrder,
+  )[0];
+}

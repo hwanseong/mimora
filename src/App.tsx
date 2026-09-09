@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  createChatSession,
+  getMostRecentChatSession,
   isChatRequestBusy,
+  sortChatSessions,
   tryBeginExternalAction,
+  type ChatSession,
   type ChatMessage,
   type ChatRequestStatus,
   type ChatSessions,
@@ -93,6 +97,7 @@ import type {
 } from './externalAI';
 
 type PendingExternalRequest = {
+  sessionId: ChatSession['sessionId'];
   workspaceId: Workspace['id'];
   workspaceType: Workspace['type'];
   userMessageId: string;
@@ -144,6 +149,9 @@ export function App() {
   ] = useState(false);
   const [isSavingSearchScope, setIsSavingSearchScope] = useState(false);
   const [chatSessions, setChatSessions] = useState<ChatSessions>({});
+  const [selectedSessionIds, setSelectedSessionIds] = useState<
+    Record<string, string>
+  >({});
   const [chatHistoryStatus, setChatHistoryStatus] = useState<
     'loading' | 'ready' | 'error'
   >('loading');
@@ -168,6 +176,21 @@ export function App() {
     string | null
   >(null);
   const [isSavingDerivedDraft, setIsSavingDerivedDraft] = useState(false);
+  const [isCreateSessionDialogOpen, setIsCreateSessionDialogOpen] =
+    useState(false);
+  const [newSessionTitle, setNewSessionTitle] = useState('');
+  const [newSessionWorkspaceId, setNewSessionWorkspaceId] =
+    useState<Workspace['id']>(selectedWorkspace.id);
+  const [renameSessionDialog, setRenameSessionDialog] = useState<{
+    workspaceId: Workspace['id'];
+    sessionId: ChatSession['sessionId'];
+    title: string;
+  } | null>(null);
+  const [deleteSessionDialog, setDeleteSessionDialog] = useState<{
+    workspaceId: Workspace['id'];
+    sessionId: ChatSession['sessionId'];
+    title: string;
+  } | null>(null);
   const workspaceRequestStatusesRef = useRef<Map<string, ChatRequestStatus>>(
     new Map(),
   );
@@ -175,6 +198,8 @@ export function App() {
     Record<string, ChatRequestStatus>
   >({});
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const newSessionTitleInputRef = useRef<HTMLInputElement>(null);
+  const appFocusAnchorRef = useRef<HTMLDivElement>(null);
   const workspaceSections = useMemo(
     () =>
       createWorkspaceSections({
@@ -187,7 +212,19 @@ export function App() {
     () => createSelectableWorkspaces(workspaceSections),
     [workspaceSections],
   );
-  const currentMessages = chatSessions[selectedWorkspace.id] ?? [];
+  const currentWorkspaceSessions = useMemo(
+    () => sortChatSessions(chatSessions[selectedWorkspace.id] ?? []),
+    [chatSessions, selectedWorkspace.id],
+  );
+  const selectedSessionId =
+    selectedSessionIds[selectedWorkspace.id] ??
+    getMostRecentChatSession(currentWorkspaceSessions)?.sessionId ??
+    null;
+  const selectedSession =
+    currentWorkspaceSessions.find(
+      (session) => session.sessionId === selectedSessionId,
+    ) ?? null;
+  const currentMessages = selectedSession?.messages ?? [];
   const currentContexts = workspaceContexts[selectedWorkspace.id] ?? [];
   const globalSearchScope = useMemo(
     () =>
@@ -203,7 +240,9 @@ export function App() {
     ],
   );
   const currentWorkspaceRequestStatus =
-    workspaceRequestStatuses[selectedWorkspace.id] ?? 'idle';
+    selectedSessionId
+      ? workspaceRequestStatuses[selectedSessionId] ?? 'idle'
+      : 'idle';
   const isCurrentWorkspaceBusy = isChatRequestBusy(
     currentWorkspaceRequestStatus,
   );
@@ -217,6 +256,18 @@ export function App() {
   const currentSecurity =
     latestRoutingDecision?.security ??
     evaluateSecurity(selectedWorkspace.type, currentContexts).security;
+
+  useEffect(() => {
+    if (
+      activeView === 'chat' &&
+      !selectableWorkspaces.some(
+        (workspace) => workspace.id === selectedWorkspace.id,
+      )
+    ) {
+      setSelectedWorkspace(defaultWorkspace);
+      setMessage('');
+    }
+  }, [activeView, selectableWorkspaces, selectedWorkspace.id]);
 
   useEffect(() => {
     if (import.meta.env.DEV) {
@@ -330,6 +381,19 @@ export function App() {
 
         skipNextChatHistorySaveRef.current = result.status === 'ready';
         setChatSessions(result.sessions);
+        setSelectedSessionIds(
+          Object.fromEntries(
+            Object.entries(result.sessions).flatMap(
+              ([workspaceId, sessions]) => {
+                const recentSession = getMostRecentChatSession(sessions);
+
+                return recentSession
+                  ? [[workspaceId, recentSession.sessionId]]
+                  : [];
+              },
+            ),
+          ),
+        );
         setChatHistoryError(result.error ?? null);
         setChatHistoryStatus(result.status === 'ready' ? 'ready' : 'error');
       })
@@ -339,6 +403,7 @@ export function App() {
         }
 
         setChatSessions({});
+        setSelectedSessionIds({});
         setChatHistoryError(
           error instanceof Error
             ? error.message
@@ -378,6 +443,20 @@ export function App() {
       });
   }, [chatHistoryStatus, chatSessions]);
 
+  useEffect(() => {
+    if (!isCreateSessionDialogOpen) {
+      return undefined;
+    }
+
+    const animationFrameId = window.requestAnimationFrame(() => {
+      newSessionTitleInputRef.current?.focus();
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+    };
+  }, [isCreateSessionDialogOpen]);
+
   function handleSelectPrompt(promptText: string): void {
     setMessage(promptText);
     chatInputRef.current?.focus();
@@ -392,16 +471,104 @@ export function App() {
     };
   }
 
-  function appendMessagesToSession(
+  function getNextSessionSortOrder(workspaceId: Workspace['id']): number {
+    const sessions = chatSessions[workspaceId] ?? [];
+
+    return sessions.reduce(
+      (maxSortOrder, session) => Math.max(maxSortOrder, session.sortOrder),
+      -1,
+    ) + 1;
+  }
+
+  function updateChatSession(
     workspaceId: Workspace['id'],
-    newMessages: ChatMessage[],
+    sessionId: ChatSession['sessionId'],
+    updater: (session: ChatSession) => ChatSession,
   ): void {
     setChatSessions((currentSessions) => {
-      const sessionMessages = currentSessions[workspaceId] ?? [];
+      const workspaceSessions = currentSessions[workspaceId] ?? [];
+      let changed = false;
+      const nextWorkspaceSessions = workspaceSessions.map((session) => {
+        if (session.sessionId !== sessionId) {
+          return session;
+        }
+
+        changed = true;
+        return updater(session);
+      });
+
+      return changed
+        ? {
+            ...currentSessions,
+            [workspaceId]: nextWorkspaceSessions,
+          }
+        : currentSessions;
+    });
+  }
+
+  function createSessionForWorkspace(
+    workspaceId: Workspace['id'],
+    title = '새 대화',
+  ): ChatSession {
+    const session = createChatSession({
+      workspaceId,
+      title,
+      sortOrder: getNextSessionSortOrder(workspaceId),
+    });
+
+    setChatSessions((currentSessions) => ({
+      ...currentSessions,
+      [workspaceId]: [...(currentSessions[workspaceId] ?? []), session],
+    }));
+    setSelectedSessionIds((currentSessionIds) => ({
+      ...currentSessionIds,
+      [workspaceId]: session.sessionId,
+    }));
+
+    return session;
+  }
+
+  function getOrCreateCurrentSession(): ChatSession {
+    if (selectedSession) {
+      return selectedSession;
+    }
+
+    return createSessionForWorkspace(selectedWorkspace.id);
+  }
+
+  function appendMessagesToSession(
+    workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
+    newMessages: ChatMessage[],
+    fallbackSession?: ChatSession,
+  ): void {
+    setChatSessions((currentSessions) => {
+      const workspaceSessions = currentSessions[workspaceId] ?? [];
+      const targetSession = workspaceSessions.find(
+        (session) => session.sessionId === sessionId,
+      );
+      const sessionToUpdate = targetSession ?? fallbackSession;
+
+      if (!sessionToUpdate) {
+        return currentSessions;
+      }
+
+      const updatedAt =
+        newMessages.at(-1)?.createdAt ?? new Date().toISOString();
+      const nextSession: ChatSession = {
+        ...sessionToUpdate,
+        updatedAt,
+        messages: [...sessionToUpdate.messages, ...newMessages],
+      };
+      const nextWorkspaceSessions = targetSession
+        ? workspaceSessions.map((session) =>
+            session.sessionId === sessionId ? nextSession : session,
+          )
+        : [...workspaceSessions, nextSession];
 
       return {
         ...currentSessions,
-        [workspaceId]: [...sessionMessages, ...newMessages],
+        [workspaceId]: nextWorkspaceSessions,
       };
     });
   }
@@ -589,15 +756,309 @@ export function App() {
   }
 
   function handleSelectWorkspace(workspace: Workspace): void {
+    if (workspace.status === 'archived') {
+      return;
+    }
+
     setSelectedWorkspace(workspace);
+    setSelectedSessionIds((currentSessionIds) => {
+      if (currentSessionIds[workspace.id]) {
+        return currentSessionIds;
+      }
+
+      const recentSession = getMostRecentChatSession(
+        chatSessions[workspace.id] ?? [],
+      );
+
+      return recentSession
+        ? {
+            ...currentSessionIds,
+            [workspace.id]: recentSession.sessionId,
+          }
+        : currentSessionIds;
+    });
     setActiveView('chat');
     setMessage('');
+  }
+
+  function handleSelectSession(
+    workspace: Workspace,
+    sessionId: ChatSession['sessionId'],
+  ): void {
+    if (workspace.status === 'archived') {
+      return;
+    }
+
+    setSelectedWorkspace(workspace);
+    setSelectedSessionIds((currentSessionIds) => ({
+      ...currentSessionIds,
+      [workspace.id]: sessionId,
+    }));
+    setActiveView('chat');
+    setMessage('');
+  }
+
+  function openCreateSessionDialog(workspaceId = selectedWorkspace.id): void {
+    const workspace =
+      selectableWorkspaces.find((item) => item.id === workspaceId) ??
+      selectedWorkspace;
+
+    if (workspace.status === 'archived') {
+      return;
+    }
+
+    setRenameSessionDialog(null);
+    setDeleteSessionDialog(null);
+    setNewSessionTitle('');
+    setNewSessionWorkspaceId(workspace.id);
+    setIsCreateSessionDialogOpen(true);
+  }
+
+  function closeCreateSessionDialog(): void {
+    setIsCreateSessionDialogOpen(false);
+    setNewSessionTitle('');
+    setNewSessionWorkspaceId(selectedWorkspace.id);
+  }
+
+  function submitCreateSession(): void {
+    if (!isCreateSessionDialogOpen) {
+      return;
+    }
+
+    const workspace = selectableWorkspaces.find(
+      (item) => item.id === newSessionWorkspaceId,
+    );
+
+    if (!workspace || workspace.status === 'archived') {
+      closeCreateSessionDialog();
+      return;
+    }
+
+    const session = createSessionForWorkspace(
+      workspace.id,
+      newSessionTitle,
+    );
+
+    setSelectedWorkspace(workspace);
+    setSelectedSessionIds((currentSessionIds) => ({
+      ...currentSessionIds,
+      [workspace.id]: session.sessionId,
+    }));
+    setActiveView('chat');
+    setMessage('');
+    setIsCreateSessionDialogOpen(false);
+    setNewSessionTitle('');
+    setNewSessionWorkspaceId(workspace.id);
+  }
+
+  function openRenameSessionDialog(
+    workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
+  ): void {
+    const session = (chatSessions[workspaceId] ?? []).find(
+      (item) => item.sessionId === sessionId,
+    );
+
+    if (!session) {
+      return;
+    }
+
+    setIsCreateSessionDialogOpen(false);
+    setNewSessionTitle('');
+    setDeleteSessionDialog(null);
+    setRenameSessionDialog({
+      workspaceId,
+      sessionId,
+      title: session.title,
+    });
+  }
+
+  function closeRenameSessionDialog(): void {
+    setRenameSessionDialog(null);
+  }
+
+  function submitRenameSession(): void {
+    if (!renameSessionDialog) {
+      return;
+    }
+
+    const nextTitle = renameSessionDialog.title.trim();
+
+    if (!nextTitle) {
+      return;
+    }
+
+    const session = (chatSessions[renameSessionDialog.workspaceId] ?? []).find(
+      (item) => item.sessionId === renameSessionDialog.sessionId,
+    );
+
+    if (!session) {
+      closeRenameSessionDialog();
+      return;
+    }
+
+    updateChatSession(
+      renameSessionDialog.workspaceId,
+      renameSessionDialog.sessionId,
+      (currentSession) => ({
+        ...currentSession,
+        title: nextTitle,
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    closeRenameSessionDialog();
+  }
+
+  function openDeleteSessionDialog(
+    workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
+  ): void {
+    const workspaceSessions = chatSessions[workspaceId] ?? [];
+    const session = workspaceSessions.find(
+      (item) => item.sessionId === sessionId,
+    );
+
+    if (!session) {
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    setIsCreateSessionDialogOpen(false);
+    setRenameSessionDialog(null);
+    setDeleteSessionDialog({
+      workspaceId,
+      sessionId,
+      title: session.title,
+    });
+  }
+
+  function closeDeleteSessionDialog(): void {
+    setDeleteSessionDialog(null);
+  }
+
+  function confirmDeleteSession(): void {
+    if (!deleteSessionDialog) {
+      return;
+    }
+
+    const { workspaceId, sessionId } = deleteSessionDialog;
+
+    closeDeleteSessionDialog();
+    deleteChatSession(workspaceId, sessionId);
+
+    window.requestAnimationFrame(() => {
+      appFocusAnchorRef.current?.focus();
+    });
+  }
+
+  function deleteChatSession(
+    workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
+  ): void {
+    const workspaceSessions = chatSessions[workspaceId] ?? [];
+    const session = workspaceSessions.find(
+      (item) => item.sessionId === sessionId,
+    );
+
+    if (!session) {
+      return;
+    }
+
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    pendingExternalRequestsRef.current.forEach((request, messageId) => {
+      if (request.sessionId === sessionId) {
+        pendingExternalRequestsRef.current.delete(messageId);
+      }
+    });
+    workspaceRequestStatusesRef.current.delete(sessionId);
+    setWorkspaceRequestStatuses((currentStatuses) => {
+      const nextStatuses = { ...currentStatuses };
+      delete nextStatuses[sessionId];
+      return nextStatuses;
+    });
+    setRenameSessionDialog((currentDialog) =>
+      currentDialog?.sessionId === sessionId ? null : currentDialog,
+    );
+    setDeleteSessionDialog((currentDialog) =>
+      currentDialog?.sessionId === sessionId ? null : currentDialog,
+    );
+    setChatSessions((currentSessions) => {
+      const nextWorkspaceSessions = (currentSessions[workspaceId] ?? []).filter(
+        (item) => item.sessionId !== sessionId,
+      );
+      const nextSessions = { ...currentSessions };
+
+      if (nextWorkspaceSessions.length > 0) {
+        nextSessions[workspaceId] = nextWorkspaceSessions;
+      } else {
+        delete nextSessions[workspaceId];
+      }
+
+      return nextSessions;
+    });
+    setSelectedSessionIds((currentSessionIds) => {
+      const nextSessionIds = { ...currentSessionIds };
+      const nextSession = getMostRecentChatSession(
+        workspaceSessions.filter((item) => item.sessionId !== sessionId),
+      );
+
+      if (nextSession) {
+        nextSessionIds[workspaceId] = nextSession.sessionId;
+      } else {
+        delete nextSessionIds[workspaceId];
+      }
+
+      return nextSessionIds;
+    });
+  }
+
+  function reorderChatSession(
+    workspaceId: Workspace['id'],
+    draggedSessionId: ChatSession['sessionId'],
+    targetSessionId: ChatSession['sessionId'],
+  ): void {
+    if (draggedSessionId === targetSessionId) {
+      return;
+    }
+
+    setChatSessions((currentSessions) => {
+      const workspaceSessions = sortChatSessions(
+        currentSessions[workspaceId] ?? [],
+      );
+      const draggedIndex = workspaceSessions.findIndex(
+        (session) => session.sessionId === draggedSessionId,
+      );
+      const targetIndex = workspaceSessions.findIndex(
+        (session) => session.sessionId === targetSessionId,
+      );
+
+      if (draggedIndex < 0 || targetIndex < 0) {
+        return currentSessions;
+      }
+
+      const nextWorkspaceSessions = [...workspaceSessions];
+      const [draggedSession] = nextWorkspaceSessions.splice(draggedIndex, 1);
+
+      nextWorkspaceSessions.splice(targetIndex, 0, draggedSession);
+
+      return {
+        ...currentSessions,
+        [workspaceId]: nextWorkspaceSessions.map((session, index) => ({
+          ...session,
+          sortOrder: index,
+        })),
+      };
+    });
   }
 
   async function handleCreateDerivedKnowledgeDraft(
     assistantMessageId: string,
   ): Promise<void> {
-    const sessionMessages = chatSessions[selectedWorkspace.id] ?? [];
+    const sessionMessages = currentMessages;
     const assistantIndex = sessionMessages.findIndex(
       (chatMessage) => chatMessage.id === assistantMessageId,
     );
@@ -690,15 +1151,23 @@ export function App() {
     if (
       !trimmedMessage ||
       isChatRequestBusy(
-        workspaceRequestStatusesRef.current.get(selectedWorkspace.id) ??
-          'idle',
+        selectedSessionId
+          ? workspaceRequestStatusesRef.current.get(selectedSessionId) ?? 'idle'
+          : 'idle',
       )
     ) {
       return;
     }
 
+    if (selectedWorkspace.status === 'archived') {
+      return;
+    }
+
+    const targetSession = getOrCreateCurrentSession();
+
     const targetWorkspaceId = selectedWorkspace.id;
     const targetWorkspaceType = selectedWorkspace.type;
+    const targetSessionId = targetSession.sessionId;
     const targetAIMode = aiMode;
     const isAllWorkspaceRequest = isAllWorkspaceScope(targetWorkspaceId);
     const targetGlobalSearchScope = createGlobalSearchScope(
@@ -715,7 +1184,7 @@ export function App() {
       createSearchScopeSnapshot(targetGlobalSearchScope);
 
     const previousMessages = selectSearchScopeHistoryMessages(
-      chatSessions[targetWorkspaceId] ?? [],
+      targetSession.messages,
       targetSearchScopeSnapshot,
       RECENT_HISTORY_MESSAGE_LIMIT,
     );
@@ -759,11 +1228,15 @@ export function App() {
       generationStatus: 'loading',
     };
 
-    setWorkspaceRequestStatus(targetWorkspaceId, 'retrieving-context');
-    appendMessagesToSession(targetWorkspaceId, [userMessage, assistantMessage]);
+    setWorkspaceRequestStatus(targetSessionId, 'retrieving-context');
+    appendMessagesToSession(targetWorkspaceId, targetSessionId, [
+      userMessage,
+      assistantMessage,
+    ], targetSession);
     setMessage('');
 
     void completeChatRequest(
+      targetSessionId,
       targetWorkspaceId,
       targetWorkspaceType,
       targetAIMode,
@@ -771,12 +1244,12 @@ export function App() {
       assistantMessage.id,
       trimmedMessage,
       previousMessages,
-    manualContexts,
-    targetIncludeArchived,
-    targetKnowledgeFilters,
-    targetSearchScopeSnapshot.contentOriginScope,
-    endToEndStartedTime,
-  );
+      manualContexts,
+      targetIncludeArchived,
+      targetKnowledgeFilters,
+      targetSearchScopeSnapshot.contentOriginScope,
+      endToEndStartedTime,
+    );
   }
 
   async function handleDeleteWorkspaceChat(workspace: Workspace): Promise<void> {
@@ -903,6 +1376,7 @@ export function App() {
   }
 
   async function executeLocalAIRequest(input: {
+    sessionId: ChatSession['sessionId'];
     workspaceId: Workspace['id'];
     assistantMessageId: string;
     query: string;
@@ -913,8 +1387,8 @@ export function App() {
     retrievalMs: number;
     totalElapsedMs: () => number;
   }): Promise<void> {
-    setWorkspaceRequestStatus(input.workspaceId, 'calling-local');
-    completeAssistantMessage(input.workspaceId, input.assistantMessageId, {
+    setWorkspaceRequestStatus(input.sessionId, 'calling-local');
+    completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
       content: 'Local AI가 분석 중입니다...',
       generationStatus: 'loading',
       requestStatus: 'calling-local',
@@ -972,7 +1446,7 @@ export function App() {
       total: { elapsedMs: metrics.totalElapsedMs },
     });
 
-    completeAssistantMessage(input.workspaceId, input.assistantMessageId, {
+    completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
       content: response.content,
       generationStatus: 'complete',
       requestStatus: 'completed',
@@ -983,7 +1457,7 @@ export function App() {
       externalSafetyAction: undefined,
       model: response.model,
     });
-    setWorkspaceRequestStatus(input.workspaceId, 'completed');
+    setWorkspaceRequestStatus(input.sessionId, 'completed');
   }
 
   async function executeOpenAIRequest(
@@ -1000,8 +1474,8 @@ export function App() {
       throw new Error('Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.');
     }
 
-    setWorkspaceRequestStatus(request.workspaceId, 'calling-external');
-    completeAssistantMessage(request.workspaceId, request.assistantMessageId, {
+    setWorkspaceRequestStatus(request.sessionId, 'calling-external');
+    completeAssistantMessage(request.workspaceId, request.sessionId, request.assistantMessageId, {
       content: 'OpenAI가 분석 중입니다...',
       generationStatus: 'loading',
       requestStatus: 'calling-external',
@@ -1051,7 +1525,7 @@ export function App() {
       ],
     });
 
-    completeAssistantMessage(request.workspaceId, request.assistantMessageId, {
+    completeAssistantMessage(request.workspaceId, request.sessionId, request.assistantMessageId, {
       content: unmaskingResult.displayText,
       rawExternalResponse: unmaskingResult.maskedText,
       responseUnmaskingSnapshot: request.responseUnmaskingSnapshot.map(
@@ -1075,10 +1549,11 @@ export function App() {
       model: response.model,
       usage: response.usage,
     });
-    setWorkspaceRequestStatus(request.workspaceId, 'completed');
+    setWorkspaceRequestStatus(request.sessionId, 'completed');
   }
 
   async function completeChatRequest(
+    sessionId: ChatSession['sessionId'],
     workspaceId: Workspace['id'],
     workspaceType: Workspace['type'],
     requestAIMode: AIMode,
@@ -1126,6 +1601,7 @@ export function App() {
 
     completeAutoContextRetrieval(
       workspaceId,
+      sessionId,
       userMessageId,
       autoContext,
       autoContextError,
@@ -1169,6 +1645,7 @@ export function App() {
         );
         saveExternalPayloadPreviewForTurn(
           workspaceId,
+          sessionId,
           userMessageId,
           preview,
         );
@@ -1191,6 +1668,7 @@ export function App() {
 
     saveRoutingDecisionForTurn(
       workspaceId,
+      sessionId,
       userMessageId,
       assistantMessageId,
       routingDecision,
@@ -1199,6 +1677,7 @@ export function App() {
     if (preview && routingDecision.provider === 'local') {
       saveExternalApprovalForTurn(
         workspaceId,
+        sessionId,
         userMessageId,
         assistantMessageId,
         { required: false, approved: false },
@@ -1218,6 +1697,7 @@ export function App() {
     try {
       if (routingDecision.provider === 'local') {
         await executeLocalAIRequest({
+          sessionId,
           workspaceId,
           assistantMessageId,
           query,
@@ -1237,6 +1717,7 @@ export function App() {
         }
 
         const request: PendingExternalRequest = {
+          sessionId,
           workspaceId,
           workspaceType,
           userMessageId,
@@ -1256,11 +1737,12 @@ export function App() {
           pendingExternalRequestsRef.current.set(assistantMessageId, request);
           saveExternalApprovalForTurn(
             workspaceId,
+            sessionId,
             userMessageId,
             assistantMessageId,
             { required: false, approved: false },
           );
-          completeAssistantMessage(workspaceId, assistantMessageId, {
+          completeAssistantMessage(workspaceId, sessionId, assistantMessageId, {
             content: 'Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.',
             generationStatus: 'complete',
             requestStatus: 'completed',
@@ -1275,16 +1757,17 @@ export function App() {
               secretDetections: preview.secretDetection.detections,
             },
           });
-          setWorkspaceRequestStatus(workspaceId, 'completed');
+          setWorkspaceRequestStatus(sessionId, 'completed');
         } else if (preview.status === 'block') {
           pendingExternalRequestsRef.current.set(assistantMessageId, request);
           saveExternalApprovalForTurn(
             workspaceId,
+            sessionId,
             userMessageId,
             assistantMessageId,
             { required: false, approved: false },
           );
-          completeAssistantMessage(workspaceId, assistantMessageId, {
+          completeAssistantMessage(workspaceId, sessionId, assistantMessageId, {
             content: preview.secretDetection.detected
               ? '⛔ 외부 AI 전송 차단\n\nSecret / Credential 정보가 감지되었습니다.'
               : '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
@@ -1301,16 +1784,17 @@ export function App() {
               secretDetections: preview.secretDetection.detections,
             },
           });
-          setWorkspaceRequestStatus(workspaceId, 'completed');
+          setWorkspaceRequestStatus(sessionId, 'completed');
         } else if (preview.status === 'review-required') {
           pendingExternalRequestsRef.current.set(assistantMessageId, request);
           saveExternalApprovalForTurn(
             workspaceId,
+            sessionId,
             userMessageId,
             assistantMessageId,
             { required: true, approved: false },
           );
-          completeAssistantMessage(workspaceId, assistantMessageId, {
+          completeAssistantMessage(workspaceId, sessionId, assistantMessageId, {
             content: '외부 AI 전송 전 검토가 필요합니다.',
             generationStatus: 'complete',
             requestStatus: 'review-required',
@@ -1324,10 +1808,11 @@ export function App() {
                 .map((check) => check.message),
             },
           });
-          setWorkspaceRequestStatus(workspaceId, 'review-required');
+          setWorkspaceRequestStatus(sessionId, 'review-required');
         } else {
           saveExternalApprovalForTurn(
             workspaceId,
+            sessionId,
             userMessageId,
             assistantMessageId,
             { required: false, approved: false },
@@ -1341,7 +1826,7 @@ export function App() {
           ? getExternalChatErrorMessage(error)
           : getChatErrorMessage(error);
 
-      completeAssistantMessage(workspaceId, assistantMessageId, {
+      completeAssistantMessage(workspaceId, sessionId, assistantMessageId, {
         content: errorMessage,
         generationStatus: 'error',
         requestStatus: 'error',
@@ -1353,7 +1838,7 @@ export function App() {
             }
           : {}),
       });
-      setWorkspaceRequestStatus(workspaceId, 'error');
+      setWorkspaceRequestStatus(sessionId, 'error');
     }
   }
 
@@ -1424,7 +1909,7 @@ export function App() {
 
     if (
       isChatRequestBusy(
-        workspaceRequestStatusesRef.current.get(request.workspaceId) ?? 'idle',
+        workspaceRequestStatusesRef.current.get(request.sessionId) ?? 'idle',
       )
     ) {
       return { ok: false, error: '이미 처리 중인 요청입니다.' };
@@ -1433,8 +1918,8 @@ export function App() {
     if (!tryBeginExternalAction(request)) {
       return { ok: false, error: '이미 처리 중인 요청입니다.' };
     }
-    setWorkspaceRequestStatus(request.workspaceId, 'calling-external');
-    completeAssistantMessage(request.workspaceId, assistantMessageId, {
+    setWorkspaceRequestStatus(request.sessionId, 'calling-external');
+    completeAssistantMessage(request.workspaceId, request.sessionId, assistantMessageId, {
       content: '외부 전송을 다시 확인하는 중입니다...',
       generationStatus: 'loading',
       requestStatus: 'calling-external',
@@ -1452,6 +1937,7 @@ export function App() {
       request.responseUnmaskingSnapshot = responseUnmaskingSnapshot;
       saveExternalPayloadPreviewForTurn(
         request.workspaceId,
+        request.sessionId,
         request.userMessageId,
         revalidatedPreview,
       );
@@ -1468,17 +1954,19 @@ export function App() {
         request.routingDecision = blockedRoutingDecision;
         saveRoutingDecisionForTurn(
           request.workspaceId,
+          request.sessionId,
           request.userMessageId,
           request.assistantMessageId,
           blockedRoutingDecision,
         );
         saveExternalApprovalForTurn(
           request.workspaceId,
+          request.sessionId,
           request.userMessageId,
           request.assistantMessageId,
           { required: false, approved: false },
         );
-        completeAssistantMessage(request.workspaceId, assistantMessageId, {
+        completeAssistantMessage(request.workspaceId, request.sessionId, assistantMessageId, {
           content: revalidatedPreview.secretDetection.detected
             ? '⛔ 외부 AI 전송 차단\n\nSecret / Credential 정보가 감지되었습니다.'
             : '보안 검사에 실패하여 외부 AI로 전송할 수 없습니다.',
@@ -1498,7 +1986,7 @@ export function App() {
             secretDetections: revalidatedPreview.secretDetection.detections,
           },
         });
-        setWorkspaceRequestStatus(request.workspaceId, 'completed');
+        setWorkspaceRequestStatus(request.sessionId, 'completed');
 
         return {
           ok: false,
@@ -1519,12 +2007,14 @@ export function App() {
       request.routingDecision = routingDecision;
       saveRoutingDecisionForTurn(
         request.workspaceId,
+        request.sessionId,
         request.userMessageId,
         request.assistantMessageId,
         routingDecision,
       );
       saveExternalApprovalForTurn(
         request.workspaceId,
+        request.sessionId,
         request.userMessageId,
         request.assistantMessageId,
         { required: true, approved: true, approvedAt },
@@ -1536,14 +2026,14 @@ export function App() {
     } catch (error) {
       const errorMessage = getExternalChatErrorMessage(error);
 
-      completeAssistantMessage(request.workspaceId, assistantMessageId, {
+      completeAssistantMessage(request.workspaceId, request.sessionId, assistantMessageId, {
         content: errorMessage,
         generationStatus: 'error',
         requestStatus: 'error',
         routingDecision: request.routingDecision,
         externalSafetyAction: undefined,
       });
-      setWorkspaceRequestStatus(request.workspaceId, 'error');
+      setWorkspaceRequestStatus(request.sessionId, 'error');
       pendingExternalRequestsRef.current.delete(assistantMessageId);
       return { ok: false, error: errorMessage };
     } finally {
@@ -1557,7 +2047,7 @@ export function App() {
     if (
       !request ||
       isChatRequestBusy(
-        workspaceRequestStatusesRef.current.get(request.workspaceId) ?? 'idle',
+        workspaceRequestStatusesRef.current.get(request.sessionId) ?? 'idle',
       )
     ) {
       return;
@@ -1576,11 +2066,12 @@ export function App() {
 
     saveRoutingDecisionForTurn(
       request.workspaceId,
+      request.sessionId,
       request.userMessageId,
       request.assistantMessageId,
       routingDecision,
     );
-    completeAssistantMessage(request.workspaceId, assistantMessageId, {
+    completeAssistantMessage(request.workspaceId, request.sessionId, assistantMessageId, {
       content: 'Local AI가 분석 중입니다...',
       generationStatus: 'loading',
       requestStatus: 'calling-local',
@@ -1590,6 +2081,7 @@ export function App() {
 
     try {
       await executeLocalAIRequest({
+        sessionId: request.sessionId,
         workspaceId: request.workspaceId,
         assistantMessageId,
         query: request.query,
@@ -1604,7 +2096,7 @@ export function App() {
     } catch (error) {
       const errorMessage = getChatErrorMessage(error);
 
-      completeAssistantMessage(request.workspaceId, assistantMessageId, {
+      completeAssistantMessage(request.workspaceId, request.sessionId, assistantMessageId, {
         content: errorMessage,
         generationStatus: 'error',
         requestStatus: 'error',
@@ -1616,7 +2108,7 @@ export function App() {
             }
           : {}),
       });
-      setWorkspaceRequestStatus(request.workspaceId, 'error');
+      setWorkspaceRequestStatus(request.sessionId, 'error');
     } finally {
       pendingExternalRequestsRef.current.delete(assistantMessageId);
       request.inFlight = false;
@@ -1625,6 +2117,7 @@ export function App() {
 
   function completeAssistantMessage(
     workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
     assistantMessageId: string,
     update: Partial<Pick<
       ChatMessage,
@@ -1645,12 +2138,11 @@ export function App() {
       | 'responseUnmasking'
     >>,
   ): void {
-    setChatSessions((currentSessions) => {
-      const sessionMessages = currentSessions[workspaceId] ?? [];
-
+    updateChatSession(workspaceId, sessionId, (session) => {
       return {
-        ...currentSessions,
-        [workspaceId]: sessionMessages.map((chatMessage) =>
+        ...session,
+        updatedAt: new Date().toISOString(),
+        messages: session.messages.map((chatMessage) =>
           chatMessage.id === assistantMessageId
             ? { ...chatMessage, ...update }
             : chatMessage,
@@ -1661,15 +2153,15 @@ export function App() {
 
   function saveExternalPayloadPreviewForTurn(
     workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
     userMessageId: string,
     externalPayloadPreview: ExternalPayloadPreview,
   ): void {
-    setChatSessions((currentSessions) => {
-      const sessionMessages = currentSessions[workspaceId] ?? [];
-
+    updateChatSession(workspaceId, sessionId, (session) => {
       return {
-        ...currentSessions,
-        [workspaceId]: sessionMessages.map((chatMessage) =>
+        ...session,
+        updatedAt: new Date().toISOString(),
+        messages: session.messages.map((chatMessage) =>
           chatMessage.id === userMessageId
             ? { ...chatMessage, externalPayloadPreview }
             : chatMessage,
@@ -1716,16 +2208,16 @@ export function App() {
 
   function saveRoutingDecisionForTurn(
     workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
     userMessageId: string,
     assistantMessageId: string,
     routingDecision: RoutingDecision,
   ): void {
-    setChatSessions((currentSessions) => {
-      const sessionMessages = currentSessions[workspaceId] ?? [];
-
+    updateChatSession(workspaceId, sessionId, (session) => {
       return {
-        ...currentSessions,
-        [workspaceId]: sessionMessages.map((chatMessage) =>
+        ...session,
+        updatedAt: new Date().toISOString(),
+        messages: session.messages.map((chatMessage) =>
           chatMessage.id === userMessageId ||
           chatMessage.id === assistantMessageId
             ? { ...chatMessage, routingDecision }
@@ -1737,16 +2229,16 @@ export function App() {
 
   function saveExternalApprovalForTurn(
     workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
     userMessageId: string,
     assistantMessageId: string,
     externalApproval: ExternalApprovalInfo,
   ): void {
-    setChatSessions((currentSessions) => {
-      const sessionMessages = currentSessions[workspaceId] ?? [];
-
+    updateChatSession(workspaceId, sessionId, (session) => {
       return {
-        ...currentSessions,
-        [workspaceId]: sessionMessages.map((chatMessage) =>
+        ...session,
+        updatedAt: new Date().toISOString(),
+        messages: session.messages.map((chatMessage) =>
           chatMessage.id === userMessageId ||
           chatMessage.id === assistantMessageId
             ? { ...chatMessage, externalApproval }
@@ -1857,34 +2349,35 @@ export function App() {
 
   function completeAutoContextRetrieval(
     workspaceId: Workspace['id'],
+    sessionId: ChatSession['sessionId'],
     userMessageId: string,
     autoContext: AutoRetrievedContext[],
     errorMessage?: string,
   ): void {
-    setChatSessions((currentSessions) => {
-      const sessionMessages = currentSessions[workspaceId] ?? [];
-      const userMessageIndex = sessionMessages.findIndex(
+    updateChatSession(workspaceId, sessionId, (session) => {
+      const userMessageIndex = session.messages.findIndex(
         (chatMessage) => chatMessage.id === userMessageId,
       );
 
       if (userMessageIndex < 0) {
-        return currentSessions;
+        return session;
       }
 
-      const userMessage = sessionMessages[userMessageIndex];
+      const userMessage = session.messages[userMessageIndex];
       const updatedUserMessage: ChatMessage = {
         ...userMessage,
         autoContext,
         autoContextStatus: errorMessage ? 'error' : 'complete',
         ...(errorMessage ? { autoContextError: errorMessage } : {}),
       };
-      const nextSessionMessages = [...sessionMessages];
+      const nextSessionMessages = [...session.messages];
 
       nextSessionMessages.splice(userMessageIndex, 1, updatedUserMessage);
 
       return {
-        ...currentSessions,
-        [workspaceId]: nextSessionMessages,
+        ...session,
+        updatedAt: new Date().toISOString(),
+        messages: nextSessionMessages,
       };
     });
   }
@@ -1944,7 +2437,14 @@ export function App() {
 
   return (
     <div className="app-layout">
+      <div
+        aria-hidden="true"
+        className="app-focus-anchor"
+        ref={appFocusAnchorRef}
+        tabIndex={-1}
+      />
       <Sidebar
+        chatSessions={chatSessions}
         isRecentChatsActive={activeView === 'recent-chats'}
         isVaultBrowserActive={activeView === 'vault-browser'}
         isSettingsActive={activeView === 'settings'}
@@ -1961,6 +2461,12 @@ export function App() {
           setMessage('');
         }}
         selectedWorkspaceId={activeView === 'chat' ? selectedWorkspace.id : ''}
+        selectedSessionId={activeView === 'chat' ? selectedSessionId : null}
+        onCreateSession={openCreateSessionDialog}
+        onDeleteSession={openDeleteSessionDialog}
+        onRenameSession={openRenameSessionDialog}
+        onReorderSession={reorderChatSession}
+        onSelectSession={handleSelectSession}
         onSelectWorkspace={handleSelectWorkspace}
         registryRuntimeMode={registryRuntimeMode}
         workspaceSections={workspaceSections}
@@ -1983,8 +2489,9 @@ export function App() {
           <RecentChatsView
             chatSessions={chatSessions}
             isLoading={chatHistoryStatus === 'loading'}
-            onDeleteWorkspaceChat={handleDeleteWorkspaceChat}
-            onOpenWorkspace={handleSelectWorkspace}
+            onDeleteSession={deleteChatSession}
+            onOpenSession={handleSelectSession}
+            onRenameSession={openRenameSessionDialog}
             storageError={chatHistoryError}
             workspaces={selectableWorkspaces}
           />
@@ -2030,7 +2537,11 @@ export function App() {
                 isSavingSearchScope || isCurrentWorkspaceBusy
               }
               showSearchScope={isAllWorkspaceScope(selectedWorkspace.id)}
+              sessionTitle={selectedSession?.title ?? null}
               workspaceLabel={selectedWorkspace.label}
+              onCreateSession={() => {
+                openCreateSessionDialog(selectedWorkspace.id);
+              }}
             />
             <div className="message-area">
               {chatHistoryStatus === 'loading' ? (
@@ -2073,6 +2584,156 @@ export function App() {
         )}
       </main>
       <ContextPanel />
+      {isCreateSessionDialogOpen ? (
+        <div
+          className="session-dialog-backdrop"
+          key="create-session-dialog"
+          role="presentation"
+        >
+          <form
+            className="session-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitCreateSession();
+            }}
+          >
+            <h2>새 대화 만들기</h2>
+            <label>
+              <span>세션명</span>
+              <input
+                autoFocus
+                onChange={(event) => {
+                  setNewSessionTitle(event.target.value);
+                }}
+                placeholder="새 대화"
+                ref={newSessionTitleInputRef}
+                value={newSessionTitle}
+              />
+            </label>
+            <label>
+              <span>Workspace</span>
+              <select
+                onChange={(event) => {
+                  setNewSessionWorkspaceId(event.target.value);
+                }}
+                value={newSessionWorkspaceId}
+              >
+                {selectableWorkspaces.map((workspace) => (
+                  <option
+                    disabled={workspace.status === 'archived'}
+                    key={workspace.id}
+                    value={workspace.id}
+                  >
+                    {workspace.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="session-dialog-actions">
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  closeCreateSessionDialog();
+                }}
+                type="button"
+              >
+                취소
+              </button>
+              <button className="primary-button" type="submit">
+                생성
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+      {renameSessionDialog ? (
+        <div
+          className="session-dialog-backdrop"
+          key="rename-session-dialog"
+          role="presentation"
+        >
+          <form
+            className="session-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitRenameSession();
+            }}
+          >
+            <h2>세션 이름 변경</h2>
+            <label>
+              <span>세션명</span>
+              <input
+                autoFocus
+                onChange={(event) => {
+                  setRenameSessionDialog((currentDialog) =>
+                    currentDialog
+                      ? {
+                          ...currentDialog,
+                          title: event.target.value,
+                        }
+                      : currentDialog,
+                  );
+                }}
+                value={renameSessionDialog.title}
+              />
+            </label>
+            <div className="session-dialog-actions">
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  closeRenameSessionDialog();
+                }}
+                type="button"
+              >
+                취소
+              </button>
+              <button
+                className="primary-button"
+                disabled={renameSessionDialog.title.trim().length === 0}
+                type="submit"
+              >
+                저장
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+      {deleteSessionDialog ? (
+        <div
+          className="session-dialog-backdrop"
+          key="delete-session-dialog"
+          role="presentation"
+        >
+          <form
+            className="session-dialog"
+            onSubmit={(event) => {
+              event.preventDefault();
+              confirmDeleteSession();
+            }}
+          >
+            <h2>세션 삭제</h2>
+            <p className="session-dialog-message">
+              "{deleteSessionDialog.title}" 세션을 삭제하시겠습니까?
+              <br />
+              삭제한 대화는 복구할 수 없습니다.
+            </p>
+            <div className="session-dialog-actions">
+              <button
+                className="secondary-button"
+                onClick={() => {
+                  closeDeleteSessionDialog();
+                }}
+                type="button"
+              >
+                취소
+              </button>
+              <button className="danger-button" type="submit">
+                삭제
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       {derivedDraft ? (
         <DerivedKnowledgeDraftModal
           draft={derivedDraft}

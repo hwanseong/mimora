@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatSessions } from './chat';
+import type { ChatMessage, ChatSession, ChatSessions } from './chat';
 import type { OpenAIUsage } from './externalAI';
 import type { LLMContextSource } from './llmChat';
 import type { DocumentSecurity, MimoraDocumentMetadata } from './metadata/types';
@@ -14,7 +14,8 @@ import {
   normalizeChatHistoryWorkspaceId,
 } from './workspaces';
 
-export const CHAT_HISTORY_VERSION = 1 as const;
+export const CHAT_HISTORY_VERSION = 2 as const;
+const LEGACY_CHAT_HISTORY_VERSION = 1;
 
 export function isKnownWorkspaceId(value: unknown): value is string {
   return isChatHistoryWorkspaceId(value);
@@ -39,8 +40,18 @@ export type PersistedChatMessage = Pick<
 
 export type PersistedWorkspaceChat = {
   workspaceId: string;
-  messages: PersistedChatMessage[];
+  sessions: PersistedChatSession[];
   updatedAt: string;
+};
+
+export type PersistedChatSession = {
+  sessionId: string;
+  workspaceId: string;
+  title: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  messages: PersistedChatMessage[];
 };
 
 export type PersistedChatHistory = {
@@ -64,6 +75,10 @@ export type ChatHistorySaveResult = {
   sessionCount: number;
   messageCount: number;
 };
+
+function createLegacySessionId(workspaceId: string): string {
+  return `legacy-${workspaceId}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -370,6 +385,74 @@ function sanitizePersistedMessage(value: unknown): PersistedChatMessage | null {
   return message;
 }
 
+function sanitizePersistedChatSession(
+  value: unknown,
+  fallbackWorkspaceId: string,
+  fallbackSortOrder: number,
+): PersistedChatSession | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const workspaceId =
+    typeof value.workspaceId === 'string'
+      ? normalizeChatHistoryWorkspaceId(value.workspaceId)
+      : fallbackWorkspaceId;
+
+  if (
+    !isKnownWorkspaceId(workspaceId) ||
+    typeof value.sessionId !== 'string' ||
+    typeof value.title !== 'string' ||
+    typeof value.createdAt !== 'string' ||
+    typeof value.updatedAt !== 'string' ||
+    !Array.isArray(value.messages)
+  ) {
+    return null;
+  }
+
+  const messages = value.messages.map(sanitizePersistedMessage);
+
+  if (messages.some((message) => message === null)) {
+    return null;
+  }
+
+  return {
+    sessionId: value.sessionId,
+    workspaceId,
+    title: value.title.trim() || '새 대화',
+    sortOrder:
+      typeof value.sortOrder === 'number' && Number.isFinite(value.sortOrder)
+        ? value.sortOrder
+        : fallbackSortOrder,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    messages: messages as PersistedChatMessage[],
+  };
+}
+
+function createPersistedSession(session: ChatSession): PersistedChatSession | null {
+  const workspaceId = normalizeChatHistoryWorkspaceId(session.workspaceId);
+
+  if (!isKnownWorkspaceId(workspaceId) || !session.sessionId) {
+    return null;
+  }
+
+  const messages = session.messages
+    .map(sanitizePersistedMessage)
+    .filter((message): message is PersistedChatMessage => message !== null);
+  const lastMessageAt = messages.at(-1)?.createdAt;
+
+  return {
+    sessionId: session.sessionId,
+    workspaceId,
+    title: session.title.trim() || '새 대화',
+    sortOrder: Number.isFinite(session.sortOrder) ? session.sortOrder : 0,
+    createdAt: session.createdAt || lastMessageAt || new Date(0).toISOString(),
+    updatedAt: session.updatedAt || lastMessageAt || new Date(0).toISOString(),
+    messages,
+  };
+}
+
 export function createPersistedChatHistory(
   input: unknown,
 ): PersistedChatHistory {
@@ -379,41 +462,104 @@ export function createPersistedChatHistory(
 
   const sessions: PersistedChatHistory['sessions'] = {};
 
-  for (const [workspaceId, rawMessages] of Object.entries(input)) {
-    if (!isKnownWorkspaceId(workspaceId) || !Array.isArray(rawMessages)) {
+  for (const [workspaceId, rawSessions] of Object.entries(input)) {
+    if (!isKnownWorkspaceId(workspaceId) || !Array.isArray(rawSessions)) {
       continue;
     }
 
     const normalizedWorkspaceId = normalizeChatHistoryWorkspaceId(workspaceId);
-    const messages = rawMessages
-      .map(sanitizePersistedMessage)
-      .filter((message): message is PersistedChatMessage => message !== null);
+    const persistedSessions = rawSessions
+      .map((session) => createPersistedSession(session as ChatSession))
+      .filter(
+        (session): session is PersistedChatSession =>
+          session !== null && session.workspaceId === normalizedWorkspaceId,
+      )
+      .sort(
+        (left, right) =>
+          left.sortOrder - right.sortOrder ||
+          Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+      );
 
-    if (messages.length === 0) {
+    if (persistedSessions.length === 0) {
       continue;
     }
 
-    const existingSession = sessions[normalizedWorkspaceId];
-    const nextMessages = existingSession
-      ? [...existingSession.messages, ...messages]
-      : messages;
-
     sessions[normalizedWorkspaceId] = {
       workspaceId: normalizedWorkspaceId,
-      messages: nextMessages,
-      updatedAt: nextMessages.at(-1)?.createdAt ?? new Date(0).toISOString(),
+      sessions: persistedSessions,
+      updatedAt:
+        [...persistedSessions].sort(
+          (left, right) =>
+            Date.parse(right.updatedAt) - Date.parse(left.updatedAt),
+        )[0]?.updatedAt ?? new Date(0).toISOString(),
     };
   }
 
   return { version: CHAT_HISTORY_VERSION, sessions };
 }
 
+function parseLegacyPersistedChatHistory(input: Record<string, unknown>): PersistedChatHistory {
+  if (!isRecord(input.sessions)) {
+    throw new Error('INVALID_CHAT_HISTORY');
+  }
+
+  const sessions: ChatSessions = {};
+
+  for (const [workspaceId, workspaceChat] of Object.entries(input.sessions)) {
+    if (!isKnownWorkspaceId(workspaceId)) {
+      continue;
+    }
+
+    const normalizedWorkspaceId = normalizeChatHistoryWorkspaceId(workspaceId);
+
+    if (
+      !isRecord(workspaceChat) ||
+      !Array.isArray(workspaceChat.messages) ||
+      typeof workspaceChat.updatedAt !== 'string'
+    ) {
+      throw new Error('INVALID_CHAT_HISTORY');
+    }
+
+    const messages = workspaceChat.messages.map(sanitizePersistedMessage);
+
+    if (messages.some((message) => message === null) || messages.length === 0) {
+      continue;
+    }
+
+    const lastMessageAt =
+      (messages as PersistedChatMessage[]).at(-1)?.createdAt ??
+      workspaceChat.updatedAt;
+
+    sessions[normalizedWorkspaceId] = [
+      {
+        sessionId: createLegacySessionId(normalizedWorkspaceId),
+        workspaceId: normalizedWorkspaceId,
+        title: '새 대화',
+        sortOrder: 0,
+        createdAt:
+          (messages as PersistedChatMessage[])[0]?.createdAt ??
+          workspaceChat.updatedAt,
+        updatedAt: lastMessageAt,
+        messages: (messages as PersistedChatMessage[]).map((message) => ({
+          ...message,
+        })),
+      },
+    ];
+  }
+
+  return createPersistedChatHistory(sessions);
+}
+
 export function parsePersistedChatHistory(input: unknown): PersistedChatHistory {
-  if (
-    !isRecord(input) ||
-    input.version !== CHAT_HISTORY_VERSION ||
-    !isRecord(input.sessions)
-  ) {
+  if (!isRecord(input) || !isRecord(input.sessions)) {
+    throw new Error('INVALID_CHAT_HISTORY');
+  }
+
+  if (input.version === LEGACY_CHAT_HISTORY_VERSION) {
+    return parseLegacyPersistedChatHistory(input);
+  }
+
+  if (input.version !== CHAT_HISTORY_VERSION) {
     throw new Error('INVALID_CHAT_HISTORY');
   }
 
@@ -429,23 +575,29 @@ export function parsePersistedChatHistory(input: unknown): PersistedChatHistory 
       !isRecord(workspaceChat) ||
       (workspaceChat.workspaceId !== workspaceId &&
         workspaceChat.workspaceId !== normalizedWorkspaceId) ||
-      !Array.isArray(workspaceChat.messages) ||
+      !Array.isArray(workspaceChat.sessions) ||
       typeof workspaceChat.updatedAt !== 'string'
     ) {
       throw new Error('INVALID_CHAT_HISTORY');
     }
 
-    const messages = workspaceChat.messages.map(sanitizePersistedMessage);
+    const workspaceSessions = workspaceChat.sessions.map((session, index) =>
+      sanitizePersistedChatSession(session, normalizedWorkspaceId, index),
+    );
 
-    if (messages.some((message) => message === null)) {
+    if (workspaceSessions.some((session) => session === null)) {
       throw new Error('INVALID_CHAT_HISTORY');
     }
 
-    if (messages.length > 0) {
-      sessions[normalizedWorkspaceId] = [
-        ...(sessions[normalizedWorkspaceId] ?? []),
-        ...(messages as PersistedChatMessage[]),
-      ];
+    const normalizedSessions = (workspaceSessions as PersistedChatSession[])
+      .filter((session) => session.workspaceId === normalizedWorkspaceId)
+      .map((session) => ({
+        ...session,
+        messages: session.messages.map((message) => ({ ...message })),
+      }));
+
+    if (normalizedSessions.length > 0) {
+      sessions[normalizedWorkspaceId] = normalizedSessions;
     }
   }
 
@@ -454,16 +606,31 @@ export function parsePersistedChatHistory(input: unknown): PersistedChatHistory 
 
 export function restoreChatSessions(history: PersistedChatHistory): ChatSessions {
   return Object.fromEntries(
-    Object.entries(history.sessions).map(([workspaceId, session]) => [
+    Object.entries(history.sessions).map(([workspaceId, workspaceChat]) => [
       workspaceId,
-      session.messages.map((message) => ({ ...message })),
+      workspaceChat.sessions.map((session) => ({
+        ...session,
+        messages: session.messages.map((message) => ({ ...message })),
+      })),
     ]),
   );
 }
 
 export function countPersistedMessages(history: PersistedChatHistory): number {
   return Object.values(history.sessions).reduce(
-    (total, session) => total + session.messages.length,
+    (total, workspaceChat) =>
+      total +
+      workspaceChat.sessions.reduce(
+        (workspaceTotal, session) => workspaceTotal + session.messages.length,
+        0,
+      ),
+    0,
+  );
+}
+
+export function countPersistedSessions(history: PersistedChatHistory): number {
+  return Object.values(history.sessions).reduce(
+    (total, workspaceChat) => total + workspaceChat.sessions.length,
     0,
   );
 }

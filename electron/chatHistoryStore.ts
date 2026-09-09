@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   countPersistedMessages,
+  countPersistedSessions,
   createPersistedChatHistory,
   isKnownWorkspaceId,
   parsePersistedChatHistory,
@@ -122,7 +123,7 @@ export function createChatHistoryStore({
     historyState = history;
 
     const result = {
-      sessionCount: Object.keys(history.sessions).length,
+      sessionCount: countPersistedSessions(history),
       messageCount: countPersistedMessages(history),
     };
 
@@ -170,11 +171,18 @@ export function createChatHistoryStore({
 
     try {
       const decrypted = await safeStorage.decryptStringAsync(encryptedHistory);
-      const parsed = parsePersistedChatHistory(JSON.parse(decrypted.result));
+      const rawHistory = JSON.parse(decrypted.result) as unknown;
+      const parsed = parsePersistedChatHistory(rawHistory);
 
       historyState = parsed;
 
-      if (decrypted.shouldReEncrypt) {
+      if (
+        decrypted.shouldReEncrypt ||
+        (typeof rawHistory === 'object' &&
+          rawHistory !== null &&
+          'version' in rawHistory &&
+          (rawHistory as { version?: unknown }).version !== parsed.version)
+      ) {
         await persist(parsed);
       }
 

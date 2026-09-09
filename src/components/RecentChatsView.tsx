@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import type { ChatSessions } from '../chat';
+import type { ChatSession, ChatSessions } from '../chat';
 import type { Workspace } from '../workspaces';
 
 export const RECENT_CHAT_PREVIEW_MAX_CHARS = 72;
 export const PRIVATE_RECENT_CHAT_PREVIEW_MAX_CHARS = 60;
 
 export type RecentChatItem = {
+  session: ChatSession;
   workspace: Workspace;
   preview: string;
   messageCount: number;
@@ -20,10 +21,7 @@ function truncatePreview(text: string, maxChars: number): string {
     return normalizedText;
   }
 
-  return `${characters
-    .slice(0, maxChars - 1)
-    .join('')
-    .trimEnd()}…`;
+  return `${characters.slice(0, maxChars - 1).join('').trimEnd()}…`;
 }
 
 function getTimestamp(value: string): number {
@@ -72,8 +70,8 @@ export function formatRecentChatTime(
 }
 
 function getLastUserMessage(
-  messages: ChatSessions[string],
-): ChatSessions[string][number] | undefined {
+  messages: ChatSession['messages'],
+): ChatSession['messages'][number] | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === 'user') {
       return messages[index];
@@ -87,61 +85,69 @@ export function createRecentChatItems(
   chatSessions: ChatSessions,
   workspaces: Workspace[],
 ): RecentChatItem[] {
+  const visibleWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));
+
   return workspaces
-    .flatMap((workspace) => {
-      const messages = chatSessions[workspace.id] ?? [];
+    .flatMap((workspace) =>
+      (chatSessions[workspace.id] ?? []).flatMap((session) => {
+        if (
+          session.workspaceId !== workspace.id ||
+          !visibleWorkspaceIds.has(session.workspaceId) ||
+          session.messages.length === 0
+        ) {
+          return [];
+        }
 
-      if (messages.length === 0) {
-        return [];
-      }
+        const lastMessage = session.messages.at(-1);
+        const lastUserMessage = getLastUserMessage(session.messages);
+        const previewMessage = lastUserMessage ?? lastMessage;
 
-      const lastMessage = messages.at(-1);
-      const lastUserMessage = getLastUserMessage(messages);
-      const previewMessage = lastUserMessage ?? lastMessage;
-
-      return lastMessage && previewMessage
-        ? [
-            {
-              workspace,
-              preview: truncatePreview(
-                previewMessage.content,
-                workspace.type === 'private'
-                  ? PRIVATE_RECENT_CHAT_PREVIEW_MAX_CHARS
-                  : RECENT_CHAT_PREVIEW_MAX_CHARS,
-              ),
-              messageCount: messages.length,
-              lastUpdatedAt: lastMessage.createdAt,
-            },
-          ]
-        : [];
-    })
+        return lastMessage && previewMessage
+          ? [
+              {
+                session,
+                workspace,
+                preview: truncatePreview(
+                  previewMessage.content,
+                  workspace.type === 'private'
+                    ? PRIVATE_RECENT_CHAT_PREVIEW_MAX_CHARS
+                    : RECENT_CHAT_PREVIEW_MAX_CHARS,
+                ),
+                messageCount: session.messages.length,
+                lastUpdatedAt: session.updatedAt || lastMessage.createdAt,
+              },
+            ]
+          : [];
+      }),
+    )
     .sort(
       (left, right) =>
         getTimestamp(right.lastUpdatedAt) - getTimestamp(left.lastUpdatedAt) ||
-        left.workspace.label.localeCompare(right.workspace.label),
+        left.workspace.label.localeCompare(right.workspace.label) ||
+        left.session.title.localeCompare(right.session.title),
     );
 }
 
 export function RecentChatsView({
   chatSessions,
   isLoading = false,
-  onDeleteWorkspaceChat,
-  onOpenWorkspace,
+  onDeleteSession,
+  onOpenSession,
+  onRenameSession,
   storageError,
   workspaces,
 }: {
   chatSessions: ChatSessions;
   isLoading?: boolean;
-  onDeleteWorkspaceChat: (workspace: Workspace) => Promise<void>;
-  onOpenWorkspace: (workspace: Workspace) => void;
+  onDeleteSession: (workspaceId: string, sessionId: string) => void;
+  onOpenSession: (workspace: Workspace, sessionId: string) => void;
+  onRenameSession: (workspaceId: string, sessionId: string) => void;
   storageError?: string | null;
   workspaces: Workspace[];
 }) {
   const recentChats = createRecentChatItems(chatSessions, workspaces);
   const [now, setNow] = useState(() => Date.now());
-  const [deleteTarget, setDeleteTarget] = useState<Workspace | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<RecentChatItem | null>(null);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -153,34 +159,12 @@ export function RecentChatsView({
     };
   }, []);
 
-  async function confirmDelete(): Promise<void> {
-    if (!deleteTarget || isDeleting) {
-      return;
-    }
-
-    setIsDeleting(true);
-    setDeleteError(null);
-
-    try {
-      await onDeleteWorkspaceChat(deleteTarget);
-      setDeleteTarget(null);
-    } catch (error) {
-      setDeleteError(
-        error instanceof Error
-          ? error.message
-          : '대화 기록을 삭제하지 못했습니다.',
-      );
-    } finally {
-      setIsDeleting(false);
-    }
-  }
-
   return (
     <section className="recent-chats-view" aria-labelledby="recent-chats-title">
       <header className="recent-chats-header">
         <p className="eyebrow">Chat history</p>
         <h1 id="recent-chats-title">최근 대화</h1>
-        <p>현재 실행 중인 Mimora의 Workspace별 대화입니다.</p>
+        <p>Workspace별 Chat Session 기록입니다.</p>
       </header>
 
       {storageError ? (
@@ -192,20 +176,14 @@ export function RecentChatsView({
       {deleteTarget ? (
         <div className="recent-chat-delete-confirmation" role="alertdialog">
           <div>
-            <strong>{deleteTarget.label}의 대화 기록을 삭제하시겠습니까?</strong>
-            <p>
-              대화 기록만 삭제됩니다. Obsidian Vault와 프로젝트 문서는 삭제되지
-              않습니다.
-            </p>
-            {deleteError ? <p className="recent-chat-delete-error">{deleteError}</p> : null}
+            <strong>{deleteTarget.session.title} 세션을 삭제하시겠습니까?</strong>
+            <p>삭제한 대화는 복구할 수 없습니다.</p>
           </div>
           <div className="recent-chat-delete-actions">
             <button
               className="secondary-button"
-              disabled={isDeleting}
               onClick={() => {
                 setDeleteTarget(null);
-                setDeleteError(null);
               }}
               type="button"
             >
@@ -213,13 +191,17 @@ export function RecentChatsView({
             </button>
             <button
               className="danger-button"
-              disabled={isDeleting}
-              onClick={() => {
-                void confirmDelete();
+              onClick={(event) => {
+                event.currentTarget.blur();
+                onDeleteSession(
+                  deleteTarget.workspace.id,
+                  deleteTarget.session.sessionId,
+                );
+                setDeleteTarget(null);
               }}
               type="button"
             >
-              {isDeleting ? '삭제 중…' : '대화 삭제'}
+              삭제
             </button>
           </div>
         </div>
@@ -236,20 +218,18 @@ export function RecentChatsView({
       ) : (
         <div className="recent-chats-list">
           {recentChats.map((item) => (
-            <article
-              className="recent-chat-item"
-              key={item.workspace.id}
-            >
+            <article className="recent-chat-item" key={item.session.sessionId}>
               <button
                 className="recent-chat-open"
                 onClick={() => {
-                  onOpenWorkspace(item.workspace);
+                  onOpenSession(item.workspace, item.session.sessionId);
                 }}
                 type="button"
               >
                 <span className="recent-chat-main">
-                  <strong>{item.workspace.label}</strong>
-                  <span>“{item.preview}”</span>
+                  <strong>{item.session.title}</strong>
+                  <small>{item.workspace.label}</small>
+                  <span>{item.preview}</span>
                 </span>
                 <span className="recent-chat-count">
                   {item.messageCount.toLocaleString()} messages ·{' '}
@@ -257,11 +237,22 @@ export function RecentChatsView({
                 </span>
               </button>
               <button
-                aria-label={`${item.workspace.label} 대화 기록 삭제`}
+                aria-label={`${item.session.title} 이름 변경`}
                 className="recent-chat-delete"
-                onClick={() => {
-                  setDeleteTarget(item.workspace);
-                  setDeleteError(null);
+                onClick={(event) => {
+                  event.currentTarget.blur();
+                  onRenameSession(item.workspace.id, item.session.sessionId);
+                }}
+                type="button"
+              >
+                Rename
+              </button>
+              <button
+                aria-label={`${item.session.title} 삭제`}
+                className="recent-chat-delete"
+                onClick={(event) => {
+                  event.currentTarget.blur();
+                  setDeleteTarget(item);
                 }}
                 type="button"
               >

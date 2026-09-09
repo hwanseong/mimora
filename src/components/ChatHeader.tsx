@@ -14,6 +14,7 @@ import {
 
 export function ChatHeader({
   workspaceLabel,
+  sessionTitle,
   aiMode,
   effectiveSecurity,
   disabled = false,
@@ -29,10 +30,12 @@ export function ChatHeader({
   onChangeContentOriginScope,
   onChangeKnowledgeFilters,
   onResetSearchScope,
+  onCreateSession,
   searchScopeDisabled = false,
   showSearchScope = false,
 }: {
   workspaceLabel: string;
+  sessionTitle?: string | null;
   aiMode: AIMode;
   effectiveSecurity: EffectiveSecurity;
   disabled?: boolean;
@@ -50,6 +53,7 @@ export function ChatHeader({
   ) => void;
   onChangeKnowledgeFilters?: (filters: KnowledgeSearchFilters) => void;
   onResetSearchScope?: () => void;
+  onCreateSession?: () => void;
   searchScopeDisabled?: boolean;
   showSearchScope?: boolean;
 }) {
@@ -64,6 +68,9 @@ export function ChatHeader({
         <div className="workspace-heading">
           <p className="eyebrow">현재 Workspace</p>
           <h1>{workspaceLabel}</h1>
+          {sessionTitle ? (
+            <p className="chat-session-title">{sessionTitle}</p>
+          ) : null}
           {showSearchScope ? (
             <label
               className="archived-search-toggle"
@@ -172,6 +179,13 @@ export function ChatHeader({
         </div>
 
         <div className="header-meta" aria-label="채팅 설정">
+          <button
+            className="new-chat-button"
+            onClick={onCreateSession}
+            type="button"
+          >
+            + 새 대화
+          </button>
           <label className="ai-mode-control">
             <span>AI Mode</span>
             <select
