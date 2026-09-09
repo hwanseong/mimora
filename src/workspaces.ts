@@ -72,7 +72,11 @@ export function isWorkspaceVisible(workspace: Workspace): boolean {
   return workspace.isSystem === true || workspace.status !== 'archived';
 }
 
-export function canCreateWorkspaceSession(workspace: Workspace): boolean {
+export function canReadWorkspaceSession(workspace: Workspace): boolean {
+  return isWorkspaceVisible(workspace);
+}
+
+export function canWriteWorkspaceSession(workspace: Workspace): boolean {
   return (
     workspace.isSystem === true ||
     workspace.status === 'planned' ||
@@ -81,8 +85,12 @@ export function canCreateWorkspaceSession(workspace: Workspace): boolean {
   );
 }
 
+export function canCreateWorkspaceSession(workspace: Workspace): boolean {
+  return canWriteWorkspaceSession(workspace);
+}
+
 export function canAskWorkspaceQuestion(workspace: Workspace): boolean {
-  return canCreateWorkspaceSession(workspace);
+  return canWriteWorkspaceSession(workspace);
 }
 
 export function createWorkspaceSections({

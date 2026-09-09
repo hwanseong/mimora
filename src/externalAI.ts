@@ -4,6 +4,7 @@ import type {
   OutboundPayloadDocumentMetadata,
   PayloadSafetyStatus,
 } from './security/outboundPayloadSafety';
+import type { ResponseUnmaskingSnapshotEntry } from './security/responseUnmasking';
 
 export type ExternalAISettings = {
   provider: 'openai';
@@ -39,6 +40,7 @@ export type ExternalAIChatInput = {
   mode: Extract<AIMode, 'auto' | 'external'>;
   externalText: string;
   documents: OutboundPayloadDocumentMetadata[];
+  maskingSnapshot: ResponseUnmaskingSnapshotEntry[];
   approved: boolean;
 };
 

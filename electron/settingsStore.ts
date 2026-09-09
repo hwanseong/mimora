@@ -29,6 +29,7 @@ import {
   createDefaultMaskingSettings,
   maskingEntityTypes,
   type AddMaskingEntryInput,
+  type MaskingEntryScope,
   type MaskingEntityType,
   type MaskingEntry,
   type MaskingSettings,
@@ -245,6 +246,10 @@ function isMaskingEntityType(value: unknown): value is MaskingEntityType {
   );
 }
 
+function isMaskingEntryScope(value: unknown): value is MaskingEntryScope {
+  return value === 'global' || value === 'workspace';
+}
+
 function normalizeMaskingValue(value: string): string {
   return value.trim().toLocaleLowerCase('en-US');
 }
@@ -265,12 +270,20 @@ function parseMaskingSettings(value: unknown): {
     ? rawMasking.entries
     : [];
   const seenEntries = new Set<string>();
+  let entriesMigrated = !Array.isArray(rawMasking.entries);
   const entries = rawEntries.filter((entry): entry is MaskingEntry => {
     if (typeof entry !== 'object' || entry === null) {
       return false;
     }
 
     const candidate = entry as Partial<MaskingEntry>;
+    const hasStoredScope = isMaskingEntryScope(candidate.scope);
+    const scope = hasStoredScope ? candidate.scope : 'global';
+    const workspaceId =
+      typeof candidate.workspaceId === 'string' &&
+      candidate.workspaceId.trim()
+        ? candidate.workspaceId.trim()
+        : undefined;
 
     if (
       typeof candidate.id !== 'string' ||
@@ -281,18 +294,27 @@ function parseMaskingSettings(value: unknown): {
       !candidate.alias.trim() ||
       typeof candidate.enabled !== 'boolean' ||
       typeof candidate.createdAt !== 'string' ||
-      typeof candidate.updatedAt !== 'string'
+      typeof candidate.updatedAt !== 'string' ||
+      (scope === 'workspace' && !workspaceId)
     ) {
+      entriesMigrated = true;
       return false;
     }
 
     const entryKey = JSON.stringify([
+      scope,
+      scope === 'workspace' ? workspaceId : '',
       candidate.type,
       normalizeMaskingValue(candidate.value),
     ]);
 
     if (seenEntries.has(entryKey)) {
+      entriesMigrated = true;
       return false;
+    }
+
+    if (!hasStoredScope || candidate.source !== 'user') {
+      entriesMigrated = true;
     }
 
     seenEntries.add(entryKey);
@@ -338,12 +360,19 @@ function parseMaskingSettings(value: unknown): {
         ...entry,
         value: entry.value.trim(),
         alias: entry.alias.trim(),
+        scope: isMaskingEntryScope(entry.scope) ? entry.scope : 'global',
+        workspaceId:
+          entry.scope === 'workspace' && entry.workspaceId?.trim()
+            ? entry.workspaceId.trim()
+            : undefined,
+        source: 'user',
       })),
       sequences,
     },
     migrated:
       !Array.isArray(rawMasking.entries) ||
       rawEntries.length !== entries.length ||
+      entriesMigrated ||
       sequencesMigrated,
   };
 }
@@ -356,6 +385,13 @@ function validateMaskingEntryInput(
   }
 
   const candidate = input as Partial<UpdateMaskingEntryInput>;
+  const scope = isMaskingEntryScope(candidate.scope)
+    ? candidate.scope
+    : 'global';
+  const workspaceId =
+    typeof candidate.workspaceId === 'string' && candidate.workspaceId.trim()
+      ? candidate.workspaceId.trim()
+      : undefined;
 
   if (!isMaskingEntityType(candidate.type)) {
     throw new Error('지원하지 않는 Masking Entity Type입니다.');
@@ -367,7 +403,8 @@ function validateMaskingEntryInput(
 
   if (
     ('id' in candidate && typeof candidate.id !== 'string') ||
-    ('enabled' in candidate && typeof candidate.enabled !== 'boolean')
+    ('enabled' in candidate && typeof candidate.enabled !== 'boolean') ||
+    (scope === 'workspace' && !workspaceId)
   ) {
     throw new Error('Masking Entity 입력값이 올바르지 않습니다.');
   }
@@ -376,6 +413,8 @@ function validateMaskingEntryInput(
     ...candidate,
     type: candidate.type,
     value: candidate.value.trim(),
+    scope,
+    workspaceId: scope === 'workspace' ? workspaceId : undefined,
   } as AddMaskingEntryInput | UpdateMaskingEntryInput;
 }
 
@@ -383,12 +422,17 @@ function ensureUniqueMaskingEntry(
   entries: MaskingEntry[],
   type: MaskingEntityType,
   value: string,
+  scope: MaskingEntryScope,
+  workspaceId?: string,
   ignoredEntryId?: string,
 ): void {
   const normalizedValue = normalizeMaskingValue(value);
   const duplicated = entries.some(
     (entry) =>
       entry.id !== ignoredEntryId &&
+      (entry.scope ?? 'global') === scope &&
+      ((entry.scope ?? 'global') === 'global' ||
+        entry.workspaceId === workspaceId) &&
       entry.type === type &&
       normalizeMaskingValue(entry.value) === normalizedValue,
   );
@@ -962,6 +1006,8 @@ export function createSettingsStore({
           settings.masking.entries,
           entryInput.type,
           entryInput.value,
+          entryInput.scope ?? 'global',
+          entryInput.workspaceId,
         );
 
         const sequence = settings.masking.sequences[entryInput.type] + 1;
@@ -977,6 +1023,9 @@ export function createSettingsStore({
                 type: entryInput.type,
                 value: entryInput.value,
                 alias: createMaskingAlias(entryInput.type, sequence),
+                scope: entryInput.scope ?? 'global',
+                workspaceId: entryInput.workspaceId,
+                source: 'user',
                 enabled: true,
                 createdAt: now,
                 updatedAt: now,
@@ -1008,6 +1057,8 @@ export function createSettingsStore({
           settings.masking.entries,
           entryInput.type,
           entryInput.value,
+          entryInput.scope ?? 'global',
+          entryInput.workspaceId,
           entryInput.id,
         );
 
@@ -1029,6 +1080,9 @@ export function createSettingsStore({
                     type: entryInput.type,
                     value: entryInput.value,
                     alias,
+                    scope: entryInput.scope ?? 'global',
+                    workspaceId: entryInput.workspaceId,
+                    source: 'user',
                     enabled: entryInput.enabled,
                     updatedAt: getNow(),
                   }

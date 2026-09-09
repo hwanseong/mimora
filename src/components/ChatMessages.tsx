@@ -10,16 +10,19 @@ import {
 } from '../security/externalPayloadPreview';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { getSecretRules } from '../security/secretDetector';
+import type { Workspace } from '../workspaces';
 
 export function ChatMessages({
   messages,
   workspaceId,
+  registryWorkspaces,
   onApproveExternal,
   onCreateDerivedKnowledgeDraft,
   onUseLocalAI,
 }: {
   messages: ChatMessage[];
   workspaceId: string;
+  registryWorkspaces: Workspace[];
   onApproveExternal: (
     assistantMessageId: string,
   ) => Promise<ExternalActionResult>;
@@ -82,6 +85,7 @@ export function ChatMessages({
           manualContexts: message.manualContext ?? [],
           autoContexts: message.autoContext ?? [],
           maskingEntries: settings.masking.entries,
+          registryWorkspaces,
           secretRules: getSecretRules(
             settings.secretDetection.customRules,
           ),

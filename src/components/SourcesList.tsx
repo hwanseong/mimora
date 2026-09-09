@@ -19,6 +19,7 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
             source.documentSecurity === 'private' ||
             source.metadata?.security === 'private';
           const isAiDerived = isAiDerivedDocument(source.metadata);
+          const documentId = source.metadata?.documentId?.trim();
 
           return (
             <li
@@ -26,6 +27,9 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
               title={`${source.relativePath} · ${vaultSecurityLabels[source.security]}`}
             >
               <span>{source.fileName}</span>
+              {documentId ? (
+                <span className="document-id-source-badge">{documentId}</span>
+              ) : null}
               <span> · {source.vaultName}</span>
               {isAiDerived ? (
                 <span className="ai-derived-source-badge">AI Wiki</span>

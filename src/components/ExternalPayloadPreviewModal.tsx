@@ -87,6 +87,42 @@ export function ExternalPayloadPreviewModal({
           </span>
         </div>
 
+        <section className="external-preview-section masking-applied-summary">
+          <h3>Masking Applied</h3>
+          <div className="masking-applied-grid">
+            <div>
+              <span>Global</span>
+              <strong>{preview.maskingSummary.globalEntries}</strong>
+            </div>
+            <div>
+              <span>Workspace</span>
+              <strong>{preview.maskingSummary.workspaceEntries}</strong>
+            </div>
+            <div>
+              <span>Registry Auto</span>
+              <strong>{preview.maskingSummary.registryDerivedEntries}</strong>
+            </div>
+            <div>
+              <span>Secrets</span>
+              <strong>{preview.maskingSummary.secretDetections}</strong>
+            </div>
+          </div>
+          {preview.maskingSummary.workspaceLabels.length > 0 ? (
+            <div className="masking-applied-workspaces">
+              <strong>Applicable Workspace</strong>
+              <ul>
+                {preview.maskingSummary.workspaceLabels.map((workspaceLabel) => (
+                  <li key={workspaceLabel}>{workspaceLabel}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="external-preview-empty">
+              적용 가능한 Workspace가 없어 Global Dictionary와 자동 detector만 적용됩니다.
+            </p>
+          )}
+        </section>
+
         {preview.secretDetection.detected ? (
           <section className="external-preview-section secret-detection-block">
             <h3>⛔ Secret / Credential detected</h3>

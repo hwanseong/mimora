@@ -553,12 +553,22 @@ function documentMatchesKnowledgeFilters(
     return true;
   }
 
+  const normalizedMetadataDomains = new Set(
+    metadata.knowledgeDomains.map((domain) => domain.trim().toLocaleLowerCase()),
+  );
+  const normalizedMetadataTypes = new Set(
+    metadata.knowledgeTypes.map((type) => type.trim().toLocaleLowerCase()),
+  );
   const matchesDomains =
     filters.domains.length === 0 ||
-    filters.domains.every((domain) => metadata.knowledgeDomains.includes(domain));
+    filters.domains.every((domain) =>
+      normalizedMetadataDomains.has(domain.trim().toLocaleLowerCase()),
+    );
   const matchesTypes =
     filters.types.length === 0 ||
-    filters.types.every((type) => metadata.knowledgeTypes.includes(type));
+    filters.types.every((type) =>
+      normalizedMetadataTypes.has(type.trim().toLocaleLowerCase()),
+    );
 
   return matchesDomains && matchesTypes;
 }
@@ -614,6 +624,7 @@ type DocumentEligibilityResult = {
     | 'active-workspace-linked'
     | 'archived-only-included'
     | 'archived-only-excluded'
+    | 'workspace-status-unavailable'
     | 'unknown-workspace-only';
   workspaceLookups: Array<{
     workspaceId: string;
@@ -687,6 +698,7 @@ function isDocumentEligibleForSearch(input: {
   workspaceIds: string[];
   workspaceStatusMap: WorkspaceStatusMap;
   includeArchived: boolean;
+  workspaceStatusLookupAvailable: boolean;
 }): DocumentEligibilityResult {
   const workspaceLookups = input.workspaceIds.map((workspaceId) => {
     const workspaceStatus = input.workspaceStatusMap.get(workspaceId);
@@ -737,6 +749,14 @@ function isDocumentEligibleForSearch(input: {
       reason: input.includeArchived
         ? 'archived-only-included'
         : 'archived-only-excluded',
+      workspaceLookups,
+    };
+  }
+
+  if (!input.workspaceStatusLookupAvailable) {
+    return {
+      eligible: true,
+      reason: 'workspace-status-unavailable',
       workspaceLookups,
     };
   }
@@ -1218,6 +1238,7 @@ async function retrieveFromVault(
   tokens: string[],
   workspaceId: string,
   workspaceStatusMap: WorkspaceStatusMap,
+  workspaceStatusLookupAvailable: boolean,
   includeArchived: boolean,
   metadataRegistryOptions: MetadataRegistryOptions = {},
   knowledgeFilters: KnowledgeSearchFilters = normalizeKnowledgeSearchFilters(),
@@ -1243,6 +1264,7 @@ async function retrieveFromVault(
         selectedWorkspaceId: workspaceId,
         workspaceIds: metadataResult.metadata.workspaceIds,
         workspaceStatusMap,
+        workspaceStatusLookupAvailable,
         includeArchived,
       });
 
@@ -1799,6 +1821,9 @@ export function createVaultFilesService(
       const workspaceStatusMap = createWorkspaceStatusMap(
         workspaceRegistry?.workspaces ?? [],
       );
+      const workspaceStatusLookupAvailable =
+        !isAllWorkspaceScope(retrievalInput.workspaceId) ||
+        (workspaceRegistry?.workspaces.length ?? 0) > 0;
 
       if (isDevelopmentEnvironment()) {
         const archivedTestWorkspaceStatus =
@@ -1836,6 +1861,7 @@ export function createVaultFilesService(
                 tokens,
                 retrievalInput.workspaceId,
                 workspaceStatusMap,
+                workspaceStatusLookupAvailable,
                 retrievalInput.includeArchived,
                 metadataRegistryOptions,
                 effectiveKnowledgeFilters,

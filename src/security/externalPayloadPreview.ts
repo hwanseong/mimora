@@ -1,4 +1,5 @@
 import type { EffectiveSecurity } from './securityRouter';
+import type { Workspace } from '../workspace/types';
 import type { VaultSecurity, VaultType } from '../settings';
 import type { MimoraDocumentMetadata } from '../metadata/types';
 import {
@@ -8,10 +9,15 @@ import {
 } from '../context/contextBudgetManager';
 import {
   findRemainingRegisteredEntityIds,
+  maskingEntityTypes,
   maskText,
   type MaskingEntry,
   type MaskingReplacement,
 } from './maskingEngine';
+import {
+  createEffectiveMaskingEntries,
+  type EffectiveMaskingSummary,
+} from './maskingScope';
 import {
   createStructuralSensitiveDataMasker,
   type StructuralMaskingReplacement,
@@ -51,6 +57,14 @@ export type ExternalMaskingReplacement =
 export type ExternalPayloadPreview = {
   workspaceId: string;
   effectiveSecurity: EffectiveSecurity;
+  maskingSummary: EffectiveMaskingSummary & {
+    secretDetections: number;
+  };
+  responseUnmaskingSnapshot: {
+    alias: string;
+    original: string;
+    entityType: MaskingEntry['type'];
+  }[];
   maskedQuestion: string;
   originalContextChars: number;
   maskedContextChars: number;
@@ -122,6 +136,14 @@ function mergeReplacements(
   return [...replacements.values()];
 }
 
+function isDictionaryMaskingReplacement(
+  replacement: ExternalMaskingReplacement,
+): replacement is MaskingReplacement {
+  return maskingEntityTypes.includes(
+    replacement.type as MaskingReplacement['type'],
+  );
+}
+
 export function applyExternalSafeTextPipeline(input: {
   text: string;
   documentId?: string;
@@ -165,6 +187,7 @@ export function createExternalPayloadPreview(input: {
   manualContexts: ExternalPreviewContextInput[];
   autoContexts: ExternalPreviewContextInput[];
   maskingEntries: MaskingEntry[];
+  registryWorkspaces?: Workspace[];
   secretRules?: SecretRule[];
 }): ExternalPayloadPreview {
   const documentsByKey = new Map<string, ExternalPreviewContextInput>();
@@ -212,12 +235,19 @@ export function createExternalPayloadPreview(input: {
     console.info('[Mimora Context Budget]', createContextBudgetSummary(contextBudget));
   }
 
+  const effectiveMasking = createEffectiveMaskingEntries({
+    entries: input.maskingEntries,
+    currentWorkspaceId: input.workspaceId,
+    question: input.question,
+    documents: contextDocuments,
+    registryWorkspaces: input.registryWorkspaces,
+  });
   const secretRules = input.secretRules ?? [...builtInSecretRules];
   const structuralMasker = createStructuralSensitiveDataMasker();
   const questionResult = applyExternalSafeTextPipeline({
     text: input.question,
     secretRules,
-    maskingEntries: input.maskingEntries,
+    maskingEntries: effectiveMasking.entries,
     structuralMasker,
   });
   const documentResults = contextDocuments.map((document, index) => {
@@ -226,7 +256,7 @@ export function createExternalPayloadPreview(input: {
       text: document.content,
       documentId,
       secretRules,
-      maskingEntries: input.maskingEntries,
+      maskingEntries: effectiveMasking.entries,
       structuralMasker,
     });
 
@@ -271,9 +301,26 @@ export function createExternalPayloadPreview(input: {
     ),
     structuralMasker.getReplacements(),
   ]);
+  const responseUnmaskingSnapshot = replacements.flatMap((replacement) =>
+    isDictionaryMaskingReplacement(replacement) &&
+    (replacement.source === 'registry' || replacement.source === 'user')
+      ? [
+          {
+            alias: replacement.alias,
+            original: replacement.original,
+            entityType: replacement.type,
+          },
+        ]
+      : [],
+  );
   const commonPreview = {
     workspaceId: input.workspaceId,
     effectiveSecurity: input.effectiveSecurity,
+    maskingSummary: {
+      ...effectiveMasking.summary,
+      secretDetections: secretDetection.totalCount,
+    },
+    responseUnmaskingSnapshot,
     maskedQuestion: questionResult.maskedText,
     originalContextChars: contextDocuments.reduce(
       (total, document) => total + document.content.length,
@@ -296,7 +343,7 @@ export function createExternalPayloadPreview(input: {
   if (secretDetection.detected) {
     const remainingEntityIds = findRemainingRegisteredEntityIds(
       [questionResult.maskedText, ...documents.map((document) => document.maskedContent)],
-      input.maskingEntries,
+      effectiveMasking.entries,
     );
     const registeredEntityCheck = {
       id: 'registered-entities',
@@ -343,7 +390,7 @@ export function createExternalPayloadPreview(input: {
   const safety = evaluateOutboundPayload({
     externalText: builtPayload.text,
     documents,
-    maskingEntries: input.maskingEntries,
+    maskingEntries: effectiveMasking.entries,
     effectiveSecurity: input.effectiveSecurity,
   });
 

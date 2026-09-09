@@ -42,7 +42,8 @@ import {
   createWorkspaceSections,
   defaultWorkspace,
   canAskWorkspaceQuestion,
-  canCreateWorkspaceSession,
+  canReadWorkspaceSession,
+  canWriteWorkspaceSession,
   isAllWorkspaceScope,
   toSelectableWorkspace,
   type Workspace,
@@ -90,7 +91,6 @@ import {
 import { getSecretRules } from './security/secretDetector';
 import {
   applyResponseUnmasking,
-  createResponseUnmaskingSnapshot,
   type ResponseUnmaskingSnapshotEntry,
 } from './security/responseUnmasking';
 import type {
@@ -199,7 +199,7 @@ export function App() {
   const [workspaceRequestStatuses, setWorkspaceRequestStatuses] = useState<
     Record<string, ChatRequestStatus>
   >({});
-  const [contextPanelRefreshSignal, setContextPanelRefreshSignal] = useState(0);
+  const [vaultDocumentRefreshSignal, setVaultDocumentRefreshSignal] = useState(0);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const newSessionTitleInputRef = useRef<HTMLInputElement>(null);
   const appFocusAnchorRef = useRef<HTMLDivElement>(null);
@@ -216,17 +216,21 @@ export function App() {
     [workspaceSections],
   );
   const sessionCreatableWorkspaces = useMemo(
-    () => selectableWorkspaces.filter(canCreateWorkspaceSession),
+    () => selectableWorkspaces.filter(canWriteWorkspaceSession),
     [selectableWorkspaces],
   );
   const currentWorkspaceSessions = useMemo(
     () => sortChatSessions(chatSessions[selectedWorkspace.id] ?? []),
     [chatSessions, selectedWorkspace.id],
   );
+  const storedSelectedSessionId = selectedSessionIds[selectedWorkspace.id] ?? null;
   const selectedSessionId =
-    selectedSessionIds[selectedWorkspace.id] ??
-    getMostRecentChatSession(currentWorkspaceSessions)?.sessionId ??
-    null;
+    storedSelectedSessionId &&
+    currentWorkspaceSessions.some(
+      (session) => session.sessionId === storedSelectedSessionId,
+    )
+      ? storedSelectedSessionId
+      : getMostRecentChatSession(currentWorkspaceSessions)?.sessionId ?? null;
   const selectedSession =
     currentWorkspaceSessions.find(
       (session) => session.sessionId === selectedSessionId,
@@ -254,7 +258,7 @@ export function App() {
     currentWorkspaceRequestStatus,
   );
   const canCreateSessionInCurrentWorkspace =
-    canCreateWorkspaceSession(selectedWorkspace);
+    canWriteWorkspaceSession(selectedWorkspace);
   const canAskQuestionInCurrentWorkspace =
     canAskWorkspaceQuestion(selectedWorkspace);
   const composerDisabledMessage = !canAskQuestionInCurrentWorkspace
@@ -308,6 +312,10 @@ export function App() {
       setRegistryRuntimeMode('unresolved');
       setIsWorkspaceRegistryUnavailable(true);
     }
+  }
+
+  function refreshVaultDocumentSnapshot(): void {
+    setVaultDocumentRefreshSignal((currentSignal) => currentSignal + 1);
   }
 
   useEffect(() => {
@@ -770,7 +778,7 @@ export function App() {
   }
 
   function handleSelectWorkspace(workspace: Workspace): void {
-    if (workspace.status === 'archived') {
+    if (!canReadWorkspaceSession(workspace)) {
       return;
     }
 
@@ -799,7 +807,15 @@ export function App() {
     workspace: Workspace,
     sessionId: ChatSession['sessionId'],
   ): void {
-    if (!canCreateWorkspaceSession(workspace)) {
+    if (!canReadWorkspaceSession(workspace)) {
+      return;
+    }
+
+    if (
+      !(chatSessions[workspace.id] ?? []).some(
+        (session) => session.sessionId === sessionId,
+      )
+    ) {
       return;
     }
 
@@ -817,7 +833,7 @@ export function App() {
       selectableWorkspaces.find((item) => item.id === workspaceId) ??
       selectedWorkspace;
 
-    if (workspace.status === 'archived') {
+    if (!canWriteWorkspaceSession(workspace)) {
       return;
     }
 
@@ -843,7 +859,7 @@ export function App() {
       (item) => item.id === newSessionWorkspaceId,
     );
 
-    if (!workspace || !canCreateWorkspaceSession(workspace)) {
+    if (!workspace || !canWriteWorkspaceSession(workspace)) {
       closeCreateSessionDialog();
       return;
     }
@@ -1513,6 +1529,7 @@ export function App() {
         fileName: document.fileName,
         metadata: document.metadata,
       })),
+      maskingSnapshot: request.responseUnmaskingSnapshot,
       approved: routingDecision.approved,
     });
     const externalPerformance: ExternalAIPerformanceMetrics = {
@@ -1645,14 +1662,12 @@ export function App() {
           manualContexts,
           autoContexts: autoContext,
           maskingEntries: settings.masking.entries,
+          registryWorkspaces,
           secretRules: getSecretRules(
             settings.secretDetection.customRules,
           ),
         });
-        responseUnmaskingSnapshot = createResponseUnmaskingSnapshot(
-          settings.masking.entries,
-          preview.replacements.map((replacement) => replacement.alias),
-        );
+        responseUnmaskingSnapshot = preview.responseUnmaskingSnapshot;
         logSecretDetection(preview);
         externalAvailable = Boolean(
           settings.externalAI.model && hasApiKey,
@@ -1876,15 +1891,13 @@ export function App() {
       manualContexts: request.manualContexts,
       autoContexts: request.autoContexts,
       maskingEntries: settings.masking.entries,
+      registryWorkspaces,
       secretRules: getSecretRules(settings.secretDetection.customRules),
     });
 
     return {
       preview,
-      responseUnmaskingSnapshot: createResponseUnmaskingSnapshot(
-        settings.masking.entries,
-        preview.replacements.map((replacement) => replacement.alias),
-      ),
+      responseUnmaskingSnapshot: preview.responseUnmaskingSnapshot,
     };
   }
 
@@ -2498,7 +2511,10 @@ export function App() {
         }
       >
         {activeView === 'settings' ? (
-          <SettingsView onWorkspaceRegistryChanged={refreshWorkspaceRegistry} />
+          <SettingsView
+            onVaultDocumentsChanged={refreshVaultDocumentSnapshot}
+            onWorkspaceRegistryChanged={refreshWorkspaceRegistry}
+          />
         ) : activeView === 'recent-chats' ? (
           <RecentChatsView
             chatSessions={chatSessions}
@@ -2515,9 +2531,7 @@ export function App() {
             onAttachContext={(context) =>
               attachContextToWorkspace(selectedWorkspace.id, context)
             }
-            onVaultFilesRefreshed={() => {
-              setContextPanelRefreshSignal((currentSignal) => currentSignal + 1);
-            }}
+            onVaultFilesRefreshed={refreshVaultDocumentSnapshot}
             onOpenSettings={() => {
               setActiveView('settings');
             }}
@@ -2577,6 +2591,7 @@ export function App() {
                     void handleCreateDerivedKnowledgeDraft(assistantMessageId);
                   }}
                   onUseLocalAI={handleUseLocalAI}
+                  registryWorkspaces={registryWorkspaces}
                   workspaceId={selectedWorkspace.id}
                 />
               )}
@@ -2618,7 +2633,8 @@ export function App() {
         isKnowledgeTypeRegistryAvailable={isKnowledgeTypeRegistryAvailable}
         knowledgeDomainOptions={knowledgeDomainOptions}
         knowledgeTypeOptions={knowledgeTypeOptions}
-        refreshSignal={contextPanelRefreshSignal}
+        documentRefreshSignal={vaultDocumentRefreshSignal}
+        onRefreshDocuments={refreshVaultDocumentSnapshot}
         registryRuntimeMode={registryRuntimeMode}
         registryWorkspaces={registryWorkspaces}
         selectedWorkspace={selectedWorkspace}

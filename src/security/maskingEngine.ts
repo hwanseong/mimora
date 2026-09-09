@@ -1,18 +1,28 @@
 export const maskingEntityTypes = [
   'person',
+  'company',
   'client',
+  'vendor',
   'organization',
   'project',
+  'operation',
   'system',
+  'workspace',
+  'other',
 ] as const;
 
 export type MaskingEntityType = (typeof maskingEntityTypes)[number];
+export type MaskingEntryScope = 'global' | 'workspace';
+export type MaskingEntrySource = 'user' | 'registry';
 
 export type MaskingEntry = {
   id: string;
   type: MaskingEntityType;
   value: string;
   alias: string;
+  scope: MaskingEntryScope;
+  workspaceId?: string;
+  source?: MaskingEntrySource;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -24,6 +34,9 @@ export type MaskingReplacement = {
   original: string;
   alias: string;
   count: number;
+  scope?: MaskingEntryScope;
+  workspaceId?: string;
+  source?: MaskingEntrySource;
 };
 
 export type MaskingResult = {
@@ -43,6 +56,8 @@ export type MaskingSettings = {
 export type AddMaskingEntryInput = {
   type: MaskingEntityType;
   value: string;
+  scope?: MaskingEntryScope;
+  workspaceId?: string;
 };
 
 export type UpdateMaskingEntryInput = AddMaskingEntryInput & {
@@ -52,10 +67,15 @@ export type UpdateMaskingEntryInput = AddMaskingEntryInput & {
 
 export const maskingEntityTypeLabels: Record<MaskingEntityType, string> = {
   person: 'Person',
+  company: 'Company',
   client: 'Client',
+  vendor: 'Vendor',
   organization: 'Organization',
   project: 'Project',
+  operation: 'Operation',
   system: 'System',
+  workspace: 'Workspace',
+  other: 'Other',
 };
 
 export function createDefaultMaskingSettings(): MaskingSettings {
@@ -64,9 +84,14 @@ export function createDefaultMaskingSettings(): MaskingSettings {
     sequences: {
       person: 0,
       client: 0,
+      company: 0,
+      vendor: 0,
       organization: 0,
       project: 0,
+      operation: 0,
       system: 0,
+      workspace: 0,
+      other: 0,
     },
   };
 }
@@ -161,6 +186,9 @@ export function maskText(
             original: entry.value,
             alias: entry.alias,
             count,
+            scope: entry.scope,
+            workspaceId: entry.workspaceId,
+            source: entry.source ?? 'user',
           },
         ]
       : [];

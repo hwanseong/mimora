@@ -57,8 +57,10 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function SettingsView({
+  onVaultDocumentsChanged,
   onWorkspaceRegistryChanged,
 }: {
+  onVaultDocumentsChanged?: () => void;
   onWorkspaceRegistryChanged?: () => Promise<void> | void;
 }) {
   const [settings, setSettings] = useState<MimoraSettings>(defaultSettings);
@@ -203,6 +205,7 @@ export function SettingsView({
 
       setDocumentIdValidation(nextDocumentIdValidation);
       setDocumentIdValidationError(null);
+      onVaultDocumentsChanged?.();
     } catch (error) {
       setDocumentIdValidation(null);
       setDocumentIdValidationError(getErrorMessage(error));
@@ -370,6 +373,7 @@ export function SettingsView({
       setFormState(null);
       await refreshRegistryStatus();
       await refreshDocumentIdValidation();
+      onVaultDocumentsChanged?.();
       await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -385,6 +389,7 @@ export function SettingsView({
       setDeleteTarget(null);
       await refreshRegistryStatus();
       await refreshDocumentIdValidation();
+      onVaultDocumentsChanged?.();
       await onWorkspaceRegistryChanged?.();
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -1100,6 +1105,7 @@ export function SettingsView({
       <MaskingSettingsSection
         onSettingsChange={setSettings}
         settings={settings}
+        workspaces={workspaceRegistry?.workspaces ?? []}
       />
 
       <SecretDetectionSettingsSection

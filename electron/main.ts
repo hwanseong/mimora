@@ -37,8 +37,11 @@ import {
 } from '../src/security/outboundPayloadSafety';
 import type {
   AddMaskingEntryInput,
+  MaskingEntry,
   UpdateMaskingEntryInput,
 } from '../src/security/maskingEngine';
+import { maskingEntityTypes } from '../src/security/maskingEngine';
+import type { ResponseUnmaskingSnapshotEntry } from '../src/security/responseUnmasking';
 import type { RegistryStatus } from '../src/registry/types';
 import type { KnowledgeDomainRegistryParseResult } from '../src/registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeTypeRegistryParseResult } from '../src/registry/knowledgeTypeRegistryTypes';
@@ -521,6 +524,9 @@ function registerOpenAIHandlers(): void {
           input.externalText,
           getSecretRules(settings.secretDetection.customRules),
         );
+        const maskingEntriesForTurn = createMaskingEntriesFromSnapshot(
+          input.maskingSnapshot,
+        );
         const matchedRuleIds = [
           ...new Set(
             secretDetection.detections.map(
@@ -555,7 +561,7 @@ function registerOpenAIHandlers(): void {
           : evaluateOutboundPayload({
               externalText: input.externalText,
               documents: input.documents,
-              maskingEntries: settings.masking.entries,
+              maskingEntries: maskingEntriesForTurn,
               effectiveSecurity,
             });
         const model = settings.externalAI.model;
@@ -669,6 +675,38 @@ function isExternalDocumentMetadata(
   );
 }
 
+function isResponseUnmaskingSnapshotEntry(
+  value: unknown,
+): value is ResponseUnmaskingSnapshotEntry {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as ResponseUnmaskingSnapshotEntry).alias === 'string' &&
+    typeof (value as ResponseUnmaskingSnapshotEntry).original === 'string' &&
+    maskingEntityTypes.includes(
+      (value as ResponseUnmaskingSnapshotEntry).entityType,
+    )
+  );
+}
+
+function createMaskingEntriesFromSnapshot(
+  snapshot: ResponseUnmaskingSnapshotEntry[],
+): MaskingEntry[] {
+  const now = '1970-01-01T00:00:00.000Z';
+
+  return snapshot.map((entry) => ({
+    id: `turn-snapshot:${entry.alias}`,
+    type: entry.entityType,
+    value: entry.original,
+    alias: entry.alias,
+    scope: 'global',
+    source: 'user',
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  }));
+}
+
 function validateExternalAIChatInput(value: unknown): ExternalAIChatInput {
   if (typeof value !== 'object' || value === null) {
     throw new Error('External AI 요청 형식이 올바르지 않습니다.');
@@ -680,6 +718,7 @@ function validateExternalAIChatInput(value: unknown): ExternalAIChatInput {
     'mode',
     'externalText',
     'documents',
+    'maskingSnapshot',
     'approved',
   ]);
 
@@ -692,6 +731,8 @@ function validateExternalAIChatInput(value: unknown): ExternalAIChatInput {
     !input.externalText.trim() ||
     !Array.isArray(input.documents) ||
     !input.documents.every(isExternalDocumentMetadata) ||
+    !Array.isArray(input.maskingSnapshot) ||
+    !input.maskingSnapshot.every(isResponseUnmaskingSnapshotEntry) ||
     typeof input.approved !== 'boolean'
   ) {
     throw new Error('External AI 요청 형식이 올바르지 않습니다.');
@@ -702,6 +743,7 @@ function validateExternalAIChatInput(value: unknown): ExternalAIChatInput {
     mode: input.mode,
     externalText: input.externalText,
     documents: input.documents.map((document) => ({ ...document })),
+    maskingSnapshot: input.maskingSnapshot.map((entry) => ({ ...entry })),
     approved: input.approved,
   };
 }

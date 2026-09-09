@@ -35,7 +35,8 @@ type ContextPanelProps = {
   isKnowledgeTypeRegistryAvailable: boolean;
   knowledgeDomainOptions: KnowledgeDomain[];
   knowledgeTypeOptions: KnowledgeType[];
-  refreshSignal: number;
+  documentRefreshSignal: number;
+  onRefreshDocuments: () => void;
 };
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -347,7 +348,8 @@ export function ContextPanel({
   isKnowledgeTypeRegistryAvailable,
   knowledgeDomainOptions,
   knowledgeTypeOptions,
-  refreshSignal,
+  documentRefreshSignal,
+  onRefreshDocuments,
 }: ContextPanelProps) {
   const [documents, setDocuments] = useState<WorkspaceStatusDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -434,7 +436,7 @@ export function ContextPanel({
     isKnowledgeTypeRegistryAvailable,
     knowledgeDomainOptions,
     knowledgeTypeOptions,
-    refreshSignal,
+    documentRefreshSignal,
     registryWorkspaces,
   ]);
 
@@ -522,7 +524,17 @@ export function ContextPanel({
     <aside className="context-panel" aria-label="업무 현황">
       <header className="context-panel-header">
         <h2>업무 현황</h2>
-        {isLoading ? <span>계산 중</span> : null}
+        <div>
+          {isLoading ? <span>계산 중</span> : null}
+          <button
+            className="context-action-button"
+            disabled={isLoading}
+            onClick={onRefreshDocuments}
+            type="button"
+          >
+            새로고침
+          </button>
+        </div>
       </header>
 
       {model.registryUnavailable ? (

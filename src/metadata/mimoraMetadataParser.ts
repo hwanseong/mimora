@@ -219,6 +219,38 @@ function parseMetadataRows(lines: string[], headingIndex: number): {
   return null;
 }
 
+function getMarkdownBodyStartIndex(lines: string[]): number {
+  if (lines[0]?.trim() !== '---') {
+    return 0;
+  }
+
+  const closingIndex = lines.findIndex(
+    (line, index) => index > 0 && line.trim() === '---',
+  );
+
+  return closingIndex === -1 ? 0 : closingIndex + 1;
+}
+
+function findMetadataTables(
+  lines: string[],
+  bodyStartIndex: number,
+): Array<{
+  headingIndex: number;
+  values: Map<MetadataField, string>;
+  tableStartIndex: number;
+  tableEndIndex: number;
+}> {
+  return lines.flatMap((line, index) => {
+    if (index < bodyStartIndex || line.trim() !== metadataHeading) {
+      return [];
+    }
+
+    const table = parseMetadataRows(lines, index);
+
+    return table ? [{ headingIndex: index, ...table }] : [];
+  });
+}
+
 function createBodyWithoutMetadata(
   lines: string[],
   headingIndex: number,
@@ -242,11 +274,12 @@ export function parseMimoraDocumentMetadata(
 ): MimoraMetadataParseResult {
   const normalizedMarkdown = normalizeMarkdownText(markdown);
   const lines = normalizedMarkdown.split('\n');
-  const headingIndex = lines.findIndex(
-    (line) => line.trim() === metadataHeading,
+  const bodyStartIndex = getMarkdownBodyStartIndex(lines);
+  const hasMetadataHeading = lines.some(
+    (line, index) => index >= bodyStartIndex && line.trim() === metadataHeading,
   );
 
-  if (headingIndex === -1) {
+  if (!hasMetadataHeading) {
     return {
       metadata: { ...emptyMetadata },
       issues: [],
@@ -256,7 +289,8 @@ export function parseMimoraDocumentMetadata(
     };
   }
 
-  const table = parseMetadataRows(lines, headingIndex);
+  const metadataTables = findMetadataTables(lines, bodyStartIndex);
+  const table = metadataTables.at(-1) ?? null;
 
   if (!table) {
     return {
@@ -504,6 +538,10 @@ export function parseMimoraDocumentMetadata(
     issues,
     valid: !issues.some((issue) => issue.severity === 'error'),
     hasMetadata: true,
-    body: createBodyWithoutMetadata(lines, headingIndex, table.tableEndIndex),
+    body: createBodyWithoutMetadata(
+      lines,
+      table.headingIndex,
+      table.tableEndIndex,
+    ),
   };
 }

@@ -5,7 +5,7 @@ import {
   type ChatSessions,
 } from '../chat';
 import {
-  canCreateWorkspaceSession,
+  canWriteWorkspaceSession,
   workspaceStatusLabels,
   type Workspace,
   type WorkspaceSection,
@@ -63,7 +63,7 @@ function NavSection({
           const statusLabel = item.isSystem
             ? null
             : workspaceStatusLabels[item.status];
-          const canCreateSession = canCreateWorkspaceSession(item);
+          const canCreateSession = canWriteWorkspaceSession(item);
 
           return (
             <div className="workspace-nav-group" key={item.id}>
