@@ -4,14 +4,13 @@ import {
   type ChatSession,
   type ChatSessions,
 } from '../chat';
-import type { Workspace, WorkspaceSection, WorkspaceStatus } from '../workspaces';
+import {
+  canCreateWorkspaceSession,
+  workspaceStatusLabels,
+  type Workspace,
+  type WorkspaceSection,
+} from '../workspaces';
 import type { RegistryRuntimeMode } from '../registry/types';
-
-const statusLabels: Partial<Record<WorkspaceStatus, string>> = {
-  planned: 'Planned',
-  on_hold: 'On Hold',
-  closed: 'Closed',
-};
 
 function NavSection({
   title,
@@ -61,6 +60,10 @@ function NavSection({
           const sessions = sortChatSessions(chatSessions[item.id] ?? []);
           const isCollapsed = collapsedWorkspaces[item.id] === true;
           const isWorkspaceSelected = item.id === selectedWorkspaceId;
+          const statusLabel = item.isSystem
+            ? null
+            : workspaceStatusLabels[item.status];
+          const canCreateSession = canCreateWorkspaceSession(item);
 
           return (
             <div className="workspace-nav-group" key={item.id}>
@@ -89,9 +92,9 @@ function NavSection({
                   type="button"
                 >
                   <span className="nav-item-label">{item.label}</span>
-                  {statusLabels[item.status] ? (
-                    <span className="nav-status-badge">
-                      {statusLabels[item.status]}
+                  {statusLabel ? (
+                    <span className={`nav-status-badge ${item.status}`}>
+                      {statusLabel}
                     </span>
                   ) : null}
                 </button>
@@ -172,15 +175,17 @@ function NavSection({
                       </button>
                     </div>
                   ))}
-                  <button
-                    className="workspace-session-add"
-                    onClick={() => {
-                      onCreateSession(item.id);
-                    }}
-                    type="button"
-                  >
-                    + 새 대화
-                  </button>
+                  {canCreateSession ? (
+                    <button
+                      className="workspace-session-add"
+                      onClick={() => {
+                        onCreateSession(item.id);
+                      }}
+                      type="button"
+                    >
+                      + 새 대화
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
             </div>

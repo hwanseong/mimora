@@ -18,6 +18,14 @@ export type WorkspaceSection = {
   message?: string;
 };
 
+export const workspaceStatusLabels: Record<WorkspaceStatus, string> = {
+  planned: 'Planned',
+  active: 'Active',
+  on_hold: 'On Hold',
+  closed: 'Closed',
+  archived: 'Archived',
+};
+
 export const allWorkspaceId = '__all__';
 export const legacyAllWorkspaceId = 'all';
 
@@ -57,7 +65,24 @@ export function toSelectableWorkspace(
 }
 
 function byRegistryOrder(workspaces: Workspace[]): Workspace[] {
-  return workspaces.filter((workspace) => workspace.status !== 'archived');
+  return workspaces.filter((workspace) => isWorkspaceVisible(workspace));
+}
+
+export function isWorkspaceVisible(workspace: Workspace): boolean {
+  return workspace.isSystem === true || workspace.status !== 'archived';
+}
+
+export function canCreateWorkspaceSession(workspace: Workspace): boolean {
+  return (
+    workspace.isSystem === true ||
+    workspace.status === 'planned' ||
+    workspace.status === 'active' ||
+    workspace.status === 'on_hold'
+  );
+}
+
+export function canAskWorkspaceQuestion(workspace: Workspace): boolean {
+  return canCreateWorkspaceSession(workspace);
 }
 
 export function createWorkspaceSections({

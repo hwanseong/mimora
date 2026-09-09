@@ -7,18 +7,22 @@ import {
 export const ChatInput = forwardRef<
   HTMLTextAreaElement,
   {
+    disabled?: boolean;
+    disabledMessage?: string;
     requestStatus?: ChatRequestStatus;
     value: string;
     onChange: (value: string) => void;
     onSubmit: () => void;
   }
 >(function ChatInput(
-  { requestStatus = 'idle', value, onChange, onSubmit },
+  { disabled: isDisabled = false, disabledMessage, requestStatus = 'idle', value, onChange, onSubmit },
   ref,
 ) {
-  const disabled = isChatRequestBusy(requestStatus);
+  const disabled = isDisabled || isChatRequestBusy(requestStatus);
   const placeholder =
-    requestStatus === 'retrieving-context'
+    disabledMessage && isDisabled
+      ? disabledMessage
+      : requestStatus === 'retrieving-context'
       ? '참고 문서를 찾는 중입니다...'
       : requestStatus === 'calling-external'
         ? 'OpenAI가 분석 중입니다...'
@@ -28,7 +32,9 @@ export const ChatInput = forwardRef<
             ? '외부 전송 검토가 필요합니다.'
             : '메시지를 입력하세요';
   const buttonLabel =
-    requestStatus === 'retrieving-context'
+    isDisabled
+      ? '전송 불가'
+      : requestStatus === 'retrieving-context'
       ? '검색 중'
       : requestStatus === 'calling-external' ||
           requestStatus === 'calling-local'

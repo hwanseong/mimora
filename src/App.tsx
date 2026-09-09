@@ -41,6 +41,8 @@ import {
   createSelectableWorkspaces,
   createWorkspaceSections,
   defaultWorkspace,
+  canAskWorkspaceQuestion,
+  canCreateWorkspaceSession,
   isAllWorkspaceScope,
   toSelectableWorkspace,
   type Workspace,
@@ -212,6 +214,10 @@ export function App() {
     () => createSelectableWorkspaces(workspaceSections),
     [workspaceSections],
   );
+  const sessionCreatableWorkspaces = useMemo(
+    () => selectableWorkspaces.filter(canCreateWorkspaceSession),
+    [selectableWorkspaces],
+  );
   const currentWorkspaceSessions = useMemo(
     () => sortChatSessions(chatSessions[selectedWorkspace.id] ?? []),
     [chatSessions, selectedWorkspace.id],
@@ -246,6 +252,13 @@ export function App() {
   const isCurrentWorkspaceBusy = isChatRequestBusy(
     currentWorkspaceRequestStatus,
   );
+  const canCreateSessionInCurrentWorkspace =
+    canCreateWorkspaceSession(selectedWorkspace);
+  const canAskQuestionInCurrentWorkspace =
+    canAskWorkspaceQuestion(selectedWorkspace);
+  const composerDisabledMessage = !canAskQuestionInCurrentWorkspace
+    ? '종료된 Workspace입니다. 기존 대화는 열람할 수 있지만 새 질문은 할 수 없습니다.'
+    : undefined;
   const latestRoutingDecision = currentMessages.reduce<
     RoutingDecision | undefined
   >(
@@ -785,7 +798,7 @@ export function App() {
     workspace: Workspace,
     sessionId: ChatSession['sessionId'],
   ): void {
-    if (workspace.status === 'archived') {
+    if (!canCreateWorkspaceSession(workspace)) {
       return;
     }
 
@@ -829,7 +842,7 @@ export function App() {
       (item) => item.id === newSessionWorkspaceId,
     );
 
-    if (!workspace || workspace.status === 'archived') {
+    if (!workspace || !canCreateWorkspaceSession(workspace)) {
       closeCreateSessionDialog();
       return;
     }
@@ -1159,7 +1172,7 @@ export function App() {
       return;
     }
 
-    if (selectedWorkspace.status === 'archived') {
+    if (!canAskQuestionInCurrentWorkspace) {
       return;
     }
 
@@ -2537,7 +2550,11 @@ export function App() {
                 isSavingSearchScope || isCurrentWorkspaceBusy
               }
               showSearchScope={isAllWorkspaceScope(selectedWorkspace.id)}
+              createSessionDisabled={!canCreateSessionInCurrentWorkspace}
               sessionTitle={selectedSession?.title ?? null}
+              workspaceStatus={
+                selectedWorkspace.isSystem ? null : selectedWorkspace.status
+              }
               workspaceLabel={selectedWorkspace.label}
               onCreateSession={() => {
                 openCreateSessionDialog(selectedWorkspace.id);
@@ -2569,9 +2586,18 @@ export function App() {
                   }}
                 />
                 {currentMessages.length > 0 ? (
-                  <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
+                  canAskQuestionInCurrentWorkspace ? (
+                    <QuickPromptBar onSelectPrompt={handleSelectPrompt} />
+                  ) : null
+                ) : null}
+                {!canAskQuestionInCurrentWorkspace ? (
+                  <p className="chat-composer-notice">
+                    종료된 Workspace입니다. 기존 대화는 열람할 수 있지만 새 질문은 할 수 없습니다.
+                  </p>
                 ) : null}
                 <ChatInput
+                  disabled={!canAskQuestionInCurrentWorkspace}
+                  disabledMessage={composerDisabledMessage}
                   requestStatus={currentWorkspaceRequestStatus}
                   ref={chatInputRef}
                   value={message}
@@ -2618,12 +2644,8 @@ export function App() {
                 }}
                 value={newSessionWorkspaceId}
               >
-                {selectableWorkspaces.map((workspace) => (
-                  <option
-                    disabled={workspace.status === 'archived'}
-                    key={workspace.id}
-                    value={workspace.id}
-                  >
+                {sessionCreatableWorkspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>
                     {workspace.label}
                   </option>
                 ))}

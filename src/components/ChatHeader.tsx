@@ -11,13 +11,19 @@ import {
   type AIMode,
   type EffectiveSecurity,
 } from '../security/securityRouter';
+import {
+  workspaceStatusLabels,
+  type WorkspaceStatus,
+} from '../workspaces';
 
 export function ChatHeader({
   workspaceLabel,
+  workspaceStatus,
   sessionTitle,
   aiMode,
   effectiveSecurity,
   disabled = false,
+  createSessionDisabled = false,
   includeArchived = false,
   contentOriginScope = 'all',
   isKnowledgeDomainRegistryAvailable = true,
@@ -35,10 +41,12 @@ export function ChatHeader({
   showSearchScope = false,
 }: {
   workspaceLabel: string;
+  workspaceStatus?: WorkspaceStatus | null;
   sessionTitle?: string | null;
   aiMode: AIMode;
   effectiveSecurity: EffectiveSecurity;
   disabled?: boolean;
+  createSessionDisabled?: boolean;
   includeArchived?: boolean;
   contentOriginScope?: ContentOriginSearchScope;
   isKnowledgeDomainRegistryAvailable?: boolean;
@@ -67,7 +75,14 @@ export function ChatHeader({
       <div className="chat-header-inner">
         <div className="workspace-heading">
           <p className="eyebrow">현재 Workspace</p>
-          <h1>{workspaceLabel}</h1>
+          <div className="workspace-title-row">
+            <h1>{workspaceLabel}</h1>
+            {workspaceStatus ? (
+              <span className={`workspace-status-badge ${workspaceStatus}`}>
+                {workspaceStatusLabels[workspaceStatus]}
+              </span>
+            ) : null}
+          </div>
           {sessionTitle ? (
             <p className="chat-session-title">{sessionTitle}</p>
           ) : null}
@@ -181,6 +196,7 @@ export function ChatHeader({
         <div className="header-meta" aria-label="채팅 설정">
           <button
             className="new-chat-button"
+            disabled={createSessionDisabled || !onCreateSession}
             onClick={onCreateSession}
             type="button"
           >
