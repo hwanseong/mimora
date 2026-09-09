@@ -12,6 +12,20 @@ import {
   type WorkspaceStatusDocument,
   type WorkspaceStatusPanelModel,
 } from '../workspaceStatusPanel';
+import {
+  buildWorkspaceInsightQuestion,
+  createWorkspaceInsightFingerprint,
+  createWorkspaceInsightSnapshot,
+  getInsightSourceLabel,
+  selectWorkspaceInsightSourceDocuments,
+  toWorkspaceInsightContextDocument,
+  toWorkspaceInsightSourceDocument,
+  workspaceInsightEmptyLabels,
+  type InsightCategoryKey,
+  type InsightItem,
+  type WorkspaceInsightSnapshot,
+  type WorkspaceInsightSnapshots,
+} from '../workspaceInsight';
 
 type ContextPanelProps = {
   selectedWorkspace: Workspace;
@@ -86,6 +100,7 @@ async function loadWorkspaceStatusDocuments(input: {
           relativePath: file.relativePath,
           fileName: file.name,
           modifiedAt: file.modifiedAt,
+          content: content.content,
           hasMetadata: metadataResult.hasMetadata,
           metadata: metadataResult.metadata,
         }),
@@ -238,6 +253,92 @@ function renderRecentDocuments(model: WorkspaceStatusPanelModel) {
   );
 }
 
+const insightCategoryLabels: Record<InsightCategoryKey, string> = {
+  risks: 'Risks',
+  notableChanges: 'Notable Changes',
+  decisions: 'Decisions',
+  openIssues: 'Open Issues',
+};
+
+function formatGeneratedAt(generatedAt: string): string {
+  const timestamp = Date.parse(generatedAt);
+
+  if (!Number.isFinite(timestamp)) {
+    return generatedAt;
+  }
+
+  return new Intl.DateTimeFormat('ko-KR', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+}
+
+function renderInsightItems(
+  category: InsightCategoryKey,
+  items: InsightItem[],
+) {
+  if (items.length === 0) {
+    return <p className="context-empty">{workspaceInsightEmptyLabels[category]}</p>;
+  }
+
+  return (
+    <ul className="insight-item-list">
+      {items.map((item, index) => (
+        <li key={`${category}:${index}:${item.text}`}>
+          <p>{item.text}</p>
+          {item.sourceDocumentIds.length > 0 ? (
+            <span title={item.sourceDocumentIds.join(', ')}>
+              {formatInsightSources(item.sourceDocumentIds)}
+            </span>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function formatInsightSources(sourceDocumentIds: string[]): string {
+  if (sourceDocumentIds.length > 2) {
+    return `Sources ${sourceDocumentIds.length}`;
+  }
+
+  return `Sources: ${sourceDocumentIds.join(', ')}`;
+}
+
+function renderInsightCategory(
+  category: InsightCategoryKey,
+  items: InsightItem[],
+) {
+  return (
+    <div className="insight-category" key={category}>
+      <h4>{insightCategoryLabels[category]}</h4>
+      {renderInsightItems(category, items)}
+    </div>
+  );
+}
+
+function getInsightItems(
+  snapshot: WorkspaceInsightSnapshot,
+  category: InsightCategoryKey,
+): InsightItem[] {
+  if (category === 'risks') {
+    return snapshot.risks;
+  }
+
+  if (category === 'notableChanges') {
+    return snapshot.notableChanges;
+  }
+
+  if (category === 'decisions') {
+    return snapshot.decisions;
+  }
+
+  return snapshot.openIssues;
+}
+
 export function ContextPanel({
   selectedWorkspace,
   registryRuntimeMode,
@@ -251,6 +352,42 @@ export function ContextPanel({
   const [documents, setDocuments] = useState<WorkspaceStatusDocument[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [insightSnapshots, setInsightSnapshots] =
+    useState<WorkspaceInsightSnapshots>({});
+  const [insightStoreError, setInsightStoreError] = useState<string | null>(null);
+  const [insightGenerationError, setInsightGenerationError] =
+    useState<string | null>(null);
+  const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadInsightSnapshots(): Promise<void> {
+      try {
+        const result = await window.mimora.loadWorkspaceInsights();
+
+        if (!isActive) {
+          return;
+        }
+
+        setInsightSnapshots(result.snapshots);
+        setInsightStoreError(result.status === 'ready' ? null : result.error ?? null);
+      } catch (error) {
+        if (isActive) {
+          setInsightSnapshots({});
+          setInsightStoreError(
+            getErrorMessage(error, 'AI Insight snapshot을 불러오지 못했습니다.'),
+          );
+        }
+      }
+    }
+
+    void loadInsightSnapshots();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let isActive = true;
@@ -311,6 +448,75 @@ export function ContextPanel({
       }),
     [documents, registryRuntimeMode, registryWorkspaces, selectedWorkspace],
   );
+  const insightSourceDocuments = useMemo(
+    () =>
+      selectWorkspaceInsightSourceDocuments({
+        selectedWorkspace,
+        registryWorkspaces,
+        documents,
+        limit: 8,
+      }),
+    [documents, registryWorkspaces, selectedWorkspace],
+  );
+  const insightSourceRefs = useMemo(
+    () => insightSourceDocuments.map(toWorkspaceInsightSourceDocument),
+    [insightSourceDocuments],
+  );
+  const currentInsightFingerprint = useMemo(
+    () => createWorkspaceInsightFingerprint(insightSourceRefs),
+    [insightSourceRefs],
+  );
+  const currentInsight = insightSnapshots[selectedWorkspace.id] ?? null;
+  const isInsightStale = Boolean(
+    currentInsight &&
+      currentInsight.sourceFingerprint !== currentInsightFingerprint,
+  );
+
+  async function generateWorkspaceInsight(): Promise<void> {
+    if (isGeneratingInsight || insightSourceDocuments.length === 0) {
+      return;
+    }
+
+    setIsGeneratingInsight(true);
+    setInsightGenerationError(null);
+
+    try {
+      const response = await window.mimora.chatWithLocalAI({
+        workspaceId: selectedWorkspace.id,
+        question: buildWorkspaceInsightQuestion({
+          selectedWorkspace,
+          sourceDocuments: insightSourceRefs,
+        }),
+        history: [],
+        manualContexts: [],
+        autoContexts: insightSourceDocuments.map(
+          toWorkspaceInsightContextDocument,
+        ),
+      });
+      const snapshot = createWorkspaceInsightSnapshot({
+        workspaceId: selectedWorkspace.id,
+        generatedAt: new Date().toISOString(),
+        sourceDocuments: insightSourceRefs,
+        responseContent: response.content,
+      });
+
+      setInsightSnapshots((currentSnapshots) => ({
+        ...currentSnapshots,
+        [snapshot.workspaceId]: snapshot,
+      }));
+      await window.mimora.saveWorkspaceInsight(snapshot);
+      setInsightStoreError(null);
+    } catch (error) {
+      setInsightGenerationError(
+        getErrorMessage(
+          error,
+          'Local AI에 연결할 수 없어 Insight를 생성하지 못했습니다.',
+        ),
+      );
+    } finally {
+      setIsGeneratingInsight(false);
+    }
+  }
 
   return (
     <aside className="context-panel" aria-label="업무 현황">
@@ -334,6 +540,65 @@ export function ContextPanel({
       {renderDocuments(model)}
       {renderKnowledge(model)}
       {renderRecentDocuments(model)}
+      <section className="context-section" aria-labelledby="ai-insight-heading">
+        <div className="insight-section-header">
+          <h3 id="ai-insight-heading">AI Insight</h3>
+          <button
+            className="context-action-button"
+            disabled={isGeneratingInsight || insightSourceDocuments.length === 0}
+            onClick={() => {
+              void generateWorkspaceInsight();
+            }}
+            type="button"
+          >
+            {currentInsight ? '새로고침' : '생성'}
+          </button>
+        </div>
+        {isGeneratingInsight ? (
+          <p className="context-empty">AI Insight 분석 중...</p>
+        ) : null}
+        {insightStoreError ? (
+          <p className="context-panel-error" role="status">
+            {insightStoreError}
+          </p>
+        ) : null}
+        {insightGenerationError ? (
+          <p className="context-panel-error" role="status">
+            {insightGenerationError}
+          </p>
+        ) : null}
+        {currentInsight ? (
+          <div className="insight-snapshot">
+            <p className="insight-generated-at">
+              마지막 분석: {formatGeneratedAt(currentInsight.generatedAt)}
+            </p>
+            {isInsightStale ? (
+              <p className="context-panel-note">
+                Vault 변경 이후 다시 분석하지 않았습니다.
+              </p>
+            ) : null}
+            <p className="insight-source-summary">
+              Sources {currentInsight.sourceDocuments.length.toLocaleString()}
+            </p>
+            {(
+              [
+                'risks',
+                'notableChanges',
+                'decisions',
+                'openIssues',
+              ] satisfies InsightCategoryKey[]
+            ).map((category) =>
+              renderInsightCategory(category, getInsightItems(currentInsight, category)),
+            )}
+          </div>
+        ) : (
+          <p className="context-empty">
+            {insightSourceDocuments.length > 0
+              ? '아직 생성된 AI Insight가 없습니다.'
+              : 'Insight를 생성할 관련 문서가 없습니다.'}
+          </p>
+        )}
+      </section>
 
       <p className="context-panel-footnote">
         Scanned {model.scannedDocumentCount.toLocaleString()} Markdown files.

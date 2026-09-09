@@ -55,6 +55,11 @@ import type {
   VaultSearchResult,
 } from '../src/vaultFiles';
 import type { DocumentIdValidationSummary } from '../src/documentIdValidation';
+import type {
+  WorkspaceInsightSnapshot,
+  WorkspaceInsightStoreLoadResult,
+  WorkspaceInsightStoreSaveResult,
+} from '../src/workspaceInsight';
 
 function unwrapIpcResult<T>(result: MimoraIpcResult<T>): T {
   if (result.ok) {
@@ -84,6 +89,18 @@ contextBridge.exposeInMainWorld('mimora', {
         'chatHistory:deleteWorkspace',
         workspaceId,
       ) as Promise<MimoraIpcResult<ChatHistorySaveResult>>
+    ).then(unwrapIpcResult),
+  loadWorkspaceInsights: () =>
+    (
+      ipcRenderer.invoke('workspaceInsights:load') as Promise<
+        MimoraIpcResult<WorkspaceInsightStoreLoadResult>
+      >
+    ).then(unwrapIpcResult),
+  saveWorkspaceInsight: (snapshot: WorkspaceInsightSnapshot) =>
+    (
+      ipcRenderer.invoke('workspaceInsights:save', snapshot) as Promise<
+        MimoraIpcResult<WorkspaceInsightStoreSaveResult>
+      >
     ).then(unwrapIpcResult),
   getSettings: () =>
     (

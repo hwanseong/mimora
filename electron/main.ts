@@ -81,12 +81,19 @@ import type {
   VaultSearchResult,
 } from '../src/vaultFiles';
 import type { DocumentIdValidationSummary } from '../src/documentIdValidation';
+import type {
+  WorkspaceInsightSnapshot,
+  WorkspaceInsightStoreLoadResult,
+  WorkspaceInsightStoreSaveResult,
+} from '../src/workspaceInsight';
+import { createWorkspaceInsightStore } from './workspaceInsightStore';
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
 const openAICredentialFileName = 'openai-api-key.safe';
 const chatHistoryFileName = 'chat-history.dat';
 const registryCacheFileName = 'registry-runtime-cache.json';
+const workspaceInsightFileName = 'workspace-insights.dat';
 
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), settingsFileName);
@@ -106,6 +113,11 @@ const openAICredentialStore = createOpenAICredentialStore({
 });
 const chatHistoryStore = createChatHistoryStore({
   getHistoryPath: () => path.join(app.getPath('userData'), chatHistoryFileName),
+  safeStorage,
+});
+const workspaceInsightStore = createWorkspaceInsightStore({
+  getInsightPath: () =>
+    path.join(app.getPath('userData'), workspaceInsightFileName),
   safeStorage,
 });
 const derivedKnowledgeService = createDerivedKnowledgeService(settingsStore);
@@ -397,6 +409,23 @@ function registerChatHistoryHandlers(): void {
       workspaceId: unknown,
     ): Promise<MimoraIpcResult<ChatHistorySaveResult>> =>
       toIpcResult(() => chatHistoryStore.deleteWorkspaceChat(workspaceId)),
+  );
+}
+
+function registerWorkspaceInsightHandlers(): void {
+  ipcMain.handle(
+    'workspaceInsights:load',
+    async (): Promise<MimoraIpcResult<WorkspaceInsightStoreLoadResult>> =>
+      toIpcResult(() => workspaceInsightStore.loadWorkspaceInsights()),
+  );
+
+  ipcMain.handle(
+    'workspaceInsights:save',
+    async (
+      _event,
+      snapshot: WorkspaceInsightSnapshot,
+    ): Promise<MimoraIpcResult<WorkspaceInsightStoreSaveResult>> =>
+      toIpcResult(() => workspaceInsightStore.saveWorkspaceInsight(snapshot)),
   );
 }
 
@@ -941,6 +970,7 @@ function createMainWindow(): void {
 registerSettingsHandlers();
 registerRegistryHandlers();
 registerChatHistoryHandlers();
+registerWorkspaceInsightHandlers();
 registerVaultFileHandlers();
 registerDerivedKnowledgeHandlers();
 registerLocalAIHandlers();

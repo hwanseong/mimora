@@ -15,6 +15,7 @@ export type WorkspaceStatusDocument = {
   relativePath: string;
   fileName: string;
   modifiedAt?: string;
+  content: string;
   hasMetadata: boolean;
   metadata: MimoraDocumentMetadata;
 };
@@ -85,6 +86,7 @@ export function createWorkspaceStatusDocument(input: {
   relativePath: string;
   fileName: string;
   modifiedAt?: string;
+  content: string;
   hasMetadata: boolean;
   metadata: MimoraDocumentMetadata;
 }): WorkspaceStatusDocument {
@@ -96,6 +98,7 @@ export function createWorkspaceStatusDocument(input: {
     relativePath: input.relativePath,
     fileName: input.fileName,
     ...(input.modifiedAt ? { modifiedAt: input.modifiedAt } : {}),
+    content: input.content,
     hasMetadata: input.hasMetadata,
     metadata: input.metadata,
   };

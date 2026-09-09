@@ -52,6 +52,11 @@ import type {
   VaultSearchResult,
 } from './vaultFiles';
 import type { DocumentIdValidationSummary } from './documentIdValidation';
+import type {
+  WorkspaceInsightSnapshot,
+  WorkspaceInsightStoreLoadResult,
+  WorkspaceInsightStoreSaveResult,
+} from './workspaceInsight';
 
 type MimoraApi = {
     appName: string;
@@ -62,6 +67,10 @@ type MimoraApi = {
     deleteWorkspaceChat: (
       workspaceId: string,
     ) => Promise<ChatHistorySaveResult>;
+    loadWorkspaceInsights: () => Promise<WorkspaceInsightStoreLoadResult>;
+    saveWorkspaceInsight: (
+      snapshot: WorkspaceInsightSnapshot,
+    ) => Promise<WorkspaceInsightStoreSaveResult>;
     getSettings: () => Promise<MimoraSettings>;
     addVault: (input: AddVaultInput) => Promise<MimoraSettings>;
     updateVault: (input: UpdateVaultInput) => Promise<MimoraSettings>;

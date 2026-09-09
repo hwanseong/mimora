@@ -43,7 +43,7 @@ button {
 
 .app-layout {
   display: grid;
-  grid-template-columns: clamp(200px, 13vw, 230px) minmax(0, 1fr) clamp(240px, 18vw, 300px);
+  grid-template-columns: clamp(200px, 13vw, 230px) minmax(0, 1fr) clamp(340px, 26vw, 420px);
   height: 100vh;
   height: 100dvh;
   min-width: 0;
@@ -3855,6 +3855,10 @@ button {
   background: #fafafa;
 }
 
+.context-panel * {
+  min-width: 0;
+}
+
 .context-panel-header {
   display: flex;
   align-items: center;
@@ -3907,10 +3911,10 @@ button {
 
 .context-section {
   display: grid;
-  gap: 8px;
+  gap: 9px;
   border-top: 1px solid #e6e8ec;
-  padding-top: 13px;
-  margin-top: 13px;
+  padding-top: 14px;
+  margin-top: 14px;
 }
 
 .context-section h3 {
@@ -4006,13 +4010,13 @@ button {
 
 .context-recent-list li {
   display: grid;
-  gap: 5px;
+  gap: 6px;
 }
 
 .context-recent-list li > div:first-child {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: 8px;
   min-width: 0;
 }
@@ -4022,9 +4026,11 @@ button {
   overflow: hidden;
   color: #344054;
   font-size: 12.5px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.32;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .context-document-badges {
@@ -4051,9 +4057,106 @@ button {
   margin-top: 13px;
 }
 
+.insight-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-action-button {
+  min-height: 24px;
+  border: 1px solid #dfe3e8;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #344054;
+  padding: 2px 9px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.context-action-button:hover:not(:disabled) {
+  background: #f8fafc;
+}
+
+.context-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.insight-snapshot,
+.insight-category {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.insight-generated-at,
+.insight-source-summary {
+  margin: 0;
+  color: #667085;
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+
+.insight-category {
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.insight-category h4 {
+  margin: 0;
+  color: #475467;
+  font-size: 11.5px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.insight-item-list {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.insight-item-list li {
+  display: grid;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 2px solid #e6e8ec;
+}
+
+.insight-item-list p {
+  margin: 0;
+  color: #344054;
+  font-size: 12.5px;
+  line-height: 1.48;
+  overflow-wrap: anywhere;
+}
+
+.insight-item-list span {
+  min-width: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 10.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1300px) {
+  .app-layout {
+    grid-template-columns: 200px minmax(0, 1fr) clamp(320px, 25vw, 340px);
+  }
+}
+
 @media (max-width: 1100px) {
   .app-layout {
-    grid-template-columns: 200px minmax(0, 1fr) 240px;
+    grid-template-columns: 200px minmax(0, 1fr) clamp(280px, 27vw, 300px);
   }
 
   .chat-header-inner,
@@ -4067,7 +4170,7 @@ button {
 
 @media (max-width: 1050px) {
   .app-layout {
-    grid-template-columns: 190px minmax(0, 1fr) 220px;
+    grid-template-columns: 190px minmax(0, 1fr) 280px;
   }
 }
 
