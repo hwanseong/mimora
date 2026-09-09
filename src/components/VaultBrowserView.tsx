@@ -177,6 +177,8 @@ export function VaultBrowserView({
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [isRefreshingVaultBrowser, setIsRefreshingVaultBrowser] =
+    useState(false);
   const [refreshSequence, setRefreshSequence] = useState(0);
   const previewRequestSequence = useRef(0);
   const searchRequestSequence = useRef(0);
@@ -592,6 +594,62 @@ export function VaultBrowserView({
     void openFile(file, result.vaultId);
   }
 
+  async function refreshVaultBrowser(): Promise<void> {
+    if (isRefreshingVaultBrowser) {
+      return;
+    }
+
+    const selectedPreview =
+      selectedFile && selectedFileVaultId
+        ? {
+            file: selectedFile,
+            vaultId: selectedFileVaultId,
+          }
+        : null;
+
+    setIsRefreshingVaultBrowser(true);
+    setListError(null);
+    setSearchError(null);
+
+    try {
+      const nextDocumentIdValidation =
+        await window.mimora.validateDocumentIds();
+      setDocumentIdValidation(nextDocumentIdValidation);
+
+      if (selectedVaultId) {
+        setIsLoadingFiles(true);
+
+        try {
+          const loadedFiles = await window.mimora.listVaultFiles(
+            selectedVaultId,
+          );
+          setFiles(loadedFiles);
+        } catch (error) {
+          setFiles([]);
+          setListError(
+            getErrorMessage(error, 'Markdown ?뚯씪 紐⑸줉??遺덈윭?ㅼ? 紐삵뻽?듬땲??'),
+          );
+        } finally {
+          setIsLoadingFiles(false);
+        }
+      }
+
+      if (selectedPreview) {
+        await openFile(selectedPreview.file, selectedPreview.vaultId);
+      }
+
+      if (activeSearchQuery) {
+        await searchVaultFiles();
+      }
+    } catch (error) {
+      setPreviewError(
+        getErrorMessage(error, 'Vault Browser瑜??덈줈怨좎묠?섏? 紐삵뻽?듬땲??'),
+      );
+    } finally {
+      setIsRefreshingVaultBrowser(false);
+    }
+  }
+
   function attachSelectedFile(): void {
     if (
       !selectedFile ||
@@ -698,20 +756,9 @@ export function VaultBrowserView({
         </div>
         <button
           className="secondary-button"
-          disabled={isLoadingFiles || isSearching}
+          disabled={isLoadingFiles || isSearching || isRefreshingVaultBrowser}
           onClick={() => {
-            void window.mimora
-              .validateDocumentIds()
-              .then(setDocumentIdValidation)
-              .catch(() => {
-                setDocumentIdValidation(null);
-              });
-
-            if (activeSearchQuery) {
-              void searchVaultFiles();
-            } else {
-              setRefreshSequence((sequence) => sequence + 1);
-            }
+            void refreshVaultBrowser();
           }}
           type="button"
         >
