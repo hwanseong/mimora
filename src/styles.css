@@ -3855,65 +3855,132 @@ button {
   background: #fafafa;
 }
 
+.context-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .context-panel h2 {
-  margin: 0 0 13px;
+  margin: 0;
   color: #111827;
   font-size: 17px;
   line-height: 1.2;
 }
 
-.status-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+.context-panel-header span {
+  border: 1px solid #e2e5ea;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #667085;
+  padding: 2px 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
-.status-card {
-  display: grid;
-  gap: 6px;
-  min-height: 61px;
+.context-panel-note,
+.context-panel-error,
+.context-empty,
+.context-panel-footnote {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.context-panel-note,
+.context-panel-error {
   border: 1px solid #e4e7ec;
   border-radius: 8px;
   background: #ffffff;
-  padding: 9px 9px;
+  padding: 8px;
 }
 
-.status-card span {
-  color: #667085;
-  font-size: 12px;
+.context-panel-error {
+  border-color: #f0c6c2;
+  background: #fffafa;
+  color: #9b3b37;
 }
 
-.status-card strong {
-  color: #111827;
-  font-size: 22px;
-  line-height: 1;
+.context-section {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #e6e8ec;
+  padding-top: 13px;
+  margin-top: 13px;
 }
 
-.status-card.stable {
-  border-top-color: #7eb39a;
-}
-
-.status-card.watch {
-  border-top-color: #d2a34d;
-}
-
-.status-card.risk {
-  border-top-color: #c66f6a;
-}
-
-.alerts-section {
-  margin-top: 20px;
-}
-
-.alerts-section h3 {
-  margin: 0 0 8px;
+.context-section h3 {
+  margin: 0;
   color: #475467;
   font-size: 12px;
   font-weight: 700;
   line-height: 1.2;
 }
 
-.alerts-section ul {
+.workspace-context-summary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px;
+}
+
+.workspace-context-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-context-summary span {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.context-stat-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  border: 1px solid #e4e7ec;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px;
+}
+
+.context-stat-list.compact {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.context-stat-list span,
+.context-ranked-list span,
+.context-recent-list span {
+  min-width: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-stat-list strong,
+.context-ranked-list strong {
+  color: #111827;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.context-ranked-list,
+.context-recent-list {
   display: grid;
   gap: 6px;
   margin: 0;
@@ -3921,14 +3988,67 @@ button {
   list-style: none;
 }
 
-.alerts-section li {
+.context-ranked-list li,
+.context-recent-list li {
+  min-width: 0;
   border: 1px solid #e4e7ec;
   border-radius: 8px;
   background: #ffffff;
+  padding: 8px;
+}
+
+.context-ranked-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-recent-list li {
+  display: grid;
+  gap: 5px;
+}
+
+.context-recent-list li > div:first-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.context-recent-list strong {
+  min-width: 0;
+  overflow: hidden;
   color: #344054;
-  padding: 9px;
-  line-height: 1.35;
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-document-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.context-document-badges em {
+  border: 1px solid #e4e7ec;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #667085;
+  padding: 1px 6px;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.context-panel-footnote {
+  border-top: 1px solid #e6e8ec;
+  padding-top: 12px;
+  margin-top: 13px;
 }
 
 @media (max-width: 1100px) {

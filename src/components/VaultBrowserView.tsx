@@ -138,10 +138,12 @@ function renderDocumentIdStatusBadge(
 export function VaultBrowserView({
   currentWorkspace,
   onAttachContext,
+  onVaultFilesRefreshed,
   onOpenSettings,
 }: {
   currentWorkspace: Workspace;
   onAttachContext: (context: AttachedContext) => boolean;
+  onVaultFilesRefreshed?: () => void;
   onOpenSettings: () => void;
 }) {
   const [settings, setSettings] = useState<MimoraSettings>(defaultSettings);
@@ -641,6 +643,8 @@ export function VaultBrowserView({
       if (activeSearchQuery) {
         await searchVaultFiles();
       }
+
+      onVaultFilesRefreshed?.();
     } catch (error) {
       setPreviewError(
         getErrorMessage(error, 'Vault Browser瑜??덈줈怨좎묠?섏? 紐삵뻽?듬땲??'),

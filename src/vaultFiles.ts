@@ -9,6 +9,7 @@ export type VaultFile = {
   relativePath: string;
   name: string;
   folder: string;
+  modifiedAt?: string;
 };
 
 export type VaultFileContent = {

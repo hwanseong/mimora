@@ -222,6 +222,7 @@ async function walkMarkdownFiles(
       relativePath: [...relativeFolderParts, entry.name].join('/'),
       name: entry.name,
       folder,
+      modifiedAt: entryStats.mtime.toISOString(),
     });
   }
 }

@@ -199,6 +199,7 @@ export function App() {
   const [workspaceRequestStatuses, setWorkspaceRequestStatuses] = useState<
     Record<string, ChatRequestStatus>
   >({});
+  const [contextPanelRefreshSignal, setContextPanelRefreshSignal] = useState(0);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const newSessionTitleInputRef = useRef<HTMLInputElement>(null);
   const appFocusAnchorRef = useRef<HTMLDivElement>(null);
@@ -2514,6 +2515,9 @@ export function App() {
             onAttachContext={(context) =>
               attachContextToWorkspace(selectedWorkspace.id, context)
             }
+            onVaultFilesRefreshed={() => {
+              setContextPanelRefreshSignal((currentSignal) => currentSignal + 1);
+            }}
             onOpenSettings={() => {
               setActiveView('settings');
             }}
@@ -2609,7 +2613,16 @@ export function App() {
           </>
         )}
       </main>
-      <ContextPanel />
+      <ContextPanel
+        isKnowledgeDomainRegistryAvailable={isKnowledgeDomainRegistryAvailable}
+        isKnowledgeTypeRegistryAvailable={isKnowledgeTypeRegistryAvailable}
+        knowledgeDomainOptions={knowledgeDomainOptions}
+        knowledgeTypeOptions={knowledgeTypeOptions}
+        refreshSignal={contextPanelRefreshSignal}
+        registryRuntimeMode={registryRuntimeMode}
+        registryWorkspaces={registryWorkspaces}
+        selectedWorkspace={selectedWorkspace}
+      />
       {isCreateSessionDialogOpen ? (
         <div
           className="session-dialog-backdrop"
