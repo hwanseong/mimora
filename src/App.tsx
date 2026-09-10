@@ -101,12 +101,29 @@ import type {
 } from './externalAI';
 import type { RagDocumentSecurity, RagSearchResult } from './rag';
 import type { ScheduleQueryResult } from './schedule';
-import { formatScheduleDisplayValue } from './scheduleUx';
+import {
+  classifyWorkspaceChatQueryRoute,
+  formatScheduleDisplayValue,
+  hasScheduleChatSignal,
+  type WorkspaceChatQueryRoute,
+} from './scheduleUx';
 
 const RAG_CHAT_SEARCH_TOP_K = 5;
 const RAG_CHAT_CONTEXT_LIMIT = 4;
 const RAG_CONTEXT_SNIPPET_MAX_CHARS = 320;
 const SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS = 320;
+const COMBINED_VAULT_CONTEXT_LIMIT = 3;
+const COMBINED_RAG_CONTEXT_LIMIT = 2;
+const COMBINED_SCHEDULE_TASK_LIMIT = 5;
+const COMBINED_VAULT_EXCERPT_MAX_CHARS = 1_200;
+const COMBINED_TOTAL_CONTEXT_MAX_CHARS = 14_000;
+
+type ChatContextRetrievalResult = {
+  contexts: AutoRetrievedContext[];
+  elapsedMs: number;
+  error?: string;
+  scheduleResult?: ScheduleQueryResult;
+};
 
 type PendingExternalRequest = {
   sessionId: ChatSession['sessionId'];
@@ -760,14 +777,411 @@ export function App() {
   }
 
   function isScheduleQuestion(query: string): boolean {
-    return /일정|진척|진도|지연|지체|착수|완료\s*예정|종료\s*예정|계획보다|계획\s*종료일|지킬\s*수|wbs|담당자|담당|작업|선행|후행|의존성|영향|성과|추세|예상|언제\s*(끝|완료)|schedule|progress|delay|delayed|task|resource|dependency|impact|forecast|estimate|earned\s*schedule/iu.test(
-      query,
+    return hasScheduleChatSignal(query);
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
+  }
+
+  function formatAuthoritativePercent(value: unknown): string {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? `${(value * 100).toFixed(2)}%`
+      : 'unavailable';
+  }
+
+  function formatAuthoritativeNumber(
+    value: unknown,
+    fractionDigits = 2,
+  ): string {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? value.toFixed(fractionDigits)
+      : 'unavailable';
+  }
+
+  function formatAuthoritativeDate(value: unknown): string {
+    return typeof value === 'string' && value.trim()
+      ? value
+      : 'unavailable';
+  }
+
+  function findScheduleMethod(
+    analysis: Record<string, unknown>,
+    methodName: string,
+  ): Record<string, unknown> | null {
+    const methods = analysis.methods;
+
+    if (!Array.isArray(methods)) {
+      return null;
+    }
+
+    for (const method of methods) {
+      if (isRecord(method) && method.method === methodName) {
+        return method;
+      }
+    }
+
+    return null;
+  }
+
+  function createScheduleSourceOfTruthContent(
+    result: ScheduleQueryResult,
+    options: {
+      includeDetailedContext?: boolean;
+      taskLimit?: number;
+    } = {},
+  ): string {
+    const analysis = isRecord(result.advancedAnalysis)
+      ? result.advancedAnalysis
+      : {};
+    const performanceScenario = isRecord(analysis.performanceScenario)
+      ? analysis.performanceScenario
+      : null;
+    const recentVelocityMethod = findScheduleMethod(
+      analysis,
+      'recent_velocity',
     );
+    const lines = [
+      '[SCHEDULE SOURCE OF TRUTH]',
+      `Workspace ID: ${result.workspaceId}`,
+      `Source: ${result.filename}`,
+      `As Of: ${result.asOfDate}`,
+      `Analysis: ${formatScheduleDisplayValue(result.kind)}`,
+    ];
+    const taskAnalysesByWbs = new Map(
+      (result.taskAnalyses ?? []).map((taskAnalysis) => [
+        taskAnalysis.wbs,
+        taskAnalysis,
+      ]),
+    );
+
+    if (result.detectedEntity && result.tasks.length > 0) {
+      lines.push(
+        'Primary Schedule Entity:',
+        `Entity Type: ${result.detectedEntityType ?? 'unknown'}`,
+        `Entity: ${result.detectedEntity}`,
+        'Answer Priority: Start the answer with this entity-specific schedule status before project-level summary.',
+        'Do Not Replace Entity Progress With Project Progress.',
+        'Required Answer Section: 프로그램B 현재 일정 상태 / 담당자 현재 일정 상태',
+      );
+      for (const task of result.tasks.slice(
+        0,
+        options.taskLimit ?? 8,
+      )) {
+        const taskAnalysis = taskAnalysesByWbs.get(task.wbs);
+        lines.push(
+          `- Task: ${task.name}`,
+          `  WBS: ${task.wbs}`,
+          `  Planned Start: ${task.plannedStart ?? 'unavailable'}`,
+          `  Planned Finish: ${task.plannedFinish ?? 'unavailable'}`,
+          `  Actual Start: ${task.actualStart ?? 'unavailable'}`,
+          `  Actual Finish: ${task.actualFinish ?? 'unavailable'}`,
+          `  Actual Progress: ${formatAuthoritativePercent(
+            task.actualProgress,
+          )}`,
+          `  Status: ${taskAnalysis?.status ?? 'unknown'}`,
+          `  Korean Required Fields: WBS ${task.wbs} / 계획 ${task.plannedStart ?? 'unavailable'} ~ ${task.plannedFinish ?? 'unavailable'} / 실제 시작 ${task.actualStart ?? 'unavailable'} / 실제 종료 ${task.actualFinish ?? '미완료'} / 진척률 ${formatAuthoritativePercent(
+            task.actualProgress,
+          )}`,
+        );
+      }
+    }
+
+    if (result.kind === 'what_if') {
+      lines.push(
+        'What-if Simulation:',
+        `Intent: ${formatScheduleDisplayValue(
+          analysis.intent ?? 'what_if_task_delay',
+        )}`,
+        `Delay: ${formatAuthoritativeNumber(
+          analysis.delayWorkingDays,
+          0,
+        )} working days`,
+        `Delay Assumption: ${formatScheduleDisplayValue(
+          analysis.delayAssumption,
+        )}`,
+        `Original Finish: ${formatAuthoritativeDate(
+          analysis.targetOriginalFinish,
+        )}`,
+        `Simulated Finish: ${formatAuthoritativeDate(
+          analysis.targetWhatIfFinish ?? analysis.simulatedFinish,
+        )}`,
+        `Dependency Propagation: ${formatScheduleDisplayValue(
+          analysis.dependencyPropagation,
+        )}`,
+        `Project Finish Impact: ${formatAuthoritativeDate(
+          analysis.projectWhatIfFinish,
+        )}`,
+        'Source Workbook: unchanged',
+        'Instruction: This is a deterministic simulation only; do not present it as a workbook change.',
+      );
+    }
+
+    lines.push(
+      'Project Schedule Summary:',
+      `WBS Nodes: ${result.summary.taskCount.toLocaleString()}`,
+      `Leaf Tasks: ${result.summary.leafTaskCount.toLocaleString()}`,
+      `Active Leaf Tasks: ${result.summary.activeTaskCount.toLocaleString()}`,
+      `Delayed Leaf Tasks: ${result.summary.delayedTaskCount.toLocaleString()}`,
+      `Planned Progress: ${formatAuthoritativePercent(
+        result.summary.plannedProgress,
+      )}`,
+      `Actual Progress: ${formatAuthoritativePercent(
+        result.summary.actualProgress,
+      )}`,
+      `ES: ${formatAuthoritativeDate(analysis.earnedScheduleDate)}`,
+      `AT: ${formatAuthoritativeNumber(analysis.actualTimeDays, 0)} working days`,
+      `SV(t): ${formatAuthoritativeNumber(
+        analysis.scheduleVarianceDays,
+        0,
+      )} working days`,
+      `SPI(t): ${formatAuthoritativeNumber(
+        analysis.schedulePerformanceIndex,
+      )}`,
+    );
+
+    if (result.kind === 'forecast') {
+      lines.push(
+        `Primary Operational Estimate: ${formatAuthoritativeDate(
+          analysis.primaryEstimate,
+        )}`,
+        `Earned Schedule Scenario: ${formatAuthoritativeDate(
+          performanceScenario?.estimate,
+        )}`,
+        `Recent Velocity: ${formatAuthoritativeDate(
+          recentVelocityMethod?.estimate,
+        )}`,
+      );
+    }
+
+    if (!result.detectedEntity && result.tasks.length > 0) {
+      lines.push('Schedule Tasks:');
+      for (const task of result.tasks.slice(
+        0,
+        options.taskLimit ?? 8,
+      )) {
+        lines.push(
+          `- ${task.wbs} ${task.name} | Planned: ${
+            task.plannedStart ?? 'unavailable'
+          } ~ ${task.plannedFinish ?? 'unavailable'} | Actual Progress: ${formatAuthoritativePercent(
+            task.actualProgress,
+          )}`,
+        );
+      }
+    }
+
+    lines.push(
+      'Instruction: These are authoritative current Schedule values from the connected Excel source.',
+      'Instruction: If Vault or RAG documents contain conflicting schedule numbers, ignore those numbers and use this block.',
+      'Instruction: Do not recalculate or replace these deterministic values.',
+      '[/SCHEDULE SOURCE OF TRUTH]',
+    );
+
+    if (options.includeDetailedContext === false) {
+      return lines.join('\n');
+    }
+
+    return `${lines.join('\n')}\n\n${result.contextText}`;
+  }
+
+  function createCombinedDocumentRetrievalQuery(input: {
+    query: string;
+    scheduleResult?: ScheduleQueryResult;
+  }): string {
+    const terms = new Set<string>();
+    const addTerm = (term: string | null | undefined) => {
+      const normalizedTerm = term?.trim();
+
+      if (normalizedTerm) {
+        terms.add(normalizedTerm);
+      }
+    };
+
+    addTerm(input.query);
+    addTerm(input.scheduleResult?.target ?? undefined);
+    addTerm(input.scheduleResult?.detectedEntity ?? undefined);
+
+    for (const task of input.scheduleResult?.tasks.slice(0, 5) ?? []) {
+      addTerm(task.wbs);
+      addTerm(task.name);
+    }
+
+    if (input.scheduleResult) {
+      addTerm('일정 지연 이슈 리스크 결정 변경 원인');
+    }
+
+    return [...terms].join('\n');
+  }
+
+  function createCombinedScheduleRetrievalQuery(query: string): string {
+    const normalizedQuery = query.trim();
+
+    if (
+      /왜|원인|이유|cause|reason/iu.test(normalizedQuery) &&
+      /일정|schedule/iu.test(normalizedQuery) &&
+      !/프로그램|wbs|담당|작업|task|resource/iu.test(normalizedQuery)
+    ) {
+      return '현재 일정 성과는?';
+    }
+
+    return query;
+  }
+
+  function normalizeContextDedupText(value: string): string {
+    return value
+      .toLowerCase()
+      .replace(/\s+/gu, ' ')
+      .slice(0, 240);
+  }
+
+  function trimContextText(value: string, maxChars: number): string {
+    const trimmedValue = value.trim();
+
+    if (trimmedValue.length <= maxChars) {
+      return trimmedValue;
+    }
+
+    return `${trimmedValue.slice(0, maxChars).trimEnd()}\n...[truncated]`;
+  }
+
+  function toCombinedVaultExcerptContext(
+    context: AutoRetrievedContext,
+  ): AutoRetrievedContext {
+    const documentId =
+      context.mimoraDocumentId ??
+      context.metadata?.documentId ??
+      context.documentId;
+    const excerpt = context.snippet?.trim() || context.content;
+    const content = [
+      '[VAULT EXCERPT]',
+      `Title: ${context.fileName}`,
+      `Document ID: ${documentId}`,
+      `Path: ${context.relativePath}`,
+      ...(context.metadata?.knowledgeTypes.length
+        ? [`Knowledge Types: ${context.metadata.knowledgeTypes.join(', ')}`]
+        : []),
+      ...(context.metadata?.knowledgeDomains.length
+        ? [
+            `Knowledge Domains: ${context.metadata.knowledgeDomains.join(
+              ', ',
+            )}`,
+          ]
+        : []),
+      'Relevant Excerpt:',
+      trimContextText(excerpt, COMBINED_VAULT_EXCERPT_MAX_CHARS),
+      '[/VAULT EXCERPT]',
+    ].join('\n');
+
+    return {
+      ...context,
+      snippet: trimContextText(excerpt, RAG_CONTEXT_SNIPPET_MAX_CHARS),
+      content,
+    };
+  }
+
+  function selectCombinedDocumentContexts(input: {
+    vaultContexts: AutoRetrievedContext[];
+    ragContexts: AutoRetrievedContext[];
+  }): AutoRetrievedContext[] {
+    const seenKeys = new Set<string>();
+    const selectedVaultContexts: AutoRetrievedContext[] = [];
+    const selectedRagContexts: AutoRetrievedContext[] = [];
+    const addContext = (
+      context: AutoRetrievedContext,
+      target: AutoRetrievedContext[],
+      limit: number,
+    ) => {
+      if (target.length >= limit) {
+        return;
+      }
+
+      const filenameKey = context.fileName.trim().toLowerCase();
+      const textKey = normalizeContextDedupText(
+        context.snippet || context.content,
+      );
+      const contextKeys = [filenameKey, textKey].filter(Boolean);
+
+      if (contextKeys.some((key) => seenKeys.has(key))) {
+        return;
+      }
+
+      for (const key of contextKeys) {
+        seenKeys.add(key);
+      }
+
+      target.push(context);
+    };
+
+    for (const context of input.vaultContexts
+      .slice()
+      .sort((left, right) => right.score - left.score)) {
+      addContext(
+        toCombinedVaultExcerptContext(context),
+        selectedVaultContexts,
+        COMBINED_VAULT_CONTEXT_LIMIT,
+      );
+    }
+
+    for (const context of input.ragContexts
+      .slice()
+      .sort((left, right) => right.score - left.score)) {
+      addContext(context, selectedRagContexts, COMBINED_RAG_CONTEXT_LIMIT);
+    }
+
+    return [...selectedVaultContexts, ...selectedRagContexts];
+  }
+
+  function trimLowPriorityCombinedContexts(input: {
+    scheduleContexts: AutoRetrievedContext[];
+    documentContexts: AutoRetrievedContext[];
+  }): AutoRetrievedContext[] {
+    const selectedContexts = [
+      ...input.scheduleContexts,
+      ...input.documentContexts,
+    ];
+    let totalChars = selectedContexts.reduce(
+      (total, context) => total + context.content.length,
+      0,
+    );
+
+    while (
+      totalChars > COMBINED_TOTAL_CONTEXT_MAX_CHARS &&
+      selectedContexts.length > input.scheduleContexts.length
+    ) {
+      const removableIndex = selectedContexts
+        .map((context, index) => ({ context, index }))
+        .filter(({ context }) => context.sourceType !== 'schedule')
+        .sort((left, right) => {
+          const leftRank = left.context.sourceType === 'rag' ? 0 : 1;
+          const rightRank = right.context.sourceType === 'rag' ? 0 : 1;
+
+          return (
+            leftRank - rightRank ||
+            left.context.score - right.context.score ||
+            right.index - left.index
+          );
+        })[0]?.index;
+
+      if (removableIndex === undefined) {
+        break;
+      }
+
+      const [removedContext] = selectedContexts.splice(removableIndex, 1);
+      totalChars -= removedContext.content.length;
+    }
+
+    return selectedContexts;
   }
 
   function toScheduleAutoContext(
     result: ScheduleQueryResult,
+    options?: {
+      includeDetailedContext?: boolean;
+      taskLimit?: number;
+    },
   ): AutoRetrievedContext {
+    const content = createScheduleSourceOfTruthContent(result, options);
+
     return {
       sourceType: 'schedule',
       documentId: `schedule:${result.workspaceId}`,
@@ -781,8 +1195,8 @@ export function App() {
       relativePath: `schedule://${result.workspaceId}/${result.filename}`,
       fileName: result.filename,
       score: 1,
-      snippet: result.contextText.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
-      content: result.contextText,
+      snippet: content.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
+      content,
       heading: `기준일: ${result.asOfDate} / 분석: ${formatScheduleDisplayValue(result.kind)}`,
     };
   }
@@ -822,11 +1236,8 @@ export function App() {
   async function retrieveScheduleChatContext(input: {
     query: string;
     workspaceId: Workspace['id'];
-  }): Promise<{
-    contexts: AutoRetrievedContext[];
-    elapsedMs: number;
-    error?: string;
-  }> {
+    compact?: boolean;
+  }): Promise<ChatContextRetrievalResult> {
     const startedTime = performance.now();
 
     if (isAllWorkspaceScope(input.workspaceId) || !isScheduleQuestion(input.query)) {
@@ -855,7 +1266,10 @@ export function App() {
         workspaceId: input.workspaceId,
         query: input.query,
       });
-      const context = toScheduleAutoContext(result);
+      const context = toScheduleAutoContext(result, {
+        includeDetailedContext: !input.compact,
+        taskLimit: input.compact ? COMBINED_SCHEDULE_TASK_LIMIT : undefined,
+      });
 
       console.info('[Mimora Schedule Chat Retrieval]', {
         queryChars: input.query.length,
@@ -869,6 +1283,7 @@ export function App() {
       return {
         contexts: [context],
         elapsedMs: performance.now() - startedTime,
+        scheduleResult: result,
       };
     } catch (error) {
       const errorMessage =
@@ -1887,53 +2302,100 @@ export function App() {
     let ragContext: AutoRetrievedContext[] = [];
     let ragRetrievalMs: number | undefined;
     let ragRetrievalError: string | undefined;
+    let retrievedVaultContextCount = 0;
+    let retrievedRagContextCount = 0;
     const retrievalStartedTime = performance.now();
+    const queryRoute: WorkspaceChatQueryRoute = isAllWorkspaceScope(workspaceId)
+      ? 'document_only'
+      : classifyWorkspaceChatQueryRoute(query);
+    const scheduleQuestion = queryRoute !== 'document_only';
+    const scheduleOnlyQuery = queryRoute === 'schedule_only';
+    const combinedQuery = queryRoute === 'combined';
+    let scheduleRetrieval: ChatContextRetrievalResult = {
+      contexts: [],
+      elapsedMs: 0,
+    };
 
-    try {
-      if (import.meta.env.DEV) {
-        console.info('[Archived Debug]', {
-          stage: 'retrieveAutoContext:renderer',
-          workspaceId,
-          requestIncludeArchived: includeArchived,
-          retrievalIncludeArchived: includeArchived,
-          contentOriginScope,
-          questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
-        });
-      }
-
-      autoContext = await window.mimora.retrieveAutoContext({
-        query,
+    if (scheduleQuestion) {
+      scheduleRetrieval = await retrieveScheduleChatContext({
+        query: combinedQuery ? createCombinedScheduleRetrievalQuery(query) : query,
         workspaceId,
-        limit: 5,
-        includeArchived,
-        knowledgeFilters,
-        contentOriginScope,
+        compact: combinedQuery,
       });
-    } catch (error) {
-      autoContextError =
-        error instanceof Error
-          ? error.message
-          : '자동 참조 문서를 검색하지 못했습니다.';
     }
-    const ragRetrieval = await retrieveRagChatContext({
-      query,
-      workspaceId,
-      workspaceType,
-    });
-    ragContext = ragRetrieval.contexts;
-    ragRetrievalMs = ragRetrieval.elapsedMs;
-    ragRetrievalError = ragRetrieval.error;
 
-    const combinedAutoContext = [...autoContext, ...ragContext];
-    const scheduleForcesLocal =
-      !isAllWorkspaceScope(workspaceId) && isScheduleQuestion(query);
+    if (
+      !scheduleOnlyQuery ||
+      (scheduleRetrieval.contexts.length === 0 && scheduleRetrieval.error)
+    ) {
+      const documentRetrievalQuery = combinedQuery
+        ? createCombinedDocumentRetrievalQuery({
+            query,
+            scheduleResult: scheduleRetrieval.scheduleResult,
+          })
+        : query;
+
+      try {
+        if (import.meta.env.DEV) {
+          console.info('[Archived Debug]', {
+            stage: 'retrieveAutoContext:renderer',
+            workspaceId,
+            requestIncludeArchived: includeArchived,
+            retrievalIncludeArchived: includeArchived,
+            contentOriginScope,
+            questionContainsArchivedMarker: query.includes('ARCHIVED-ONLY-777'),
+          });
+        }
+
+        autoContext = await window.mimora.retrieveAutoContext({
+          query: documentRetrievalQuery,
+          workspaceId,
+          limit: combinedQuery ? COMBINED_VAULT_CONTEXT_LIMIT + 2 : 5,
+          includeArchived,
+          knowledgeFilters,
+          contentOriginScope,
+        });
+        retrievedVaultContextCount = autoContext.length;
+      } catch (error) {
+        autoContextError =
+          error instanceof Error
+            ? error.message
+            : '자동 참조 문서를 검색하지 못했습니다.';
+      }
+      const ragRetrieval = await retrieveRagChatContext({
+        query: documentRetrievalQuery,
+        workspaceId,
+        workspaceType,
+      });
+      ragContext = ragRetrieval.contexts;
+      ragRetrievalMs = ragRetrieval.elapsedMs;
+      ragRetrievalError = ragRetrieval.error;
+      retrievedRagContextCount = ragContext.length;
+    }
+
+    const combinedAutoContext = scheduleQuestion
+      ? scheduleRetrieval.contexts
+      : [];
+    const documentAutoContext = combinedQuery
+      ? selectCombinedDocumentContexts({
+          vaultContexts: autoContext,
+          ragContexts: ragContext,
+        })
+      : [...autoContext, ...ragContext];
+    const finalAutoContext = scheduleQuestion
+      ? trimLowPriorityCombinedContexts({
+          scheduleContexts: combinedAutoContext,
+          documentContexts: documentAutoContext,
+        })
+      : documentAutoContext;
+    const scheduleForcesLocal = scheduleQuestion;
     const retrievalMs = performance.now() - retrievalStartedTime;
 
     completeAutoContextRetrieval(
       workspaceId,
       sessionId,
       userMessageId,
-      combinedAutoContext,
+      finalAutoContext,
       autoContextError,
     );
 
@@ -1989,7 +2451,7 @@ export function App() {
       mode: scheduleForcesLocal ? 'local' : requestAIMode,
       workspaceType,
       manualContexts,
-      autoContexts: combinedAutoContext,
+      autoContexts: finalAutoContext,
       safetyStatus: preview?.status,
       externalAvailable,
     });
@@ -2021,6 +2483,22 @@ export function App() {
       manualContext: routingDecision.manualContextCount,
       autoContext: routingDecision.autoContextCount,
       ragContext: ragContext.length,
+      query_route: queryRoute,
+      schedule_context_used: scheduleRetrieval.contexts.length > 0,
+      schedule_source: scheduleRetrieval.scheduleResult?.filename,
+      retrieved_vault_context_count: retrievedVaultContextCount,
+      retrieved_rag_context_count: retrievedRagContextCount,
+      vault_context_count: finalAutoContext.filter(
+        (context) => context.sourceType !== 'rag' && context.sourceType !== 'schedule',
+      ).length,
+      rag_context_count: finalAutoContext.filter(
+        (context) => context.sourceType === 'rag',
+      ).length,
+      selected_context_count: finalAutoContext.length,
+      selected_context_chars: finalAutoContext.reduce(
+        (total, context) => total + context.content.length,
+        0,
+      ),
       ragDocumentIds: [
         ...new Set(ragContext.map((context) => context.ragDocumentId)),
       ],
@@ -2028,20 +2506,27 @@ export function App() {
 
     try {
       if (routingDecision.provider === 'local') {
-        const scheduleRetrieval = scheduleForcesLocal
-          ? await retrieveScheduleChatContext({
-              query,
-              workspaceId,
-            })
-          : { contexts: [], elapsedMs: 0 };
-        const localAutoContexts = [
-          ...combinedAutoContext,
-          ...scheduleRetrieval.contexts,
-        ];
+        const localAutoContexts = finalAutoContext;
 
         if (scheduleForcesLocal) {
           console.info('[Mimora Schedule Routing]', {
             workspaceId,
+            query_route: queryRoute,
+            schedule_context_used: scheduleRetrieval.contexts.length > 0,
+            schedule_source: scheduleRetrieval.scheduleResult?.filename,
+            retrieved_vault_context_count: retrievedVaultContextCount,
+            retrieved_rag_context_count: retrievedRagContextCount,
+            vault_context_count: finalAutoContext.filter(
+              (context) => context.sourceType !== 'rag' && context.sourceType !== 'schedule',
+            ).length,
+            rag_context_count: finalAutoContext.filter(
+              (context) => context.sourceType === 'rag',
+            ).length,
+            selected_context_count: finalAutoContext.length,
+            selected_context_chars: finalAutoContext.reduce(
+              (total, context) => total + context.content.length,
+              0,
+            ),
             contextCount: scheduleRetrieval.contexts.length,
             elapsedMs: scheduleRetrieval.elapsedMs,
             error: 'error' in scheduleRetrieval ? scheduleRetrieval.error : undefined,

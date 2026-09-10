@@ -29,10 +29,19 @@ Distinguish between facts from project documents and your own analysis.
 When RAG context is provided, use it as the primary project-document evidence and cite the source names naturally.
 If RAG context is absent or irrelevant, do not claim that an answer is based on RAG documents.
 When Schedule context is provided, treat it as deterministic schedule analysis from the live Excel source; do not recalculate dates or progress from assumptions.
+When a context block is marked [SCHEDULE SOURCE OF TRUTH], treat its schedule numbers and dates as authoritative current values.
+If Vault or RAG documents contain conflicting schedule progress, dates, task status, forecast, or resource schedule values, ignore those document values and use the Schedule Source of Truth values.
+Use Vault and RAG documents for reasons, issues, risks, decisions, changes, and explanations when provided, but never let them override schedule quantities.
+For combined Schedule plus document questions, start with a short current schedule status summary from the Schedule block, then explain causes or evidence from Vault/RAG documents.
+For task- or resource-specific combined questions, the first answer section must describe the Primary Schedule Entity, including WBS, planned period, actual start/finish, actual progress, and status when those fields are present.
+Do not answer an entity-specific question with only project-level Planned Progress or Actual Progress; project-level values are secondary context.
+Do not invent causes that are not supported by Vault or RAG evidence.
 For Schedule answers, preserve deterministic values exactly and explain them in the user's language.
 For Korean Schedule questions, answer in natural Korean and translate internal enum/code values into readable Korean labels.
 For Schedule forecast answers, distinguish the primary operational estimate from long-term performance scenarios and unavailable methods.
 Do not describe an Earned Schedule Scenario as a committed finish date or the primary forecast when the context marks it as a scenario.
+For Schedule what-if answers, state the target task, WBS, original finish, delay in working days, and simulated finish before discussing limitations.
+Never imply that a Schedule what-if simulation modified the source workbook; when dependency propagation is unavailable, say that successor and project-finish impact were not calculated.
 Never include internal context identifiers such as [CONTEXT DOCUMENT 1], [CONTEXT DOCUMENT 2], or [/CONTEXT DOCUMENT 1] in the final answer.
 Do not write citations in the form "참고: [CONTEXT DOCUMENT ...]" or "Source: [CONTEXT DOCUMENT ...]"; the app displays actual sources separately below the answer.
 When evidence is available, answer naturally and let the Sources UI provide file, page, and RAG details.
@@ -223,10 +232,25 @@ function fitBudgetedDocument(
     ...(document.heading ? [`Section: ${document.heading}`] : []),
     'Content:',
   ];
+  const section =
+    document.sourceType === 'schedule'
+      ? {
+          open: '[CURRENT SCHEDULE - AUTHORITATIVE]',
+          close: '[/CURRENT SCHEDULE]',
+        }
+      : document.sourceType === 'rag'
+        ? {
+            open: '[RAG DOCUMENT CONTEXT]',
+            close: '[/RAG DOCUMENT CONTEXT]',
+          }
+        : {
+            open: '[VAULT DOCUMENT CONTEXT]',
+            close: '[/VAULT DOCUMENT CONTEXT]',
+          };
   const prefix = `${sourceLines.join('\n')}\n`;
   const suffix = `\n[/CONTEXT DOCUMENT ${documentNumber}]`;
 
-  return `${prefix}${includedText.trim()}${suffix}`;
+  return `${prefix}${section.open}\n${includedText.trim()}\n${section.close}${suffix}`;
 }
 
 function buildContextBlocks(input: {

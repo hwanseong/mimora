@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 import unittest
@@ -512,6 +513,29 @@ class ScheduleQueryFilterTests(unittest.TestCase):
         self.assertEqual(result["tasks"][0]["wbs"], "2.3.1.2.1.2")
         self.assertEqual(result["taskAnalyses"][0]["status"], "delayed")
 
+    def test_task_entity_delay_reason_query_routes_to_task_status(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "프로그램B가 왜 늦었어?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "task_status")
+        self.assertEqual(result["detectedEntityType"], "task")
+        self.assertEqual(result["detectedEntity"], "프로그램B")
+        self.assertEqual(len(result["tasks"]), 1)
+        task = result["tasks"][0]
+        self.assertEqual(task["wbs"], "2.3.1.2.1.2")
+        self.assertEqual(task["plannedStart"], "2026-05-21")
+        self.assertEqual(task["plannedFinish"], "2026-06-11")
+        self.assertEqual(task["actualStart"], "2026-05-21")
+        self.assertIsNone(task["actualFinish"])
+        self.assertEqual(task["actualProgress"], 0.55)
+        self.assertEqual(result["taskAnalyses"][0]["status"], "delayed")
+
     def test_general_active_query_keeps_existing_routing_without_entity(self) -> None:
         result = mimora_worker.schedule_query(
             {
@@ -647,9 +671,62 @@ class ScheduleQueryFilterTests(unittest.TestCase):
         )
 
         self.assertEqual(result["kind"], "what_if")
+        self.assertEqual(result["detectedEntity"], "프로그램B")
         self.assertEqual(result["advancedAnalysis"]["delayWorkingDays"], 5)
+        self.assertEqual(result["advancedAnalysis"]["intent"], "what_if_task_delay")
+        self.assertEqual(result["advancedAnalysis"]["task"]["name"], "프로그램B")
+        self.assertEqual(result["advancedAnalysis"]["targetOriginalFinish"], "2026-06-11")
+        self.assertEqual(result["advancedAnalysis"]["targetWhatIfFinish"], "2026-06-18")
+        self.assertEqual(result["advancedAnalysis"]["dependencyPropagation"], "unavailable")
         self.assertIn("what_if_dependency_missing", result["advancedAnalysis"]["warnings"])
         self.assertIsNone(result["advancedAnalysis"]["projectWhatIfFinish"])
+        self.assertIsNone(result["advancedAnalysis"]["projectFinishImpact"])
+
+    def test_what_if_one_week_means_five_working_days(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "프로그램B가 일주일 늦어지면?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "what_if")
+        self.assertEqual(result["advancedAnalysis"]["delayWorkingDays"], 5)
+        self.assertEqual(result["advancedAnalysis"]["delayUnit"], "working_day")
+        self.assertEqual(result["advancedAnalysis"]["targetOriginalFinish"], "2026-06-11")
+        self.assertEqual(result["advancedAnalysis"]["targetWhatIfFinish"], "2026-06-18")
+
+    def test_what_if_unknown_task_returns_unsupported(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "존재하지않는작업이 5영업일 늦어지면?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "unsupported")
+        self.assertEqual(result["advancedAnalysis"]["intent"], "what_if_task_delay")
+        self.assertEqual(result["advancedAnalysis"]["reason"], "task_not_found")
+        self.assertIn("task_not_found", result["advancedAnalysis"]["warnings"])
+
+    def test_what_if_without_delay_returns_unsupported(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "프로그램B가 늦어지면?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "unsupported")
+        self.assertEqual(result["advancedAnalysis"]["intent"], "what_if_task_delay")
+        self.assertEqual(result["advancedAnalysis"]["reason"], "delay_days_missing")
+        self.assertIn("what_if_delay_missing", result["advancedAnalysis"]["warnings"])
 
 
 class ScheduleRealWorkbookForecastRegressionTests(unittest.TestCase):
@@ -701,6 +778,35 @@ class ScheduleRealWorkbookForecastRegressionTests(unittest.TestCase):
         )
         self.assertFalse(recent_velocity["available"])
         self.assertEqual(recent_velocity["quality"], "stale")
+
+    def test_real_workbook_what_if_does_not_modify_source_file(self) -> None:
+        before_hash = hashlib.sha256(self.source_path.read_bytes()).hexdigest()
+        before_mtime = self.source_path.stat().st_mtime_ns
+        parsed = mimora_worker.parse_schedule(
+            {
+                "workspace_id": "WS-2026-0001",
+                "source_path": str(self.source_path),
+            }
+        )
+
+        result = mimora_worker.schedule_query(
+            {
+                "source": parsed["source"],
+                "schedule": parsed["schedule"],
+                "query": "프로그램B가 5영업일 늦어지면?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        after_hash = hashlib.sha256(self.source_path.read_bytes()).hexdigest()
+        after_mtime = self.source_path.stat().st_mtime_ns
+        self.assertEqual(result["kind"], "what_if")
+        self.assertEqual(result["advancedAnalysis"]["task"]["name"], "프로그램B")
+        self.assertEqual(result["advancedAnalysis"]["targetOriginalFinish"], "2026-06-11")
+        self.assertEqual(result["advancedAnalysis"]["targetWhatIfFinish"], "2026-06-18")
+        self.assertEqual(result["advancedAnalysis"]["dependencyPropagation"], "unavailable")
+        self.assertEqual(before_hash, after_hash)
+        self.assertEqual(before_mtime, after_mtime)
 
 
 if __name__ == "__main__":

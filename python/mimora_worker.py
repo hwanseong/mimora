@@ -2982,14 +2982,44 @@ def analyze_dependencies(schedule: dict[str, Any], target_wbs: str | None = None
 
 
 def extract_delay_days(query: str) -> int | None:
-    match = re.search(r"(\d+)\s*(?:영업일|일|days|day)", query, re.IGNORECASE)
-    return int(match.group(1)) if match else None
+    query_text = cell_to_text(query).lower()
+    if re.search(r"(?:일\s*주일|일주일|한\s*주|1\s*주)", query_text):
+        return 5
+    week_match = re.search(r"(\d+)\s*주", query_text)
+    if week_match:
+        return int(week_match.group(1)) * 5
+    working_day_match = re.search(
+        r"(\d+)\s*(?:영업\s*일|영업일|working\s*days?|business\s*days?)",
+        query_text,
+        re.IGNORECASE,
+    )
+    if working_day_match:
+        return int(working_day_match.group(1))
+    day_match = re.search(r"(\d+)\s*(?:일|days?|day)", query_text, re.IGNORECASE)
+    return int(day_match.group(1)) if day_match else None
+
+
+def query_mentions_what_if_scenario(query: str) -> bool:
+    query_text = cell_to_text(query).lower()
+    return any(
+        token in query_text
+        for token in [
+            "늦어지",
+            "밀리",
+            "지연되면",
+            "지연된다면",
+            "delay by",
+            "delayed by",
+            "what-if",
+            "what if",
+        ]
+    )
 
 
 def calculate_what_if(schedule: dict[str, Any], target_wbs: str | None, delay_days: int | None) -> dict[str, Any]:
     warnings: list[str] = []
     if not target_wbs or not delay_days:
-        warnings.append("forecast_unavailable")
+        warnings.append("what_if_unavailable")
     dependency = analyze_dependencies(schedule, target_wbs)
     if dependency["dependencyCount"] == 0:
         warnings.append("what_if_dependency_missing")
@@ -2997,15 +3027,38 @@ def calculate_what_if(schedule: dict[str, Any], target_wbs: str | None, delay_da
     target_task = task_by_wbs.get(target_wbs)
     planned_finish = parse_iso_date(target_task.get("plannedFinish")) if target_task else None
     shifted_finish = add_working_days(planned_finish, delay_days + 1, schedule) if planned_finish and delay_days else None
+    project_finish = parse_iso_date(schedule.get("projectFinish"))
+    simulated_finish_exceeds_project_finish = bool(
+        shifted_finish and project_finish and shifted_finish > project_finish
+    )
+    if simulated_finish_exceeds_project_finish:
+        warnings.append("simulated_task_finish_after_project_finish")
+    dependency_propagation = "available" if dependency["dependencyCount"] > 0 else "unavailable"
     return {
+        "intent": "what_if_task_delay",
+        "task": target_task,
         "targetWbs": target_wbs,
         "delayWorkingDays": delay_days,
+        "delayUnit": "working_day",
+        "delayAssumption": "Schedule what-if delays are interpreted as working days.",
+        "originalFinishBasis": "planned_finish",
         "targetOriginalFinish": date_text(planned_finish),
         "targetWhatIfFinish": date_text(shifted_finish),
+        "simulatedFinish": date_text(shifted_finish),
+        "dependencyPropagation": dependency_propagation,
         "directImpact": dependency.get("successors", []),
         "indirectImpact": dependency.get("downstreamChain", []),
         "projectOriginalFinish": schedule.get("projectFinish"),
         "projectWhatIfFinish": None if dependency["dependencyCount"] == 0 else date_text(shifted_finish),
+        "projectFinishImpact": None if dependency["dependencyCount"] == 0 else {
+            "projectOriginalFinish": schedule.get("projectFinish"),
+            "projectWhatIfFinish": date_text(shifted_finish),
+        },
+        "projectFinishComparison": {
+            "projectPlannedFinish": schedule.get("projectFinish"),
+            "simulatedTaskFinish": date_text(shifted_finish),
+            "simulatedTaskFinishExceedsProjectFinish": simulated_finish_exceeds_project_finish,
+        },
         "warnings": list(dict.fromkeys(warnings + dependency.get("warnings", []))),
     }
 
@@ -3043,6 +3096,25 @@ def schedule_analysis_context_text(kind: str, analysis: dict[str, Any] | None) -
             json.dumps(analysis, ensure_ascii=False, indent=2),
             "[/SCHEDULE ANALYSIS]",
         ])
+    if kind == "what_if":
+        task = analysis.get("task")
+        task_record = task if isinstance(task, dict) else {}
+        return "\n".join([
+            "[SCHEDULE ANALYSIS]",
+            "Type: what_if_task_delay",
+            f"Task: {task_record.get('name') or 'unavailable'}",
+            f"WBS: {analysis.get('targetWbs') or 'unavailable'}",
+            f"Original Finish: {analysis.get('targetOriginalFinish') or 'unavailable'}",
+            f"Delay: {analysis.get('delayWorkingDays') or 'unavailable'} working days",
+            "Delay Assumption: Schedule what-if delays are interpreted as working days.",
+            f"Simulated Finish: {analysis.get('targetWhatIfFinish') or 'unavailable'}",
+            f"Dependency Propagation: {analysis.get('dependencyPropagation') or 'unavailable'}",
+            f"Project Finish Impact: {analysis.get('projectWhatIfFinish') or 'unavailable'}",
+            "Source workbook is not modified by this simulation.",
+            "Do not present this what-if simulation as a committed schedule change.",
+            json.dumps(analysis, ensure_ascii=False, indent=2),
+            "[/SCHEDULE ANALYSIS]",
+        ])
     return "\n".join([
         "[SCHEDULE ANALYSIS]",
         f"Type: {kind}",
@@ -3062,6 +3134,8 @@ def query_requests_status(query: str) -> bool:
             "상태",
             "지연",
             "지체",
+            "늦",
+            "밀",
             "잘",
             "status",
             "progress",
@@ -3124,8 +3198,7 @@ def query_requests_forecast(query: str) -> bool:
 
 
 def query_requests_what_if(query: str) -> bool:
-    query_text = query.lower()
-    return any(token in query_text for token in ["늦어지", "밀리", "지연되면", "what-if", "what if"]) and extract_delay_days(query) is not None
+    return query_mentions_what_if_scenario(query) and extract_delay_days(query) is not None
 
 
 def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
@@ -3149,8 +3222,10 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
 
     resource_entity = find_resource_entity(query, tasks)
     task_entity_type, task_entity = find_task_entity(query, tasks)
+    what_if_requested = query_mentions_what_if_scenario(query)
+    delay_days = extract_delay_days(query)
 
-    if task_entity and query_requests_what_if(query):
+    if task_entity and what_if_requested and delay_days is not None:
         target = task_entity
         detected_entity_type = task_entity_type
         detected_entity = task_entity
@@ -3159,8 +3234,20 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
         advanced_analysis = calculate_what_if(
             schedule,
             selected[0].get("wbs") if selected else None,
-            extract_delay_days(query),
+            delay_days,
         )
+    elif what_if_requested:
+        kind = "unsupported"
+        selected = []
+        advanced_analysis = {
+            "intent": "what_if_task_delay",
+            "reason": "task_not_found" if not task_entity else "delay_days_missing",
+            "target": task_entity,
+            "delayWorkingDays": delay_days,
+            "warnings": [
+                "task_not_found" if not task_entity else "what_if_delay_missing"
+            ],
+        }
     elif task_entity and query_requests_impact(query):
         target = task_entity
         detected_entity_type = task_entity_type
@@ -3181,14 +3268,6 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
             schedule,
             selected[0].get("wbs") if selected else None,
         )
-    elif query_requests_schedule_performance(query):
-        kind = "schedule_performance"
-        selected = []
-        advanced_analysis = calculate_schedule_performance(schedule, source, as_of_date)
-    elif query_requests_forecast(query):
-        kind = "forecast"
-        selected = []
-        advanced_analysis = calculate_schedule_forecast(schedule, source, as_of_date)
     elif resource_entity:
         target = resource_entity
         detected_entity_type = "resource"
@@ -3208,6 +3287,14 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
         kind = "task_status" if query_requests_status(query) else "task_lookup"
         if kind == "task_status":
             task_analyses = analyze_schedule_tasks(selected, as_of_date)
+    elif query_requests_schedule_performance(query):
+        kind = "schedule_performance"
+        selected = []
+        advanced_analysis = calculate_schedule_performance(schedule, source, as_of_date)
+    elif query_requests_forecast(query):
+        kind = "forecast"
+        selected = []
+        advanced_analysis = calculate_schedule_forecast(schedule, source, as_of_date)
     elif any(token in query_text for token in ["지연", "지체", "delay", "delayed"]):
         selected = [
             task

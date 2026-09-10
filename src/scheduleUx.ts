@@ -103,6 +103,11 @@ export type ScheduleQueryResultDisplayState = {
   showRawJson: boolean;
 };
 
+export type WorkspaceChatQueryRoute =
+  | 'schedule_only'
+  | 'document_only'
+  | 'combined';
+
 const taskListQueryKinds = new Set([
   'active_tasks',
   'delayed_tasks',
@@ -160,6 +165,16 @@ const scheduleDisplayLabels: Record<string, string> = {
   task_status: '작업 상태',
   unavailable: '계산 불가',
   dependency_relationships_unavailable: '선후행 관계 정보 없음',
+  what_if: 'What-if 분석',
+  what_if_task_delay: '작업 지연 What-if',
+  working_day: '영업일',
+  what_if_dependency_missing: '선후행 관계 정보가 없어 후행 영향 계산 불가',
+  dependency_not_available: '선후행 관계 정보 없음',
+  what_if_unavailable: 'What-if 계산 불가',
+  task_not_found: '작업을 찾을 수 없음',
+  what_if_delay_missing: '지연 기간 입력 필요',
+  simulated_task_finish_after_project_finish:
+    '가정 완료일이 계획 프로젝트 종료일을 초과',
 };
 
 const scheduleReasonLabels: Record<string, string> = {
@@ -187,6 +202,8 @@ const scheduleReasonLabels: Record<string, string> = {
     '현실적 운영 추정이 아니라 성과지수 기반 장기 시나리오입니다.',
   'Remaining-task heuristic / dependency 미반영':
     '잔여 작업 기준 휴리스틱이며 선후행 관계는 반영하지 않았습니다.',
+  'Schedule what-if delays are interpreted as working days.':
+    'Schedule What-if의 지연 기간은 영업일 기준으로 해석합니다.',
 };
 
 export function formatScheduleDisplayValue(value: unknown): string {
@@ -229,4 +246,61 @@ export function getScheduleQueryResultDisplayState(
     showFormattedResult: true,
     showRawJson,
   };
+}
+
+function normalizeChatQuery(query: string): string {
+  return query.trim().replace(/\s+/gu, ' ');
+}
+
+export function hasScheduleChatSignal(query: string): boolean {
+  const normalizedQuery = normalizeChatQuery(query);
+
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return /일정|진척|진도|진행|지연|지체|늦|밀렸|착수|완료\s*예정|종료\s*예정|계획보다|계획\s*종료일|지킬\s*수|wbs|담당자|담당|작업|선행|후행|의존성|영향|성과|추세|예상|언제\s*(끝|완료)|프로그램[가-힣A-Za-z0-9]*|schedule|progress|delay|delayed|task|resource|dependency|impact|forecast|estimate|earned\s*schedule|spi|sv\(t\)|sv/iu.test(
+    normalizedQuery,
+  );
+}
+
+export function hasDocumentExplanationSignal(query: string): boolean {
+  const normalizedQuery = normalizeChatQuery(query);
+
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return /왜|원인|이유|이슈|리스크|회의|결정|변경|문제|근거|관련|설명|영향|관찰|사인|issue|risk|decision|change|reason|cause|evidence/iu.test(
+    normalizedQuery,
+  );
+}
+
+export function classifyWorkspaceChatQueryRoute(
+  query: string,
+): WorkspaceChatQueryRoute {
+  const hasScheduleSignal = hasScheduleChatSignal(query);
+  const hasExplanationSignal = hasDocumentExplanationSignal(query);
+
+  if (hasScheduleSignal && hasExplanationSignal) {
+    return 'combined';
+  }
+
+  if (hasScheduleSignal) {
+    return 'schedule_only';
+  }
+
+  return 'document_only';
+}
+
+export function isScheduleOnlyChatQuestion(query: string): boolean {
+  return classifyWorkspaceChatQueryRoute(query) === 'schedule_only';
+}
+
+export function isCombinedScheduleDocumentQuestion(query: string): boolean {
+  return classifyWorkspaceChatQueryRoute(query) === 'combined';
+}
+
+export function isDocumentOnlyChatQuestion(query: string): boolean {
+  return classifyWorkspaceChatQueryRoute(query) === 'document_only';
 }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  classifyWorkspaceChatQueryRoute,
   getScheduleQueryResultDisplayState,
   getScheduleQuerySuccessMessage,
   getScheduleRegisterButtonLabel,
@@ -10,6 +11,7 @@ import {
   formatScheduleDisplayList,
   formatScheduleDisplayValue,
   isScheduleOperationBusy,
+  isScheduleOnlyChatQuestion,
   type ScheduleOperationStage,
 } from '../src/scheduleUx';
 
@@ -111,6 +113,55 @@ assert.equal(
     'Resource leveling and dependency propagation are not applied.',
   ]),
   '현재 일정 파일에 선후행 관계 정보가 없어 Dependency 기반 일정 영향 계산은 수행하지 않습니다. / 리소스 평준화와 선후행 전파는 반영하지 않았습니다.',
+);
+assert.equal(formatScheduleDisplayValue('what_if'), 'What-if 분석');
+assert.equal(
+  formatScheduleDisplayValue('what_if_task_delay'),
+  '작업 지연 What-if',
+);
+assert.equal(
+  formatScheduleDisplayValue('what_if_dependency_missing'),
+  '선후행 관계 정보가 없어 후행 영향 계산 불가',
+);
+assert.equal(
+  formatScheduleDisplayValue(
+    'Schedule what-if delays are interpreted as working days.',
+  ),
+  'Schedule What-if의 지연 기간은 영업일 기준으로 해석합니다.',
+);
+
+assert.equal(isScheduleOnlyChatQuestion('현재 일정 성과는?'), true);
+assert.equal(isScheduleOnlyChatQuestion('현재 일정이 얼마나 늦었어?'), true);
+assert.equal(isScheduleOnlyChatQuestion('프로그램B 일정은?'), true);
+assert.equal(isScheduleOnlyChatQuestion('프로그램B가 5영업일 늦어지면?'), true);
+assert.equal(isScheduleOnlyChatQuestion('이번 주 종료 예정 작업은?'), true);
+assert.equal(
+  isScheduleOnlyChatQuestion('박피엠 작업은 잘 진행되고 있나?'),
+  true,
+);
+assert.equal(isScheduleOnlyChatQuestion('현재 추세면 프로젝트 언제 끝나?'), true);
+assert.equal(isScheduleOnlyChatQuestion('왜 일정이 늦었어?'), false);
+assert.equal(isScheduleOnlyChatQuestion('취업규칙상 휴게시간은?'), false);
+
+assert.equal(
+  classifyWorkspaceChatQueryRoute('현재 일정 성과는?'),
+  'schedule_only',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('외부기관 관련 이슈가 뭐야?'),
+  'document_only',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('왜 일정이 이렇게 늦어진 것 같아?'),
+  'combined',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('프로그램B가 왜 늦었어?'),
+  'combined',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('현재 지연 작업과 관련된 주요 이슈를 알려줘'),
+  'combined',
 );
 
 console.log('schedule-ux-tests passed');

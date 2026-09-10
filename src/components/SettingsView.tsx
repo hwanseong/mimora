@@ -789,15 +789,62 @@ function ScheduleIntelligenceSection({
     }
 
     if (queryResult.kind === 'what_if') {
+      const task = getAnalysisRecord(analysis, 'task');
+      const comparison = getAnalysisRecord(analysis, 'projectFinishComparison');
+      const dependencyPropagation = getAnalysisString(
+        analysis,
+        'dependencyPropagation',
+      );
+      const dependencyUnavailable = dependencyPropagation === 'unavailable';
+      const exceedsProjectFinish =
+        comparison?.simulatedTaskFinishExceedsProjectFinish === true;
+
       return (
         <div className="schedule-analysis-panel">
+          <p className="schedule-query-target">
+            대상 작업:{' '}
+            <strong>
+              {getAnalysisString(task, 'wbs') ?? getAnalysisString(analysis, 'targetWbs') ?? '-'}{' '}
+              {getAnalysisString(task, 'name') ?? ''}
+            </strong>
+          </p>
           <div className="schedule-status-summary">
-            <span>지연 가정 <strong>{getAnalysisNumber(analysis, 'delayWorkingDays') ?? '-'}일</strong></span>
-            <span>기존 완료일 <strong>{getAnalysisString(analysis, 'targetOriginalFinish') ?? '-'}</strong></span>
-            <span>변경 완료일 <strong>{getAnalysisString(analysis, 'targetWhatIfFinish') ?? '-'}</strong></span>
-            <span>프로젝트 종료일 <strong>{getAnalysisString(analysis, 'projectOriginalFinish') ?? '-'}</strong></span>
-            <span>전파 결과 <strong>{getAnalysisString(analysis, 'projectWhatIfFinish') ?? '-'}</strong></span>
+            <span>
+              현재 완료 예정{' '}
+              <strong>{getAnalysisString(analysis, 'targetOriginalFinish') ?? '-'}</strong>
+            </span>
+            <span>
+              지연 가정{' '}
+              <strong>
+                {getAnalysisNumber(analysis, 'delayWorkingDays') ?? '-'}영업일
+              </strong>
+            </span>
+            <span>
+              가정 완료일{' '}
+              <strong>{getAnalysisString(analysis, 'targetWhatIfFinish') ?? '-'}</strong>
+            </span>
+            <span>
+              후행 영향{' '}
+              <strong>
+                {dependencyUnavailable
+                  ? '계산 불가'
+                  : getAnalysisString(analysis, 'projectWhatIfFinish') ?? '-'}
+              </strong>
+            </span>
+            <span>
+              원본 일정 <strong>변경되지 않음</strong>
+            </span>
           </div>
+          {dependencyUnavailable ? (
+            <p className="schedule-query-target">
+              현재 일정 파일에 선후행 관계 정보가 없어 후행 작업 전파와 프로젝트 종료일 영향은 계산하지 않습니다.
+            </p>
+          ) : null}
+          {exceedsProjectFinish ? (
+            <p className="schedule-query-target">
+              가정 완료일이 계획 프로젝트 종료일보다 늦습니다. 이 값은 특정 작업의 시뮬레이션 결과이며 프로젝트 종료 예측은 아닙니다.
+            </p>
+          ) : null}
           <p className="schedule-query-target">
             경고: <strong>{formatAnalysisWarnings(analysis)}</strong>
           </p>
