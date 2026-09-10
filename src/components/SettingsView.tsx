@@ -45,10 +45,15 @@ import type {
 } from '../schedule';
 import {
   getScheduleQueryResultDisplayState,
+  getScheduleQuerySuccessMessage,
   getScheduleRegisterButtonLabel,
   getScheduleReparseButtonLabel,
   getScheduleStageLabel,
+  formatScheduleDisplayList,
+  formatScheduleDisplayValue,
+  formatScheduleDateTime,
   isScheduleOperationBusy,
+  getScheduleSourceStatusLabel,
   type ScheduleOperationStage,
 } from '../scheduleUx';
 import {
@@ -146,24 +151,112 @@ function getMatchingScheduleResource(
 function getScheduleQueryKindLabel(kind: ScheduleQueryResult['kind']): string {
   switch (kind) {
     case 'resource_lookup':
-      return 'Resource lookup';
+      return '담당자 작업 조회';
     case 'resource_status':
-      return 'Resource status';
+      return '담당자 작업 상태';
     case 'task_lookup':
-      return 'Task lookup';
+      return '작업 조회';
     case 'task_status':
-      return 'Task status';
+      return '작업 상태';
+    case 'dependency_lookup':
+      return '선후행 관계 조회';
+    case 'impact_analysis':
+      return '일정 영향 분석';
+    case 'schedule_performance':
+      return '일정 성과';
+    case 'earned_schedule':
+      return '일정 성과';
+    case 'forecast':
+      return '일정 예측';
+    case 'what_if':
+      return 'What-if 분석';
+    case 'unsupported':
+      return '지원하지 않는 질문';
     case 'delayed_tasks':
-      return 'Delayed tasks';
+      return '지연 작업';
     case 'active_tasks':
-      return 'Active tasks';
+      return '진행 중 작업';
     case 'starting_between':
-      return 'Starting tasks';
+      return '착수 예정 작업';
     case 'finishing_between':
-      return 'Finishing tasks';
+      return '완료 예정 작업';
     case 'summary':
-      return 'Schedule summary';
+      return '일정 요약';
   }
+}
+
+function getAnalysisString(
+  analysis: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  const value = analysis?.[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function getAnalysisNumber(
+  analysis: Record<string, unknown> | null | undefined,
+  key: string,
+): number | null {
+  const value = analysis?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getAnalysisArray(
+  analysis: Record<string, unknown> | null | undefined,
+  key: string,
+): unknown[] {
+  const value = analysis?.[key];
+  return Array.isArray(value) ? value : [];
+}
+
+function getAnalysisRecordArray(
+  analysis: Record<string, unknown> | null | undefined,
+  key: string,
+): Record<string, unknown>[] {
+  return getAnalysisArray(analysis, key).filter(
+    (item): item is Record<string, unknown> =>
+      Boolean(item) && typeof item === 'object' && !Array.isArray(item),
+  );
+}
+
+function getAnalysisRecord(
+  analysis: Record<string, unknown> | null | undefined,
+  key: string,
+): Record<string, unknown> | null {
+  const value = analysis?.[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function getForecastMethod(
+  analysis: Record<string, unknown> | null | undefined,
+  methodName: string,
+): Record<string, unknown> | null {
+  return (
+    getAnalysisRecordArray(analysis, 'methods').find(
+      (method) => method.method === methodName,
+    ) ?? null
+  );
+}
+
+function formatAnalysisPercent(value: number | null): string {
+  return typeof value === 'number' ? `${(value * 100).toFixed(2)}%` : '-';
+}
+
+function formatAnalysisNumber(value: number | null, digits = 2): string {
+  return typeof value === 'number' ? value.toFixed(digits) : '-';
+}
+
+function formatAnalysisWarnings(
+  analysis: Record<string, unknown> | null | undefined,
+): string {
+  const warnings = getAnalysisArray(analysis, 'warnings').filter(
+    (warning): warning is string => typeof warning === 'string',
+  );
+  return warnings.length > 0
+    ? warnings.map(formatScheduleDisplayValue).join(', ')
+    : '-';
 }
 
 function getScheduleStatusLabel(
@@ -376,7 +469,7 @@ function ScheduleIntelligenceSection({
       setQueryResult(null);
       setShowRawQueryJson(false);
       setSelectedFile(null);
-      setMessage('Schedule source removed. Original Excel file was not changed.');
+      setMessage('일정 파일 연결을 해제했습니다. 원본 Excel 파일은 변경하지 않았습니다.');
       setStage('idle');
     } catch (removeError) {
       setStage('failed');
@@ -403,7 +496,12 @@ function ScheduleIntelligenceSection({
       setQueryResult(result);
       setShowRawQueryJson(false);
       setSummary(result.summary);
-      setMessage(`Query returned ${result.tasks.length.toLocaleString()} tasks.`);
+      setMessage(
+        getScheduleQuerySuccessMessage({
+          kind: result.kind,
+          taskCount: result.tasks.length,
+        }),
+      );
       setStage('parsed');
     } catch (queryError) {
       setStage('failed');
@@ -478,6 +576,238 @@ function ScheduleIntelligenceSection({
     );
   }
 
+  function renderAdvancedScheduleAnalysis() {
+    const analysis = queryResult?.advancedAnalysis;
+    if (!queryResult || !analysis) {
+      return null;
+    }
+
+    if (
+      queryResult.kind === 'schedule_performance' ||
+      queryResult.kind === 'earned_schedule'
+    ) {
+      return (
+        <div className="schedule-analysis-panel">
+          <div className="schedule-status-summary">
+            <span>계획 진척률 <strong>{formatAnalysisPercent(getAnalysisNumber(analysis, 'plannedProgress'))}</strong></span>
+            <span>실적 진척률 <strong>{formatAnalysisPercent(getAnalysisNumber(analysis, 'actualProgress'))}</strong></span>
+            <span>Earned Schedule <strong>{getAnalysisString(analysis, 'earnedScheduleDate') ?? '-'}</strong></span>
+            <span>실제 경과기간 AT <strong>{formatAnalysisNumber(getAnalysisNumber(analysis, 'actualTimeDays'), 0)}일</strong></span>
+            <span>일정 편차 SV(t) <strong>{formatAnalysisNumber(getAnalysisNumber(analysis, 'scheduleVarianceDays') ?? getAnalysisNumber(analysis, 'scheduleVarianceWorkingDays'), 0)}일</strong></span>
+            <span>일정 성과지수 SPI(t) <strong>{formatAnalysisNumber(getAnalysisNumber(analysis, 'schedulePerformanceIndex'), 2)}</strong></span>
+          </div>
+          <p className="schedule-query-target">
+            경고: <strong>{formatAnalysisWarnings(analysis)}</strong>
+          </p>
+        </div>
+      );
+    }
+
+    if (queryResult.kind === 'forecast') {
+      const primaryRange = getAnalysisRecord(analysis, 'primaryForecastRange');
+      const performanceScenario = getAnalysisRecord(
+        analysis,
+        'performanceScenario',
+      );
+      const recentVelocity = getForecastMethod(analysis, 'recent_velocity');
+      const remainingTasks = getForecastMethod(analysis, 'remaining_tasks');
+      const methods = getAnalysisRecordArray(analysis, 'methods');
+      const primaryEstimate = getAnalysisString(analysis, 'primaryEstimate');
+      const recentVelocityAvailable = recentVelocity?.available !== false;
+      const recentVelocityEstimate =
+        typeof recentVelocity?.estimate === 'string'
+          ? recentVelocity.estimate
+          : typeof recentVelocity?.estimatedFinish === 'string'
+            ? recentVelocity.estimatedFinish
+            : null;
+
+      return (
+        <div className="schedule-analysis-panel">
+          <div className="schedule-query-result-header">
+            <div>
+              <span>일정 예측</span>
+              <strong>기준일: {getAnalysisString(analysis, 'asOfDate') ?? '-'}</strong>
+            </div>
+            <span>
+              전체 품질:{' '}
+              <strong>
+                {formatScheduleDisplayValue(
+                  getAnalysisString(analysis, 'forecastQuality'),
+                )}
+              </strong>
+            </span>
+          </div>
+          <p className="schedule-query-target">
+            계획 종료일:{' '}
+            <strong>{getAnalysisString(analysis, 'plannedFinish') ?? '-'}</strong>
+            {' '}현실적 추정 범위:{' '}
+            <strong>
+              {(primaryRange?.earliest as string | undefined) ?? '-'} ~{' '}
+              {(primaryRange?.latest as string | undefined) ?? '-'}
+            </strong>
+          </p>
+          <div className="schedule-status-summary">
+            <span>
+              현실적 운영 추정{' '}
+              <strong>{primaryEstimate ?? '-'}</strong>
+            </span>
+            <span>
+              기준{' '}
+              <strong>
+                {formatScheduleDisplayValue(
+                  String(remainingTasks?.method ?? 'remaining_tasks'),
+                )}
+              </strong>
+            </span>
+            <span>
+              선후행 관계{' '}
+              <strong>
+                {analysis.dependencyRelationshipsAvailable ? '있음' : '없음'}
+              </strong>
+            </span>
+          </div>
+          <p className="schedule-query-target">
+            {formatScheduleDisplayValue(
+              getAnalysisString(analysis, 'primaryReason') ??
+                'Remaining-task heuristic / dependency 미반영',
+            )}
+          </p>
+          <div className="schedule-status-summary">
+            <span>
+              누적 일정성과 시나리오{' '}
+              <strong>
+                {String(performanceScenario?.estimate ?? '-')}
+              </strong>
+            </span>
+            <span>
+              SPI(t){' '}
+              <strong>
+                {formatAnalysisNumber(
+                  typeof performanceScenario?.spi === 'number'
+                    ? performanceScenario.spi
+                    : null,
+                  2,
+                )}
+              </strong>
+            </span>
+            <span>
+              신뢰도{' '}
+              <strong>
+                {formatScheduleDisplayValue(performanceScenario?.quality)}
+              </strong>
+            </span>
+          </div>
+          <p className="schedule-query-target">
+            누적 일정성과가 현재 수준으로 지속될 경우의 장기 시나리오이며,
+            primary estimate로 사용하지 않습니다.
+          </p>
+          <div className="schedule-status-summary">
+            <span>
+              최근 4주 진척속도{' '}
+              <strong>
+                {recentVelocityAvailable
+                  ? recentVelocityEstimate ?? '-'
+                  : '계산 불가'}
+              </strong>
+            </span>
+            <span>
+              신뢰도{' '}
+              <strong>
+                {formatScheduleDisplayValue(
+                  recentVelocity?.quality ?? recentVelocity?.dataQuality,
+                )}
+              </strong>
+            </span>
+          </div>
+          {recentVelocityAvailable ? null : (
+            <p className="schedule-query-target">
+              사유:{' '}
+              <strong>
+                {formatScheduleDisplayValue(
+                  recentVelocity?.reason ??
+                    '최근 4주간 양(+)의 실적 진척이 없음',
+                )}
+              </strong>
+            </p>
+          )}
+          <div className="schedule-query-table-wrap">
+            <table className="schedule-query-table">
+              <thead>
+                <tr>
+                  <th>방식</th>
+                  <th>추정일</th>
+                  <th>사유</th>
+                  <th>품질</th>
+                  <th>가정</th>
+                </tr>
+              </thead>
+              <tbody>
+                {methods.map((method) => (
+                  <tr key={String(method.method)}>
+                    <td>{formatScheduleDisplayValue(method.method)}</td>
+                    <td>{method.available === false ? '계산 불가' : String(method.estimate ?? method.estimatedFinish ?? '-')}</td>
+                    <td>{formatScheduleDisplayValue(method.reason ?? method.basis ?? method.warning)}</td>
+                    <td>{formatScheduleDisplayValue(method.quality ?? method.dataQuality ?? method.confidence)}</td>
+                    <td>
+                      {formatScheduleDisplayList(method.assumptions)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="schedule-query-target">
+            경고: <strong>{formatAnalysisWarnings(analysis)}</strong>
+          </p>
+        </div>
+      );
+    }
+
+    if (
+      queryResult.kind === 'dependency_lookup' ||
+      queryResult.kind === 'impact_analysis'
+    ) {
+      return (
+        <div className="schedule-analysis-panel">
+          <p className="schedule-query-target">
+            선후행 관계 수:{' '}
+            <strong>{getAnalysisNumber(analysis, 'dependencyCount') ?? 0}</strong>
+            {' '}대상 WBS:{' '}
+            <strong>{getAnalysisString(analysis, 'targetWbs') ?? '-'}</strong>
+          </p>
+          <p className="schedule-query-target">
+            직접 후행:{' '}
+            <strong>{getAnalysisRecordArray(analysis, 'successors').length}</strong>
+            {' '}후행 체인:{' '}
+            <strong>{getAnalysisRecordArray(analysis, 'downstreamChain').length}</strong>
+          </p>
+          <p className="schedule-query-target">
+            경고: <strong>{formatAnalysisWarnings(analysis)}</strong>
+          </p>
+        </div>
+      );
+    }
+
+    if (queryResult.kind === 'what_if') {
+      return (
+        <div className="schedule-analysis-panel">
+          <div className="schedule-status-summary">
+            <span>지연 가정 <strong>{getAnalysisNumber(analysis, 'delayWorkingDays') ?? '-'}일</strong></span>
+            <span>기존 완료일 <strong>{getAnalysisString(analysis, 'targetOriginalFinish') ?? '-'}</strong></span>
+            <span>변경 완료일 <strong>{getAnalysisString(analysis, 'targetWhatIfFinish') ?? '-'}</strong></span>
+            <span>프로젝트 종료일 <strong>{getAnalysisString(analysis, 'projectOriginalFinish') ?? '-'}</strong></span>
+            <span>전파 결과 <strong>{getAnalysisString(analysis, 'projectWhatIfFinish') ?? '-'}</strong></span>
+          </div>
+          <p className="schedule-query-target">
+            경고: <strong>{formatAnalysisWarnings(analysis)}</strong>
+          </p>
+        </div>
+      );
+    }
+
+    return null;
+  }
+
   function renderScheduleQueryResult() {
     if (!queryResult) {
       return null;
@@ -504,14 +834,16 @@ function ScheduleIntelligenceSection({
         {queryDisplay.showFormattedResult &&
         queryResult.kind === 'summary' ? (
           <div className="schedule-summary-grid compact">
-            <span>WBS Nodes <strong>{queryResult.summary.taskCount.toLocaleString()}</strong></span>
-            <span>Leaf Tasks <strong>{queryResult.summary.leafTaskCount.toLocaleString()}</strong></span>
-            <span>Active Tasks <strong>{queryResult.summary.activeTaskCount.toLocaleString()}</strong></span>
-            <span>Delayed Tasks <strong>{queryResult.summary.delayedTaskCount.toLocaleString()}</strong></span>
-            <span>Planned <strong>{formatProgress(queryResult.summary.plannedProgress)}</strong></span>
-            <span>Actual <strong>{formatProgress(queryResult.summary.actualProgress)}</strong></span>
+            <span>WBS 노드 <strong>{queryResult.summary.taskCount.toLocaleString()}</strong></span>
+            <span>Leaf 작업 <strong>{queryResult.summary.leafTaskCount.toLocaleString()}</strong></span>
+            <span>진행 중 작업 <strong>{queryResult.summary.activeTaskCount.toLocaleString()}</strong></span>
+            <span>지연 작업 <strong>{queryResult.summary.delayedTaskCount.toLocaleString()}</strong></span>
+            <span>계획 진척률 <strong>{formatProgress(queryResult.summary.plannedProgress)}</strong></span>
+            <span>실적 진척률 <strong>{formatProgress(queryResult.summary.actualProgress)}</strong></span>
           </div>
         ) : null}
+
+        {queryDisplay.showFormattedResult ? renderAdvancedScheduleAnalysis() : null}
 
         {queryDisplay.showFormattedResult &&
         queryResult.kind === 'resource_lookup' ? (
@@ -551,6 +883,12 @@ function ScheduleIntelligenceSection({
         queryResult.kind !== 'summary' &&
         queryResult.kind !== 'resource_lookup' &&
         queryResult.kind !== 'resource_status' &&
+        queryResult.kind !== 'dependency_lookup' &&
+        queryResult.kind !== 'impact_analysis' &&
+        queryResult.kind !== 'schedule_performance' &&
+        queryResult.kind !== 'earned_schedule' &&
+        queryResult.kind !== 'forecast' &&
+        queryResult.kind !== 'what_if' &&
         queryResult.kind !== 'task_status' ? (
           renderScheduleTaskTable(queryResult.tasks, 'standard')
         ) : null}
@@ -568,6 +906,7 @@ function ScheduleIntelligenceSection({
                 tasks: queryResult.tasks.slice(0, 5),
                 taskAnalyses: queryResult.taskAnalyses?.slice(0, 5),
                 resourceStatusSummary: queryResult.resourceStatusSummary,
+                advancedAnalysis: queryResult.advancedAnalysis,
                 summary: queryResult.summary,
               },
               null,
@@ -598,19 +937,28 @@ function ScheduleIntelligenceSection({
         </button>
       </div>
 
-      <div className="registry-runtime-summary">
-        <span>
-          Storage: <code>{storageRoot || 'Loading...'}</code>
-        </span>
-        <span>
-          Status: <strong>{source?.parseStatus ?? 'not registered'}</strong>
-        </span>
-        <span>
-          Source: <strong>{source?.filename ?? selectedFile?.name ?? '-'}</strong>
-        </span>
-        {source?.lastParsedAt ? <span>Last Parsed: {source.lastParsedAt}</span> : null}
-        {stageLabel ? <span>Step: <strong>{stageLabel}</strong></span> : null}
-        {source?.parseError ? <span>Error: {source.parseError}</span> : null}
+      <div className="schedule-source-status">
+        <div>
+          <span>상태</span>
+          <strong>{stageLabel ?? getScheduleSourceStatusLabel(source?.parseStatus)}</strong>
+        </div>
+        <div>
+          <span>소스 파일</span>
+          <strong>{source?.filename ?? selectedFile?.name ?? '-'}</strong>
+        </div>
+        <div>
+          <span>마지막 분석</span>
+          <strong>{formatScheduleDateTime(source?.lastParsedAt)}</strong>
+        </div>
+        {source?.parseError ? (
+          <div className="schedule-source-status-error">
+            <span>오류</span>
+            <strong>{source.parseError}</strong>
+          </div>
+        ) : null}
+        <p>
+          개발정보: <code>{storageRoot || '로딩 중...'}</code>
+        </p>
       </div>
 
       {message ? <p className="settings-success-message">{message}</p> : null}
@@ -644,7 +992,7 @@ function ScheduleIntelligenceSection({
           }}
           type="button"
         >
-          Select Schedule
+          일정 파일 선택
         </button>
         <span>{selectedFile?.name ?? source?.filename ?? 'No schedule selected'}</span>
         <button
@@ -671,22 +1019,26 @@ function ScheduleIntelligenceSection({
 
       {summary ? (
         <div className="schedule-summary-grid">
-          <span>WBS Nodes <strong>{summary.taskCount.toLocaleString()}</strong></span>
-          <span>Leaf Tasks <strong>{summary.leafTaskCount.toLocaleString()}</strong></span>
-          <span>Active Tasks <strong>{summary.activeTaskCount.toLocaleString()}</strong></span>
-          <span>Delayed Tasks <strong>{summary.delayedTaskCount.toLocaleString()}</strong></span>
-          <span>Planned <strong>{formatProgress(summary.plannedProgress)}</strong></span>
-          <span>Actual <strong>{formatProgress(summary.actualProgress)}</strong></span>
+          <span>WBS 노드 <strong>{summary.taskCount.toLocaleString()}</strong></span>
+          <span>Leaf 작업 <strong>{summary.leafTaskCount.toLocaleString()}</strong></span>
+          <span>진행 중 작업 <strong>{summary.activeTaskCount.toLocaleString()}</strong></span>
+          <span>지연 작업 <strong>{summary.delayedTaskCount.toLocaleString()}</strong></span>
+          <span>계획 진척률 <strong>{formatProgress(summary.plannedProgress)}</strong></span>
+          <span>실적 진척률 <strong>{formatProgress(summary.actualProgress)}</strong></span>
         </div>
       ) : null}
 
       <div className="schedule-query-test">
+        <p className="schedule-query-target">
+          일정 분석 기능을 검증하기 위한 테스트입니다. 실제 업무 질문은
+          Workspace Chat에서 사용할 수 있습니다.
+        </p>
         <input
           disabled={isBusy || !source}
           onChange={(event) => {
             setQuery(event.target.value);
           }}
-          placeholder="이번 주 종료 예정 작업은?"
+          placeholder="현재 추세면 프로젝트 언제 끝나?"
           type="search"
           value={query}
         />
@@ -698,7 +1050,7 @@ function ScheduleIntelligenceSection({
           }}
           type="button"
         >
-          Query Test
+          쿼리 테스트
         </button>
       </div>
 

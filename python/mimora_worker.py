@@ -1700,6 +1700,7 @@ SCHEDULE_COLUMN_ALIASES = {
     "planned_progress": ["plannedprogress", "planprogress", "계획진척", "계획진도", "계획율", "계획", "계획작업량진척률"],
     "actual_progress": ["actualprogress", "progress", "실적진척", "실제진척", "실적", "진척율", "진도율", "실적기성진척률"],
     "calendar": ["calendar", "캘린더", "달력"],
+    "predecessors": ["predecessors", "predecessor", "dependencies", "dependency", "선행작업", "선행", "의존성"],
 }
 
 
@@ -1784,6 +1785,57 @@ def parse_resource_assignments(value: Any) -> list[dict[str, Any]]:
         else:
             assignments.append({"name": item, "allocation": 1.0})
     return assignments
+
+
+def parse_dependency_references(value: Any, successor_wbs: str) -> list[dict[str, Any]]:
+    text = cell_to_text(value)
+    if not text:
+        return []
+    dependencies: list[dict[str, Any]] = []
+    for part in re.split(r"[,;/\n]+", text):
+        item = part.strip()
+        if not item:
+            continue
+        match = re.match(
+            r"^(?P<wbs>\d+(?:\.\d+)*)(?:\s*(?P<type>FS|SS|FF|SF))?(?:\s*(?P<lag>[+-]\s*\d+))?\s*(?:d|day|days|일|영업일)?$",
+            item,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        dependency_type = (match.group("type") or "FS").upper()
+        lag_text = (match.group("lag") or "0").replace(" ", "")
+        dependencies.append({
+            "predecessor_wbs": normalize_wbs(match.group("wbs")),
+            "successor_wbs": successor_wbs,
+            "type": dependency_type,
+            "lag_days": int(lag_text),
+        })
+    return dependencies
+
+
+def build_schedule_dependencies(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    task_wbs_values = {task.get("wbs") for task in tasks if task.get("wbs")}
+    dependencies: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, int]] = set()
+    for task in tasks:
+        successor_wbs = task.get("wbs")
+        if not successor_wbs:
+            continue
+        for dependency in parse_dependency_references(task.get("predecessorsRaw"), successor_wbs):
+            if dependency["predecessor_wbs"] not in task_wbs_values:
+                continue
+            key = (
+                dependency["predecessor_wbs"],
+                dependency["successor_wbs"],
+                dependency["type"],
+                dependency["lag_days"],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            dependencies.append(dependency)
+    return dependencies
 
 
 def schedule_header_matches(normalized: str, aliases: set[str]) -> bool:
@@ -1918,6 +1970,7 @@ def parse_schedule_sheet(workbook: Any, workspace_id: str, source_path: Path) ->
             "plannedProgress": parse_schedule_progress(row_value(row, mapping, "planned_progress")),
             "actualProgress": parse_schedule_progress(row_value(row, mapping, "actual_progress")),
             "resource": parse_resource_assignments(row_value(row, mapping, "resource")),
+            "predecessorsRaw": cell_to_text(row_value(row, mapping, "predecessors")) or None,
             "deliverable": cell_to_text(row_value(row, mapping, "deliverable")) or None,
             "calendar": cell_to_text(row_value(row, mapping, "calendar")) or None,
         }
@@ -1934,7 +1987,8 @@ def parse_schedule_sheet(workbook: Any, workspace_id: str, source_path: Path) ->
 def parse_calendar_sheet(workbook: Any) -> list[dict[str, Any]]:
     if "Calendar" not in workbook.sheetnames:
         return []
-    rows = list(workbook["Calendar"].iter_rows(values_only=True))
+    sheet = workbook["Calendar"]
+    rows = list(sheet.iter_rows(values_only=True))
     if not rows:
         return []
     try:
@@ -1949,7 +2003,23 @@ def parse_calendar_sheet(workbook: Any) -> list[dict[str, Any]]:
             {"date"},
         )
     except WorkerError:
-        return []
+        result: list[dict[str, Any]] = []
+        seen_dates: set[str] = set()
+        for row in rows:
+            for date_index in (1, 4, 7):
+                if date_index >= len(row):
+                    continue
+                date = parse_schedule_date(row[date_index])
+                if not date or date in seen_dates:
+                    continue
+                seen_dates.add(date)
+                result.append({
+                    "date": date,
+                    "type": "holiday",
+                    "calendar": None,
+                    "name": cell_to_text(row[date_index + 1]) if date_index + 1 < len(row) else None,
+                })
+        return result
     result: list[dict[str, Any]] = []
     for row in rows[header_row + 1 :]:
         date = parse_schedule_date(row_value(row, mapping, "date"))
@@ -2115,6 +2185,7 @@ def parse_schedule(input_data: dict[str, Any]) -> dict[str, Any]:
         workbook = load_workbook(source_path, read_only=False, data_only=True, keep_vba=False)
         sheet_names = list(workbook.sheetnames)
         tasks, column_mapping = parse_schedule_sheet(workbook, workspace_id, source_path)
+        dependencies = build_schedule_dependencies(tasks)
         calendars = parse_calendar_sheet(workbook)
         progress_series = parse_progress_sheet(workbook)
         settings = parse_settings_sheet(workbook)
@@ -2153,6 +2224,7 @@ def parse_schedule(input_data: dict[str, Any]) -> dict[str, Any]:
         "projectStart": project_start,
         "projectFinish": project_finish,
         "tasks": tasks,
+        "dependencies": dependencies,
         "calendars": calendars,
         "progressSeries": progress_series,
         "settings": settings,
@@ -2431,6 +2503,554 @@ def summarize_task_analyses(analyses: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def parse_iso_date(value: Any) -> datetime | None:
+    text = cell_to_text(value)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def date_text(value: datetime | None) -> str | None:
+    return value.date().isoformat() if value else None
+
+
+def calendar_day_types(schedule: dict[str, Any]) -> dict[str, str]:
+    return {
+        day["date"]: day.get("type", "working")
+        for day in schedule.get("calendars", [])
+        if isinstance(day, dict) and day.get("date")
+    }
+
+
+def is_working_day(day: datetime, schedule: dict[str, Any]) -> bool:
+    calendar_types = calendar_day_types(schedule)
+    day_type = calendar_types.get(day.date().isoformat())
+    if day_type in {"holiday", "non-working"}:
+        return False
+    if day_type == "working":
+        return True
+    return day.weekday() < 5
+
+
+def working_days_between(start: datetime, finish: datetime, schedule: dict[str, Any]) -> int:
+    if finish < start:
+        return -working_days_between(finish, start, schedule)
+    count = 0
+    current = start
+    while current <= finish:
+        if is_working_day(current, schedule):
+            count += 1
+        current += timedelta(days=1)
+    return count
+
+
+def add_working_days(start: datetime, days: int, schedule: dict[str, Any]) -> datetime:
+    if days <= 1:
+        return start
+    current = start
+    remaining = days - 1
+    while remaining > 0:
+        current += timedelta(days=1)
+        if is_working_day(current, schedule):
+            remaining -= 1
+    return current
+
+
+def elapsed_working_day_index(start: datetime, target: datetime, schedule: dict[str, Any]) -> int:
+    return max(1, working_days_between(start, target, schedule))
+
+
+def progress_points_until(schedule: dict[str, Any], as_of_date: str) -> list[dict[str, Any]]:
+    points = [
+        point
+        for point in schedule.get("progressSeries", [])
+        if isinstance(point, dict) and point.get("date") and point["date"] <= as_of_date
+    ]
+    return sorted(points, key=lambda point: point["date"])
+
+
+def interpolate_earned_schedule_date(
+    progress_series: list[dict[str, Any]],
+    actual_progress: float,
+    schedule: dict[str, Any],
+    project_start: datetime,
+) -> datetime | None:
+    if not progress_series:
+        return None
+    previous = progress_series[0]
+    first_progress = previous.get("plannedProgress")
+    if isinstance(first_progress, (int, float)) and actual_progress <= float(first_progress):
+        return parse_iso_date(previous.get("date"))
+    for point in progress_series[1:]:
+        previous_progress = previous.get("plannedProgress")
+        current_progress = point.get("plannedProgress")
+        if not isinstance(previous_progress, (int, float)) or not isinstance(current_progress, (int, float)):
+            previous = point
+            continue
+        if float(current_progress) < actual_progress:
+            previous = point
+            continue
+        previous_date = parse_iso_date(previous.get("date"))
+        current_date = parse_iso_date(point.get("date"))
+        if not previous_date or not current_date:
+            return parse_iso_date(point.get("date"))
+        denominator = float(current_progress) - float(previous_progress)
+        if denominator <= 0:
+            return current_date
+        ratio = (actual_progress - float(previous_progress)) / denominator
+        previous_index = elapsed_working_day_index(project_start, previous_date, schedule)
+        current_index = elapsed_working_day_index(project_start, current_date, schedule)
+        earned_index = max(1, round(previous_index + ((current_index - previous_index) * ratio)))
+        return add_working_days(project_start, earned_index, schedule)
+    return parse_iso_date(progress_series[-1].get("date"))
+
+
+def calculate_schedule_performance(schedule: dict[str, Any], source: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    summary = schedule_summary(schedule, source, as_of_date)
+    warnings: list[str] = []
+    if not schedule.get("calendars"):
+        warnings.append("calendar_incomplete")
+    points = progress_points_until(schedule, as_of_date) or schedule.get("progressSeries", [])
+    last_progress = points[-1] if points else {}
+    actual_progress = last_progress.get("actualProgress")
+    planned_progress = summary.get("plannedProgress")
+    project_start = parse_iso_date(schedule.get("projectStart"))
+    planned_finish = parse_iso_date(schedule.get("projectFinish"))
+    if not isinstance(actual_progress, (int, float)) or not project_start:
+        return {
+            "asOfDate": as_of_date,
+            "plannedProgress": planned_progress,
+            "actualProgress": actual_progress if isinstance(actual_progress, (int, float)) else None,
+            "warnings": warnings + ["insufficient_progress_history"],
+            "available": False,
+        }
+    earned_date = interpolate_earned_schedule_date(schedule.get("progressSeries", []), float(actual_progress), schedule, project_start)
+    as_of = parse_iso_date(as_of_date) or parse_iso_date(last_progress.get("date")) or datetime.now()
+    earned_working_days = working_days_between(project_start, earned_date, schedule) if earned_date else None
+    actual_working_days = working_days_between(project_start, as_of, schedule)
+    sv = (earned_working_days - actual_working_days) if earned_working_days is not None else None
+    spi = (earned_working_days / actual_working_days) if earned_working_days is not None and actual_working_days > 0 else None
+    planned_total_working_days = (
+        working_days_between(project_start, planned_finish, schedule)
+        if planned_finish
+        else None
+    )
+    return {
+        "available": True,
+        "asOfDate": as_of_date,
+        "plannedProgress": planned_progress,
+        "actualProgress": float(actual_progress),
+        "earnedScheduleDate": date_text(earned_date),
+        "actualTimeDate": as_of.date().isoformat(),
+        "earnedScheduleDays": earned_working_days,
+        "actualTimeDays": actual_working_days,
+        "scheduleVarianceDays": sv,
+        "earnedWorkingDays": earned_working_days,
+        "actualWorkingDays": actual_working_days,
+        "scheduleVarianceWorkingDays": sv,
+        "schedulePerformanceIndex": spi,
+        "plannedFinish": date_text(planned_finish),
+        "plannedTotalWorkingDays": planned_total_working_days,
+        "warnings": warnings,
+    }
+
+
+def forecast_from_earned_schedule(performance: dict[str, Any], schedule: dict[str, Any]) -> dict[str, Any]:
+    spi = performance.get("schedulePerformanceIndex")
+    total_days = performance.get("plannedTotalWorkingDays")
+    project_start = parse_iso_date(schedule.get("projectStart"))
+    if not isinstance(spi, (int, float)) or spi <= 0 or not isinstance(total_days, int) or not project_start:
+        return {
+            "method": "earned_schedule",
+            "available": False,
+            "estimate": None,
+            "estimatedFinish": None,
+            "reason": "SPI(t) or planned working-day duration is unavailable.",
+            "quality": "insufficient",
+            "confidence": "low",
+            "dataQuality": "insufficient",
+            "assumptions": [
+                "Requires SPI(t) and planned working-day duration.",
+            ],
+            "warning": "earned_schedule_unavailable",
+        }
+    estimated_days = max(1, math.ceil(total_days / float(spi)))
+    estimated_finish = date_text(add_working_days(project_start, estimated_days, schedule))
+    return {
+        "method": "earned_schedule",
+        "available": True,
+        "estimate": estimated_finish,
+        "estimatedFinish": estimated_finish,
+        "basis": f"planned working days / SPI(t) = {total_days} / {float(spi):.4f}",
+        "reason": "If cumulative SPI(t) stays at the current level, this is the extrapolated finish scenario.",
+        "quality": "limited",
+        "confidence": "low",
+        "dataQuality": "limited",
+        "assumptions": [
+            f"Current SPI(t) = {float(spi):.4f}.",
+            "Cumulative schedule performance remains unchanged.",
+            "This is a performance scenario, not the primary operational estimate.",
+        ],
+    }
+
+
+def forecast_from_recent_velocity(schedule: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    points = progress_points_until(schedule, as_of_date) or schedule.get("progressSeries", [])
+    if len(points) < 2:
+        return {
+            "method": "recent_velocity",
+            "available": False,
+            "estimate": None,
+            "estimatedFinish": None,
+            "reason": "Insufficient progress history.",
+            "quality": "insufficient",
+            "confidence": "low",
+            "dataQuality": "insufficient",
+            "assumptions": [
+                "Requires at least two progress points in the recent window.",
+            ],
+            "warning": "insufficient_progress_history",
+        }
+    end = points[-1]
+    end_date = parse_iso_date(end.get("date"))
+    end_progress = end.get("actualProgress")
+    if not end_date or not isinstance(end_progress, (int, float)):
+        return {
+            "method": "recent_velocity",
+            "available": False,
+            "estimate": None,
+            "estimatedFinish": None,
+            "reason": "Actual progress is unavailable at the end of the recent window.",
+            "quality": "insufficient",
+            "confidence": "low",
+            "dataQuality": "insufficient",
+            "assumptions": [
+                "Requires actual progress at the end of the recent window.",
+            ],
+            "warning": "insufficient_progress_history",
+        }
+    window_start = end_date - timedelta(days=28)
+    candidates = [point for point in points if parse_iso_date(point.get("date")) and parse_iso_date(point.get("date")) >= window_start]
+    start = candidates[0] if candidates else points[0]
+    start_date = parse_iso_date(start.get("date"))
+    start_progress = start.get("actualProgress")
+    if not start_date or not isinstance(start_progress, (int, float)):
+        return {
+            "method": "recent_velocity",
+            "available": False,
+            "estimate": None,
+            "estimatedFinish": None,
+            "reason": "Actual progress is unavailable at the start of the recent window.",
+            "quality": "insufficient",
+            "confidence": "low",
+            "dataQuality": "insufficient",
+            "assumptions": [
+                "Requires actual progress at the start of the recent window.",
+            ],
+            "warning": "insufficient_progress_history",
+        }
+    elapsed_days = max(1, working_days_between(start_date, end_date, schedule))
+    velocity = (float(end_progress) - float(start_progress)) / elapsed_days
+    if velocity <= 0:
+        return {
+            "method": "recent_velocity",
+            "available": False,
+            "estimate": None,
+            "estimatedFinish": None,
+            "reason": "No positive actual progress in the recent 4-week window.",
+            "basis": "No positive actual progress in the recent 4-week window.",
+            "quality": "stale",
+            "confidence": "low",
+            "dataQuality": "stale",
+            "assumptions": [
+                "Recent progress velocity uses the latest 4-week window.",
+                "A positive actual progress delta is required.",
+            ],
+            "warning": "recent_velocity_unavailable",
+        }
+    remaining_days = math.ceil(max(0, 1 - float(end_progress)) / velocity)
+    as_of = parse_iso_date(as_of_date) or end_date
+    estimated_finish = date_text(add_working_days(as_of, remaining_days, schedule))
+    return {
+        "method": "recent_velocity",
+        "available": True,
+        "estimate": estimated_finish,
+        "estimatedFinish": estimated_finish,
+        "basis": f"recent velocity {velocity:.6f} progress per working day",
+        "reason": "Projected from the most recent 4-week actual progress velocity.",
+        "quality": "recent_velocity",
+        "confidence": "medium",
+        "dataQuality": "recent_velocity",
+        "assumptions": [
+            "Recent 4-week progress velocity continues unchanged.",
+        ],
+    }
+
+
+def forecast_from_remaining_tasks(schedule: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    incomplete_leaf_tasks = [
+        task
+        for task in schedule.get("tasks", [])
+        if task.get("isLeaf") and not is_completed_task(task)
+    ]
+    if not incomplete_leaf_tasks:
+        return {
+            "method": "remaining_tasks",
+            "available": True,
+            "estimate": as_of_date,
+            "estimatedFinish": as_of_date,
+            "basis": "All leaf tasks are complete.",
+            "reason": "No remaining leaf tasks.",
+            "quality": "complete",
+            "confidence": "medium",
+            "dataQuality": "complete_leaf_tasks",
+            "assumptions": [
+                "All leaf tasks are complete.",
+            ],
+        }
+    remaining_durations = [
+        max(1, math.ceil(float(task.get("plannedDuration")) * (1 - float(task.get("actualProgress") or 0))))
+        for task in incomplete_leaf_tasks
+        if isinstance(task.get("plannedDuration"), (int, float)) and float(task.get("plannedDuration")) > 0
+    ]
+    as_of = parse_iso_date(as_of_date)
+    if not remaining_durations or not as_of:
+        return {
+            "method": "remaining_tasks",
+            "available": False,
+            "estimate": None,
+            "estimatedFinish": None,
+            "reason": "Remaining leaf task duration or as-of date is unavailable.",
+            "quality": "insufficient",
+            "confidence": "low",
+            "dataQuality": "insufficient",
+            "assumptions": [
+                "Requires planned duration for incomplete leaf tasks.",
+            ],
+            "warning": "remaining_tasks_unavailable",
+        }
+    estimated = add_working_days(as_of, max(remaining_durations), schedule)
+    estimated_finish = date_text(estimated)
+    return {
+        "method": "remaining_tasks",
+        "available": True,
+        "estimate": estimated_finish,
+        "estimatedFinish": estimated_finish,
+        "basis": f"max remaining leaf duration = {max(remaining_durations)} working days across {len(incomplete_leaf_tasks)} incomplete leaf tasks",
+        "reason": "Heuristic based on remaining duration of incomplete leaf tasks; dependencies are not inferred.",
+        "quality": "heuristic",
+        "confidence": "low",
+        "dataQuality": "heuristic",
+        "assumptions": [
+            "Remaining leaf tasks use planned duration multiplied by remaining progress.",
+            "Dependency relationships unavailable.",
+            "Resource leveling and dependency propagation are not applied.",
+        ],
+    }
+
+
+def calculate_schedule_forecast(schedule: dict[str, Any], source: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    performance = calculate_schedule_performance(schedule, source, as_of_date)
+    methods = [
+        forecast_from_earned_schedule(performance, schedule),
+        forecast_from_recent_velocity(schedule, as_of_date),
+        forecast_from_remaining_tasks(schedule, as_of_date),
+    ]
+    methods_by_name = {method.get("method"): method for method in methods}
+    remaining_method = methods_by_name.get("remaining_tasks", {})
+    earned_method = methods_by_name.get("earned_schedule", {})
+    available_methods = [method for method in methods if method.get("available")]
+    unavailable_methods = [method for method in methods if not method.get("available")]
+    primary_methods = [
+        method
+        for method in [remaining_method]
+        if method.get("available") and method.get("estimatedFinish")
+    ]
+    primary_finish_dates = [method["estimatedFinish"] for method in primary_methods]
+    all_finish_dates = [method.get("estimatedFinish") for method in available_methods if method.get("estimatedFinish")]
+    warnings: list[str] = []
+    if not available_methods:
+        warnings.append("forecast_unavailable")
+    elif unavailable_methods:
+        warnings.append("forecast_partially_unavailable")
+    for method in unavailable_methods:
+        warning = method.get("warning")
+        if warning:
+            warnings.append(str(warning))
+    if not schedule.get("dependencies"):
+        warnings.append("dependency_relationships_unavailable")
+    primary_estimate = primary_finish_dates[0] if primary_finish_dates else None
+    return {
+        "asOfDate": as_of_date,
+        "plannedFinish": performance.get("plannedFinish") or schedule.get("projectFinish"),
+        "primaryEstimate": primary_estimate,
+        "primaryMethod": "remaining_tasks" if primary_estimate else None,
+        "primaryReason": (
+            "Remaining-task heuristic is used as the primary operational estimate because dependency relationships are unavailable and recent velocity is unavailable."
+            if primary_estimate
+            else "No primary operational estimate is available."
+        ),
+        "primaryAssumptions": [
+            "Remaining-task heuristic.",
+            "Dependency relationships unavailable.",
+            "Resource leveling and dependency propagation are not applied.",
+        ] if primary_estimate else [],
+        "primaryForecastRange": {
+            "earliest": min(primary_finish_dates) if primary_finish_dates else None,
+            "latest": max(primary_finish_dates) if primary_finish_dates else None,
+        },
+        "performanceScenario": {
+            "method": "earned_schedule",
+            "estimate": earned_method.get("estimate"),
+            "available": bool(earned_method.get("available")),
+            "quality": earned_method.get("quality") or earned_method.get("dataQuality"),
+            "reason": earned_method.get("reason"),
+            "assumptions": earned_method.get("assumptions") or [],
+            "spi": performance.get("schedulePerformanceIndex"),
+        },
+        "methods": methods,
+        "forecastRange": {
+            "earliest": min(primary_finish_dates) if primary_finish_dates else None,
+            "latest": max(primary_finish_dates) if primary_finish_dates else None,
+        },
+        "allScenarioRange": {
+            "earliest": min(all_finish_dates) if all_finish_dates else None,
+            "latest": max(all_finish_dates) if all_finish_dates else None,
+        },
+        "forecastQuality": "limited" if primary_estimate else "unavailable",
+        "dependencyRelationshipsAvailable": bool(schedule.get("dependencies")),
+        "warnings": list(dict.fromkeys(performance.get("warnings", []) + warnings)),
+    }
+
+
+def dependency_graph(schedule: dict[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    predecessors: dict[str, list[dict[str, Any]]] = {}
+    successors: dict[str, list[dict[str, Any]]] = {}
+    for dependency in schedule.get("dependencies", []):
+        predecessors.setdefault(dependency["successor_wbs"], []).append(dependency)
+        successors.setdefault(dependency["predecessor_wbs"], []).append(dependency)
+    return predecessors, successors
+
+
+def dependency_chain(start_wbs: str, edges: dict[str, list[dict[str, Any]]], direction: str) -> tuple[list[dict[str, Any]], list[str]]:
+    chain: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def walk(wbs: str, depth: int) -> None:
+        if wbs in visiting:
+            warnings.append("dependency_cycle")
+            return
+        if wbs in visited:
+            return
+        visiting.add(wbs)
+        for dependency in edges.get(wbs, []):
+            next_wbs = dependency["successor_wbs"] if direction == "downstream" else dependency["predecessor_wbs"]
+            chain.append({**dependency, "depth": depth})
+            walk(next_wbs, depth + 1)
+        visiting.remove(wbs)
+        visited.add(wbs)
+
+    walk(start_wbs, 1)
+    return chain, warnings
+
+
+def analyze_dependencies(schedule: dict[str, Any], target_wbs: str | None = None) -> dict[str, Any]:
+    predecessors, successors = dependency_graph(schedule)
+    warnings: list[str] = []
+    if not schedule.get("dependencies"):
+        warnings.append("dependency_not_available")
+    upstream: list[dict[str, Any]] = []
+    downstream: list[dict[str, Any]] = []
+    if target_wbs:
+        upstream, upstream_warnings = dependency_chain(target_wbs, predecessors, "upstream")
+        downstream, downstream_warnings = dependency_chain(target_wbs, successors, "downstream")
+        warnings.extend(upstream_warnings + downstream_warnings)
+    return {
+        "dependencyCount": len(schedule.get("dependencies", [])),
+        "targetWbs": target_wbs,
+        "predecessors": predecessors.get(target_wbs, []) if target_wbs else [],
+        "successors": successors.get(target_wbs, []) if target_wbs else [],
+        "upstreamChain": upstream,
+        "downstreamChain": downstream,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+
+
+def extract_delay_days(query: str) -> int | None:
+    match = re.search(r"(\d+)\s*(?:영업일|일|days|day)", query, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def calculate_what_if(schedule: dict[str, Any], target_wbs: str | None, delay_days: int | None) -> dict[str, Any]:
+    warnings: list[str] = []
+    if not target_wbs or not delay_days:
+        warnings.append("forecast_unavailable")
+    dependency = analyze_dependencies(schedule, target_wbs)
+    if dependency["dependencyCount"] == 0:
+        warnings.append("what_if_dependency_missing")
+    task_by_wbs = {task.get("wbs"): task for task in schedule.get("tasks", [])}
+    target_task = task_by_wbs.get(target_wbs)
+    planned_finish = parse_iso_date(target_task.get("plannedFinish")) if target_task else None
+    shifted_finish = add_working_days(planned_finish, delay_days + 1, schedule) if planned_finish and delay_days else None
+    return {
+        "targetWbs": target_wbs,
+        "delayWorkingDays": delay_days,
+        "targetOriginalFinish": date_text(planned_finish),
+        "targetWhatIfFinish": date_text(shifted_finish),
+        "directImpact": dependency.get("successors", []),
+        "indirectImpact": dependency.get("downstreamChain", []),
+        "projectOriginalFinish": schedule.get("projectFinish"),
+        "projectWhatIfFinish": None if dependency["dependencyCount"] == 0 else date_text(shifted_finish),
+        "warnings": list(dict.fromkeys(warnings + dependency.get("warnings", []))),
+    }
+
+
+def schedule_analysis_context_text(kind: str, analysis: dict[str, Any] | None) -> str:
+    if not analysis:
+        return ""
+    if kind == "forecast":
+        performance_scenario = analysis.get("performanceScenario")
+        scenario = performance_scenario if isinstance(performance_scenario, dict) else {}
+        recent_velocity_method = next(
+            (
+                method
+                for method in analysis.get("methods", [])
+                if isinstance(method, dict)
+                and method.get("method") == "recent_velocity"
+            ),
+            None,
+        )
+        recent_velocity_estimate = (
+            recent_velocity_method.get("estimate")
+            if recent_velocity_method
+            else None
+        )
+        return "\n".join([
+            "[SCHEDULE ANALYSIS]",
+            "Type: forecast",
+            f"Primary Operational Estimate: {analysis.get('primaryEstimate') or 'unavailable'}",
+            f"Primary Method: {analysis.get('primaryMethod') or 'unavailable'}",
+            f"Primary Reason: {analysis.get('primaryReason') or '-'}",
+            f"Earned Schedule Scenario: {scenario.get('estimate') or 'unavailable'}",
+            f"Earned Schedule Scenario Quality: {scenario.get('quality') or '-'}",
+            "Do not describe the Earned Schedule Scenario as a committed or primary finish date.",
+            f"Recent Velocity: {recent_velocity_estimate or 'unavailable'}",
+            json.dumps(analysis, ensure_ascii=False, indent=2),
+            "[/SCHEDULE ANALYSIS]",
+        ])
+    return "\n".join([
+        "[SCHEDULE ANALYSIS]",
+        f"Type: {kind}",
+        json.dumps(analysis, ensure_ascii=False, indent=2),
+        "[/SCHEDULE ANALYSIS]",
+    ])
+
+
 def query_requests_status(query: str) -> bool:
     query_text = query.lower()
     return any(
@@ -2452,6 +3072,62 @@ def query_requests_status(query: str) -> bool:
     )
 
 
+def query_requests_dependency(query: str) -> bool:
+    query_text = query.lower()
+    return any(token in query_text for token in ["선행", "후행", "predecessor", "successor", "dependency", "dependencies"])
+
+
+def query_requests_impact(query: str) -> bool:
+    query_text = query.lower()
+    return any(token in query_text for token in ["영향", "impact", "영향받", "영향 받아"])
+
+
+def query_requests_earned_schedule(query: str) -> bool:
+    query_text = query.lower()
+    return any(token in query_text for token in ["일정 성과", "earned schedule", "spi", "sv(t)", "sv"])
+
+
+def query_requests_schedule_performance(query: str) -> bool:
+    query_text = query.lower()
+    return query_requests_earned_schedule(query) or any(
+        token in query_text
+        for token in [
+            "일정 성과",
+            "성과",
+            "계획보다",
+            "얼마나 밀렸",
+            "얼마나 지연",
+            "spi",
+            "sv(t)",
+            "earned schedule",
+        ]
+    )
+
+
+def query_requests_forecast(query: str) -> bool:
+    query_text = query.lower()
+    if any(
+        token in query_text
+        for token in [
+            "언제 끝",
+            "언제 완료",
+            "예상",
+            "전망",
+            "추세",
+            "계획 종료일",
+            "지킬 수",
+            "완료 가능",
+        ]
+    ):
+        return True
+    return any(token in query_text for token in ["언제 끝", "언제 완료", "예상", "전망", "추세", "forecast", "estimate"])
+
+
+def query_requests_what_if(query: str) -> bool:
+    query_text = query.lower()
+    return any(token in query_text for token in ["늦어지", "밀리", "지연되면", "what-if", "what if"]) and extract_delay_days(query) is not None
+
+
 def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
     schedule = input_data.get("schedule")
     source = input_data.get("source")
@@ -2469,11 +3145,51 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
     detected_entity = None
     task_analyses: list[dict[str, Any]] = []
     resource_status_summary = None
+    advanced_analysis = None
 
     resource_entity = find_resource_entity(query, tasks)
     task_entity_type, task_entity = find_task_entity(query, tasks)
 
-    if resource_entity:
+    if task_entity and query_requests_what_if(query):
+        target = task_entity
+        detected_entity_type = task_entity_type
+        detected_entity = task_entity
+        selected = lookup_tasks_by_name_or_wbs(tasks, task_entity)
+        kind = "what_if"
+        advanced_analysis = calculate_what_if(
+            schedule,
+            selected[0].get("wbs") if selected else None,
+            extract_delay_days(query),
+        )
+    elif task_entity and query_requests_impact(query):
+        target = task_entity
+        detected_entity_type = task_entity_type
+        detected_entity = task_entity
+        selected = lookup_tasks_by_name_or_wbs(tasks, task_entity)
+        kind = "impact_analysis"
+        advanced_analysis = analyze_dependencies(
+            schedule,
+            selected[0].get("wbs") if selected else None,
+        )
+    elif task_entity and query_requests_dependency(query):
+        target = task_entity
+        detected_entity_type = task_entity_type
+        detected_entity = task_entity
+        selected = lookup_tasks_by_name_or_wbs(tasks, task_entity)
+        kind = "dependency_lookup"
+        advanced_analysis = analyze_dependencies(
+            schedule,
+            selected[0].get("wbs") if selected else None,
+        )
+    elif query_requests_schedule_performance(query):
+        kind = "schedule_performance"
+        selected = []
+        advanced_analysis = calculate_schedule_performance(schedule, source, as_of_date)
+    elif query_requests_forecast(query):
+        kind = "forecast"
+        selected = []
+        advanced_analysis = calculate_schedule_forecast(schedule, source, as_of_date)
+    elif resource_entity:
         target = resource_entity
         detected_entity_type = "resource"
         detected_entity = resource_entity
@@ -2546,13 +3262,21 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
         "detectedIntent": kind,
         "resourceStatusSummary": resource_status_summary,
         "taskAnalyses": task_analyses[:20],
+        "advancedAnalysis": advanced_analysis,
         "workspaceId": schedule["workspaceId"],
         "filename": schedule["filename"],
         "lastParsedAt": summary["lastParsedAt"],
         "asOfDate": as_of_date,
         "summary": summary,
         "tasks": selected[:20],
-        "contextText": schedule_context_text(kind, summary, selected),
+        "contextText": (
+            schedule_context_text(kind, summary, selected)
+            + (
+                "\n" + schedule_analysis_context_text(kind, advanced_analysis)
+                if advanced_analysis
+                else ""
+            )
+        ),
     }
 
 

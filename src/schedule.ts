@@ -66,8 +66,19 @@ export type CanonicalScheduleTask = {
   plannedProgress: number | null;
   actualProgress: number | null;
   resource: ScheduleResourceAssignment[];
+  predecessorsRaw?: string | null;
   deliverable: string | null;
   calendar: string | null;
+};
+
+export type ScheduleDependencyType = 'FS' | 'SS' | 'FF' | 'SF';
+
+export type ScheduleDependency = {
+  predecessor_wbs: string;
+  successor_wbs: string;
+  type: ScheduleDependencyType;
+  lag_days: number;
+  depth?: number;
 };
 
 export type CanonicalCalendarDay = {
@@ -101,6 +112,7 @@ export type CanonicalSchedule = {
   settings: Record<string, string | number | boolean | null>;
   parsedSheets: string[];
   columnMapping: Record<string, string>;
+  dependencies?: ScheduleDependency[];
 };
 
 export type ScheduleSummary = {
@@ -134,7 +146,14 @@ export type ScheduleQueryKind =
   | 'resource_lookup'
   | 'resource_status'
   | 'task_lookup'
-  | 'task_status';
+  | 'task_status'
+  | 'dependency_lookup'
+  | 'impact_analysis'
+  | 'schedule_performance'
+  | 'earned_schedule'
+  | 'forecast'
+  | 'what_if'
+  | 'unsupported';
 
 export type ScheduleEntityType = 'resource' | 'task' | 'wbs';
 
@@ -169,6 +188,8 @@ export type ScheduleResourceStatusSummary = {
   notStartedTasks: number;
 };
 
+export type ScheduleAdvancedAnalysis = Record<string, unknown>;
+
 export type ScheduleQueryResult = {
   kind: ScheduleQueryKind;
   target?: string | null;
@@ -177,6 +198,7 @@ export type ScheduleQueryResult = {
   detectedIntent?: ScheduleQueryKind;
   resourceStatusSummary?: ScheduleResourceStatusSummary | null;
   taskAnalyses?: ScheduleTaskAnalysis[];
+  advancedAnalysis?: ScheduleAdvancedAnalysis | null;
   workspaceId: string;
   filename: string;
   lastParsedAt: string;

@@ -101,6 +101,7 @@ import type {
 } from './externalAI';
 import type { RagDocumentSecurity, RagSearchResult } from './rag';
 import type { ScheduleQueryResult } from './schedule';
+import { formatScheduleDisplayValue } from './scheduleUx';
 
 const RAG_CHAT_SEARCH_TOP_K = 5;
 const RAG_CHAT_CONTEXT_LIMIT = 4;
@@ -759,7 +760,7 @@ export function App() {
   }
 
   function isScheduleQuestion(query: string): boolean {
-    return /일정|진척|진도|지연|지체|착수|완료\s*예정|종료\s*예정|wbs|담당자|담당|작업|schedule|progress|delay|delayed|task|resource/iu.test(
+    return /일정|진척|진도|지연|지체|착수|완료\s*예정|종료\s*예정|계획보다|계획\s*종료일|지킬\s*수|wbs|담당자|담당|작업|선행|후행|의존성|영향|성과|추세|예상|언제\s*(끝|완료)|schedule|progress|delay|delayed|task|resource|dependency|impact|forecast|estimate|earned\s*schedule/iu.test(
       query,
     );
   }
@@ -782,7 +783,39 @@ export function App() {
       score: 1,
       snippet: result.contextText.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
       content: result.contextText,
-      heading: `Last parsed: ${result.lastParsedAt}`,
+      heading: `기준일: ${result.asOfDate} / 분석: ${formatScheduleDisplayValue(result.kind)}`,
+    };
+  }
+
+  function toMissingScheduleAutoContext(input: {
+    workspaceId: Workspace['id'];
+    query: string;
+  }): AutoRetrievedContext {
+    const content = [
+      '[SCHEDULE ANALYSIS]',
+      'Type: schedule_source_missing',
+      '이 Workspace에 연결된 일정 파일이 없습니다.',
+      'Settings > Schedule Intelligence에서 Schedule Excel을 먼저 등록해야 일정 분석을 수행할 수 있습니다.',
+      `User Question: ${input.query}`,
+      '[/SCHEDULE ANALYSIS]',
+    ].join('\n');
+
+    return {
+      sourceType: 'schedule',
+      documentId: `schedule:${input.workspaceId}:missing`,
+      workspaceIds: [input.workspaceId],
+      originWorkspaceId: input.workspaceId,
+      documentSecurity: 'internal',
+      vaultId: 'schedule-intelligence',
+      vaultName: 'Schedule Intelligence',
+      vaultType: 'knowledge',
+      security: 'sensitive',
+      relativePath: `schedule://${input.workspaceId}/not-connected`,
+      fileName: '일정 파일 미연결',
+      score: 1,
+      snippet: content.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
+      content,
+      heading: '이 Workspace에 연결된 일정 파일이 없습니다.',
     };
   }
 
@@ -808,7 +841,12 @@ export function App() {
 
       if (!source) {
         return {
-          contexts: [],
+          contexts: [
+            toMissingScheduleAutoContext({
+              workspaceId: input.workspaceId,
+              query: input.query,
+            }),
+          ],
           elapsedMs: performance.now() - startedTime,
         };
       }

@@ -9,7 +9,7 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
 
   return (
     <section className="message-sources" aria-label="응답 출처">
-      <strong>Sources</strong>
+      <strong>출처</strong>
       <ul>
         {sources.map((source) => {
           const isRagSource = source.sourceType === 'rag';
@@ -39,7 +39,7 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
                 <span className="document-id-source-badge">RAG</span>
               ) : null}
               {isScheduleSource ? (
-                <span className="document-id-source-badge">Schedule</span>
+                <span className="document-id-source-badge">Schedule 일정</span>
               ) : null}
               {source.ragDocumentId ? (
                 <span className="document-id-source-badge">

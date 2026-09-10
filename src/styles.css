@@ -3068,6 +3068,53 @@ button {
   grid-template-columns: minmax(220px, 1fr) auto;
 }
 
+.schedule-intelligence-card .schedule-query-test > p {
+  grid-column: 1 / -1;
+}
+
+.schedule-intelligence-card .schedule-source-status {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.schedule-intelligence-card .schedule-source-status > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fbfcfd;
+  padding: 9px 10px;
+}
+
+.schedule-intelligence-card .schedule-source-status span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.schedule-intelligence-card .schedule-source-status strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 12.5px;
+}
+
+.schedule-intelligence-card .schedule-source-status-error {
+  grid-column: 1 / -1;
+  border-color: #fecaca;
+  background: #fff5f5;
+}
+
+.schedule-intelligence-card .schedule-source-status > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #667085;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .schedule-intelligence-card label {
   display: grid;
   gap: 4px;
@@ -3179,6 +3226,11 @@ button {
   font-size: 13px;
 }
 
+.schedule-intelligence-card .schedule-analysis-panel {
+  display: grid;
+  gap: 8px;
+}
+
 .schedule-intelligence-card .schedule-query-table-wrap {
   overflow-x: auto;
 }
@@ -3224,6 +3276,7 @@ button {
   .rag-library-card .rag-document-row,
   .rag-library-card .rag-search-controls,
   .schedule-intelligence-card .schedule-source-controls,
+  .schedule-intelligence-card .schedule-source-status,
   .schedule-intelligence-card .schedule-query-test,
   .schedule-intelligence-card .schedule-status-summary,
   .schedule-intelligence-card .schedule-summary-grid {

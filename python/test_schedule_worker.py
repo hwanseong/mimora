@@ -536,6 +536,172 @@ class ScheduleQueryFilterTests(unittest.TestCase):
 
         self.assertEqual(result["kind"], "delayed_tasks")
 
+    def test_dependency_reference_parser_supports_dependency_types(self) -> None:
+        parsed = mimora_worker.parse_dependency_references(
+            "1.1FS, 1.2SS+2, 1.3FF-1, 1.4SF",
+            "2.1",
+        )
+
+        self.assertEqual([item["type"] for item in parsed], ["FS", "SS", "FF", "SF"])
+        self.assertEqual(parsed[1]["lag_days"], 2)
+        self.assertEqual(parsed[2]["lag_days"], -1)
+
+    def test_dependency_lookup_reports_unavailable_without_source_dependencies(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "프로그램B 선행 작업은?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "dependency_lookup")
+        self.assertEqual(result["advancedAnalysis"]["dependencyCount"], 0)
+        self.assertIn("dependency_not_available", result["advancedAnalysis"]["warnings"])
+
+    def test_earned_schedule_query_returns_performance(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "현재 일정 성과는?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "schedule_performance")
+        self.assertEqual(result["advancedAnalysis"]["actualProgress"], 0.2344107213)
+        self.assertIn("schedulePerformanceIndex", result["advancedAnalysis"])
+        self.assertIn("earnedScheduleDays", result["advancedAnalysis"])
+        self.assertIn("actualTimeDays", result["advancedAnalysis"])
+
+    def test_schedule_performance_query_routes_plan_variance(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "계획보다 얼마나 밀렸어?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "schedule_performance")
+        self.assertIn("scheduleVarianceDays", result["advancedAnalysis"])
+
+    def test_forecast_query_returns_forecast_methods(self) -> None:
+        schedule = self.make_schedule()
+        for task in schedule["tasks"]:
+            if task.get("isLeaf") and not mimora_worker.is_completed_task(task):
+                task["plannedDuration"] = 10
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": schedule,
+                "query": "현재 추세면 프로젝트 언제 끝나?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "forecast")
+        self.assertEqual(len(result["advancedAnalysis"]["methods"]), 3)
+        self.assertTrue(all("available" in method for method in result["advancedAnalysis"]["methods"]))
+        self.assertTrue(all("reason" in method for method in result["advancedAnalysis"]["methods"]))
+        self.assertTrue(all("quality" in method for method in result["advancedAnalysis"]["methods"]))
+        self.assertTrue(all("assumptions" in method for method in result["advancedAnalysis"]["methods"]))
+        self.assertEqual(result["advancedAnalysis"]["primaryMethod"], "remaining_tasks")
+        self.assertIsNotNone(result["advancedAnalysis"]["primaryEstimate"])
+        self.assertEqual(
+            result["advancedAnalysis"]["forecastRange"]["latest"],
+            result["advancedAnalysis"]["primaryEstimate"],
+        )
+        self.assertIn("forecast_partially_unavailable", result["advancedAnalysis"]["warnings"])
+        self.assertIn("recent_velocity_unavailable", result["advancedAnalysis"]["warnings"])
+        self.assertNotIn("forecast_unavailable", result["advancedAnalysis"]["warnings"])
+        self.assertEqual(
+            result["advancedAnalysis"]["performanceScenario"]["method"],
+            "earned_schedule",
+        )
+
+    def test_forecast_query_routes_plan_finish_question(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "계획 종료일을 지킬 수 있어?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "forecast")
+        self.assertEqual(len(result["advancedAnalysis"]["methods"]), 3)
+
+    def test_what_if_without_dependencies_does_not_invent_project_finish(self) -> None:
+        result = mimora_worker.schedule_query(
+            {
+                "source": self.make_source(),
+                "schedule": self.make_schedule(),
+                "query": "프로그램B가 5영업일 늦어지면?",
+                "as_of_date": "2026-09-10",
+            }
+        )
+
+        self.assertEqual(result["kind"], "what_if")
+        self.assertEqual(result["advancedAnalysis"]["delayWorkingDays"], 5)
+        self.assertIn("what_if_dependency_missing", result["advancedAnalysis"]["warnings"])
+        self.assertIsNone(result["advancedAnalysis"]["projectWhatIfFinish"])
+
+
+class ScheduleRealWorkbookForecastRegressionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        if Workbook is None:
+            self.skipTest("openpyxl is not installed")
+        self.source_path = Path(r"D:\vault_test\Schedule\WS-2026-0001_Schedule.xlsm")
+        if not self.source_path.exists():
+            self.skipTest("WS-2026-0001 sample workbook is not available")
+
+    def test_real_workbook_schedule_performance_and_forecast(self) -> None:
+        parsed = mimora_worker.parse_schedule(
+            {
+                "workspace_id": "WS-2026-0001",
+                "source_path": str(self.source_path),
+            }
+        )
+        schedule = parsed["schedule"]
+        source = parsed["source"]
+
+        performance = mimora_worker.calculate_schedule_performance(
+            schedule,
+            source,
+            "2026-09-10",
+        )
+        forecast = mimora_worker.calculate_schedule_forecast(
+            schedule,
+            source,
+            "2026-09-10",
+        )
+
+        self.assertEqual(performance["plannedProgress"], 1)
+        self.assertAlmostEqual(performance["actualProgress"], 0.2344107213243989)
+        self.assertEqual(performance["earnedScheduleDate"], "2026-04-13")
+        self.assertEqual(performance["actualTimeDays"], 131)
+        self.assertEqual(performance["scheduleVarianceDays"], -103)
+        self.assertAlmostEqual(performance["schedulePerformanceIndex"], 0.21, places=2)
+
+        self.assertEqual(forecast["primaryEstimate"], "2026-11-06")
+        self.assertEqual(forecast["forecastRange"]["latest"], "2026-11-06")
+        self.assertEqual(forecast["performanceScenario"]["estimate"], "2028-03-07")
+        self.assertIn("forecast_partially_unavailable", forecast["warnings"])
+        self.assertIn("recent_velocity_unavailable", forecast["warnings"])
+        self.assertNotIn("forecast_unavailable", forecast["warnings"])
+        recent_velocity = next(
+            method
+            for method in forecast["methods"]
+            if method["method"] == "recent_velocity"
+        )
+        self.assertFalse(recent_velocity["available"])
+        self.assertEqual(recent_velocity["quality"], "stale")
+
 
 if __name__ == "__main__":
     unittest.main()
