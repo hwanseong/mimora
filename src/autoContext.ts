@@ -7,6 +7,7 @@ import type { KnowledgeSearchFilters } from './knowledgeSearch';
 import type { ContentOriginSearchScope } from './contentOrigin';
 
 export type AutoRetrievedContext = {
+  sourceType?: 'vault' | 'rag' | 'schedule';
   documentId: string;
   mimoraDocumentId?: string;
   workspaceIds: string[];
@@ -21,6 +22,9 @@ export type AutoRetrievedContext = {
   security: VaultSecurity;
   relativePath: string;
   fileName: string;
+  ragDocumentId?: string;
+  page?: number | null;
+  heading?: string | null;
   score: number;
   snippet: string;
   content: string;

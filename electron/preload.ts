@@ -13,6 +13,34 @@ import type {
   SaveDerivedKnowledgeResult,
 } from '../src/derivedKnowledge';
 import type {
+  RagDeleteResult,
+  RagDocument,
+  RagEmbeddingStatus,
+  RagEmbeddingStatusInput,
+  RagFileSelection,
+  RagIndexInput,
+  RagIndexResult,
+  RagImportInput,
+  RagImportResult,
+  RagPythonStatus,
+  RagReplaceInput,
+  RagReplaceResult,
+  RagSearchInput,
+  RagSearchResult,
+  RagSettings,
+} from '../src/rag';
+import type {
+  ScheduleFileSelection,
+  ScheduleParseResult,
+  ScheduleQueryInput,
+  ScheduleQueryResult,
+  ScheduleRegisterInput,
+  ScheduleRemoveResult,
+  ScheduleRefreshOptions,
+  ScheduleSource,
+  ScheduleSummary,
+} from '../src/schedule';
+import type {
   ConnectionTestResult,
   LLMModel,
   LocalAIConnectionInput,
@@ -160,6 +188,12 @@ contextBridge.exposeInMainWorld('mimora', {
         MimoraIpcResult<MimoraSettings>
       >
     ).then(unwrapIpcResult),
+  updateRagSettings: (input: RagSettings) =>
+    (
+      ipcRenderer.invoke('settings:updateRag', input) as Promise<
+        MimoraIpcResult<MimoraSettings>
+      >
+    ).then(unwrapIpcResult),
   hasOpenAIApiKey: () =>
     (
       ipcRenderer.invoke('openAI:hasApiKey') as Promise<
@@ -236,6 +270,113 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('registry:loadKnowledgeTypes') as Promise<
         MimoraIpcResult<KnowledgeTypeRegistryParseResult>
+      >
+    ).then(unwrapIpcResult),
+  getRagPythonStatus: () =>
+    (
+      ipcRenderer.invoke('rag:getPythonStatus') as Promise<
+        MimoraIpcResult<RagPythonStatus>
+      >
+    ).then(unwrapIpcResult),
+  getRagStorageRoot: () =>
+    (
+      ipcRenderer.invoke('rag:getStorageRoot') as Promise<
+        MimoraIpcResult<string>
+      >
+    ).then(unwrapIpcResult),
+  selectRagDocumentFile: () =>
+    ipcRenderer.invoke(
+      'rag:selectDocumentFile',
+    ) as Promise<RagFileSelection | null>,
+  listRagDocuments: () =>
+    (
+      ipcRenderer.invoke('rag:listDocuments') as Promise<
+        MimoraIpcResult<RagDocument[]>
+      >
+    ).then(unwrapIpcResult),
+  importRagDocument: (input: RagImportInput) =>
+    (
+      ipcRenderer.invoke('rag:importDocument', input) as Promise<
+        MimoraIpcResult<RagImportResult>
+      >
+    ).then(unwrapIpcResult),
+  deleteRagDocument: (ragDocumentId: string) =>
+    (
+      ipcRenderer.invoke('rag:deleteDocument', ragDocumentId) as Promise<
+        MimoraIpcResult<RagDeleteResult>
+      >
+    ).then(unwrapIpcResult),
+  replaceRagDocument: (input: RagReplaceInput) =>
+    (
+      ipcRenderer.invoke('rag:replaceDocument', input) as Promise<
+        MimoraIpcResult<RagReplaceResult>
+      >
+    ).then(unwrapIpcResult),
+  indexRagDocument: (input: RagIndexInput) =>
+    (
+      ipcRenderer.invoke('rag:indexDocument', input) as Promise<
+        MimoraIpcResult<RagIndexResult>
+      >
+    ).then(unwrapIpcResult),
+  searchRagDocuments: (input: RagSearchInput) =>
+    (
+      ipcRenderer.invoke('rag:search', input) as Promise<
+        MimoraIpcResult<RagSearchResult[]>
+      >
+    ).then(unwrapIpcResult),
+  checkRagEmbeddingStatus: (input: RagEmbeddingStatusInput) =>
+    (
+      ipcRenderer.invoke('rag:checkEmbeddingStatus', input) as Promise<
+        MimoraIpcResult<RagEmbeddingStatus>
+      >
+    ).then(unwrapIpcResult),
+  getScheduleStorageRoot: () =>
+    (
+      ipcRenderer.invoke('schedule:getStorageRoot') as Promise<
+        MimoraIpcResult<string>
+      >
+    ).then(unwrapIpcResult),
+  selectScheduleSourceFile: () =>
+    ipcRenderer.invoke(
+      'schedule:selectSourceFile',
+    ) as Promise<ScheduleFileSelection | null>,
+  registerScheduleSource: (input: ScheduleRegisterInput) =>
+    (
+      ipcRenderer.invoke('schedule:registerSource', input) as Promise<
+        MimoraIpcResult<ScheduleSource>
+      >
+    ).then(unwrapIpcResult),
+  getScheduleSource: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke('schedule:getSource', workspaceId) as Promise<
+        MimoraIpcResult<ScheduleSource | null>
+      >
+    ).then(unwrapIpcResult),
+  removeScheduleSource: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke('schedule:removeSource', workspaceId) as Promise<
+        MimoraIpcResult<ScheduleRemoveResult>
+      >
+    ).then(unwrapIpcResult),
+  refreshSchedule: (
+    workspaceId: string,
+    options?: ScheduleRefreshOptions,
+  ) =>
+    (
+      ipcRenderer.invoke('schedule:refresh', workspaceId, options) as Promise<
+        MimoraIpcResult<ScheduleParseResult>
+      >
+    ).then(unwrapIpcResult),
+  getScheduleSummary: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke('schedule:getSummary', workspaceId) as Promise<
+        MimoraIpcResult<ScheduleSummary>
+      >
+    ).then(unwrapIpcResult),
+  querySchedule: (input: ScheduleQueryInput) =>
+    (
+      ipcRenderer.invoke('schedule:query', input) as Promise<
+        MimoraIpcResult<ScheduleQueryResult>
       >
     ).then(unwrapIpcResult),
   addMaskingEntry: (input: AddMaskingEntryInput) =>

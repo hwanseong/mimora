@@ -111,6 +111,13 @@ function sanitizeDocumentMetadata(
     workspaceIds: sanitizeStringArray(value.workspaceIds),
     knowledgeDomains: sanitizeStringArray(value.knowledgeDomains),
     knowledgeTypes: sanitizeStringArray(value.knowledgeTypes),
+    source:
+      value.source === 'frontmatter' ||
+      value.source === 'legacy' ||
+      value.source === 'mixed' ||
+      value.source === 'none'
+        ? value.source
+        : 'none',
   };
 
   if (typeof value.documentId === 'string') {
@@ -131,7 +138,11 @@ function sanitizeDocumentMetadata(
     metadata.rawKnowledgeTypes = sanitizeStringArray(value.rawKnowledgeTypes);
   }
 
-  if (value.security === 'normal' || value.security === 'private') {
+  if (
+    value.security === 'normal' ||
+    value.security === 'private' ||
+    value.security === 'internal'
+  ) {
     metadata.security = value.security;
   }
 
@@ -164,7 +175,9 @@ function sanitizeSources(value: unknown): LLMContextSource[] | undefined {
     } = source;
     const sanitizedMetadata = sanitizeDocumentMetadata(metadata);
     const sanitizedDocumentSecurity: DocumentSecurity | undefined =
-      documentSecurity === 'normal' || documentSecurity === 'private'
+      documentSecurity === 'normal' ||
+      documentSecurity === 'private' ||
+      documentSecurity === 'internal'
         ? documentSecurity
         : sanitizedMetadata?.security;
 

@@ -48,6 +48,12 @@ import {
   type RegistrySettings,
 } from '../src/registry/types';
 import { isContentOriginSearchScope } from '../src/contentOrigin';
+import {
+  defaultRagSettings,
+  ragEmbeddingProviderOptions,
+  type RagEmbeddingProvider,
+  type RagSettings,
+} from '../src/rag';
 
 type LegacyVaultSettings = {
   workVaultPath?: unknown;
@@ -68,6 +74,7 @@ function cloneSettings(settings: MimoraSettings): MimoraSettings {
     search: { ...settings.search },
     localAI: { ...settings.localAI },
     externalAI: { ...settings.externalAI },
+    rag: { ...settings.rag },
     aiMode: settings.aiMode,
     masking: {
       entries: settings.masking.entries.map((entry) => ({ ...entry })),
@@ -525,6 +532,157 @@ function validateExternalAISettings(value: unknown): ExternalAISettings {
   return parsedSettings;
 }
 
+function isRagEmbeddingProvider(value: unknown): value is RagEmbeddingProvider {
+  return (
+    typeof value === 'string' &&
+    ragEmbeddingProviderOptions.includes(value as RagEmbeddingProvider)
+  );
+}
+
+function normalizePositiveInteger(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function normalizeFiniteNumber(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, value));
+}
+
+function parseRagSettings(value: unknown): {
+  rag: RagSettings;
+  migrated: boolean;
+} {
+  if (typeof value !== 'object' || value === null) {
+    return {
+      rag: { ...defaultRagSettings },
+      migrated: true,
+    };
+  }
+
+  const rawSettings = value as Partial<RagSettings>;
+  const embeddingProvider = isRagEmbeddingProvider(rawSettings.embeddingProvider)
+    ? rawSettings.embeddingProvider
+    : defaultRagSettings.embeddingProvider;
+  const localEmbeddingModel =
+    typeof rawSettings.localEmbeddingModel === 'string' &&
+    rawSettings.localEmbeddingModel.trim()
+      ? rawSettings.localEmbeddingModel.trim()
+      : defaultRagSettings.localEmbeddingModel;
+  const openAIEmbeddingModel =
+    typeof rawSettings.openAIEmbeddingModel === 'string' &&
+    rawSettings.openAIEmbeddingModel.trim()
+      ? rawSettings.openAIEmbeddingModel.trim()
+      : defaultRagSettings.openAIEmbeddingModel;
+  const chunkSize = normalizePositiveInteger(
+    rawSettings.chunkSize,
+    defaultRagSettings.chunkSize,
+    1000,
+    12000,
+  );
+  const chunkOverlap = Math.min(
+    normalizePositiveInteger(
+      rawSettings.chunkOverlap,
+      defaultRagSettings.chunkOverlap,
+      0,
+      3000,
+    ),
+    Math.max(0, chunkSize - 1),
+  );
+  const similarityThreshold = normalizeFiniteNumber(
+    rawSettings.similarityThreshold,
+    defaultRagSettings.similarityThreshold,
+    -1,
+    1,
+  );
+  const workspaceScoreBonus = normalizeFiniteNumber(
+    rawSettings.workspaceScoreBonus,
+    defaultRagSettings.workspaceScoreBonus,
+    0,
+    0.2,
+  );
+  const maxChunksPerDocument = normalizePositiveInteger(
+    rawSettings.maxChunksPerDocument,
+    defaultRagSettings.maxChunksPerDocument,
+    1,
+    10,
+  );
+  const searchCandidateCount = normalizePositiveInteger(
+    rawSettings.searchCandidateCount,
+    defaultRagSettings.searchCandidateCount,
+    10,
+    200,
+  );
+  const defaultTopK = normalizePositiveInteger(
+    rawSettings.defaultTopK,
+    defaultRagSettings.defaultTopK,
+    1,
+    20,
+  );
+  const denseOnlyThreshold = normalizeFiniteNumber(
+    rawSettings.denseOnlyThreshold,
+    defaultRagSettings.denseOnlyThreshold,
+    -1,
+    1,
+  );
+
+  return {
+    rag: {
+      embeddingProvider,
+      localEmbeddingModel,
+      openAIEmbeddingModel,
+      chunkSize,
+      chunkOverlap,
+      similarityThreshold,
+      workspaceScoreBonus,
+      maxChunksPerDocument,
+      searchCandidateCount,
+      defaultTopK,
+      denseOnlyThreshold,
+    },
+    migrated:
+      rawSettings.embeddingProvider !== embeddingProvider ||
+      rawSettings.localEmbeddingModel !== localEmbeddingModel ||
+      rawSettings.openAIEmbeddingModel !== openAIEmbeddingModel ||
+      rawSettings.chunkSize !== chunkSize ||
+      rawSettings.chunkOverlap !== chunkOverlap ||
+      rawSettings.similarityThreshold !== similarityThreshold ||
+      rawSettings.workspaceScoreBonus !== workspaceScoreBonus ||
+      rawSettings.maxChunksPerDocument !== maxChunksPerDocument ||
+      rawSettings.searchCandidateCount !== searchCandidateCount ||
+      rawSettings.defaultTopK !== defaultTopK ||
+      rawSettings.denseOnlyThreshold !== denseOnlyThreshold,
+  };
+}
+
+function validateRagSettings(value: unknown): RagSettings {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !isRagEmbeddingProvider((value as Partial<RagSettings>).embeddingProvider)
+  ) {
+    throw new Error('지원하지 않는 RAG Embedding Provider입니다.');
+  }
+
+  return parseRagSettings(value).rag;
+}
+
 function isVaultType(value: unknown): value is VaultType {
   return (
     typeof value === 'string' &&
@@ -666,6 +824,7 @@ function migrateLegacySettings(
     search: { ...defaultSettings.search },
     localAI: { ...defaultLocalAISettings },
     externalAI: { ...defaultExternalAISettings },
+    rag: { ...defaultRagSettings },
     aiMode: 'auto',
     masking: createDefaultMaskingSettings(),
     secretDetection: createDefaultSecretDetectionSettings(),
@@ -717,6 +876,9 @@ function parseSettings(
     const externalAI = parseExternalAISettings(
       (parsedSettings as Partial<MimoraSettings>).externalAI,
     );
+    const parsedRag = parseRagSettings(
+      (parsedSettings as Partial<MimoraSettings>).rag,
+    );
     const aiMode = isAIMode(
       (parsedSettings as Partial<MimoraSettings>).aiMode,
     )
@@ -736,6 +898,7 @@ function parseSettings(
         search: parsedSearch.search,
         localAI: localAI ?? { ...defaultLocalAISettings },
         externalAI: externalAI ?? { ...defaultExternalAISettings },
+        rag: parsedRag.rag,
         aiMode,
         masking: parsedMasking.masking,
         secretDetection: parsedSecretDetection.secretDetection,
@@ -743,6 +906,7 @@ function parseSettings(
       migrated:
         localAI === null ||
         externalAI === null ||
+        parsedRag.migrated ||
         parsedRegistry.migrated ||
         parsedSearch.migrated ||
         !isAIMode((parsedSettings as Partial<MimoraSettings>).aiMode) ||
@@ -967,6 +1131,17 @@ export function createSettingsStore({
         return persistSettings({
           ...settings,
           externalAI,
+        });
+      }),
+
+    updateRagSettings: (input: unknown) =>
+      runExclusive(async () => {
+        const settings = await loadSettings();
+        const rag = validateRagSettings(input);
+
+        return persistSettings({
+          ...settings,
+          rag,
         });
       }),
 

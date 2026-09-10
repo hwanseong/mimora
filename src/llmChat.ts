@@ -46,6 +46,9 @@ export type LocalAIExecutionMetrics = {
   queryChars: number;
   manualContextCount: number;
   autoContextCount: number;
+  ragContextCount?: number;
+  ragRetrievalMs?: number;
+  ragRetrievalError?: string;
   documentCount: number;
   deduplicatedDocumentCount: number;
   rawContextChars: number;
@@ -67,6 +70,7 @@ export type LocalAIPerformanceMetrics = LocalAIExecutionMetrics & {
 };
 
 export type LLMContextDocument = {
+  sourceType?: 'vault' | 'rag' | 'schedule';
   vaultId: string;
   vaultName: string;
   vaultType: VaultType;
@@ -75,6 +79,9 @@ export type LLMContextDocument = {
   relativePath: string;
   fileName: string;
   metadata?: MimoraDocumentMetadata;
+  ragDocumentId?: string;
+  page?: number | null;
+  heading?: string | null;
   relevanceScore?: number;
   snippet?: string;
   content: string;
@@ -89,6 +96,7 @@ export type LLMChatDiagnostics = {
   queryChars: number;
   manualDocumentCount: number;
   autoDocumentCount: number;
+  ragDocumentCount: number;
   deduplicatedDocumentCount: number;
   deliveredDocumentCount: number;
   manualRawChars: number;

@@ -7,6 +7,7 @@ import {
   shell,
 } from 'electron';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type {
   ConnectionTestResult,
@@ -69,11 +70,49 @@ import type {
   SaveDerivedKnowledgeInput,
   SaveDerivedKnowledgeResult,
 } from '../src/derivedKnowledge';
+import type {
+  RagDeleteResult,
+  RagDocument,
+  RagFileSelection,
+  RagEmbeddingStatus,
+  RagEmbeddingStatusInput,
+  RagIndexInput,
+  RagIndexResult,
+  RagImportInput,
+  RagImportResult,
+  RagPythonStatus,
+  RagReplaceInput,
+  RagReplaceResult,
+  RagSearchInput,
+  RagSearchResult,
+  RagSettings,
+} from '../src/rag';
+import type {
+  ScheduleFileSelection,
+  ScheduleParseResult,
+  ScheduleQueryInput,
+  ScheduleQueryResult,
+  ScheduleRegisterInput,
+  ScheduleRemoveResult,
+  ScheduleRefreshOptions,
+  ScheduleSource,
+  ScheduleSummary,
+} from '../src/schedule';
 import { createChatHistoryStore } from './chatHistoryStore';
 import { createSettingsStore } from './settingsStore';
 import { createRegistryStatusService } from './registryStatus';
 import { createVaultFilesService } from './vaultFiles';
 import { createDerivedKnowledgeService } from './derivedKnowledgeService';
+import {
+  createRagFileSelection,
+  createRagService,
+  ragFileDialogFilters,
+} from './ragService';
+import {
+  createScheduleFileSelection,
+  createScheduleService,
+  scheduleFileDialogFilters,
+} from './scheduleService';
 import { createLLMProvider } from './llm/createLLMProvider';
 import { OpenAIProvider } from './llm/OpenAIProvider';
 import { buildLocalAIChatRequest } from './llm/promptBuilder';
@@ -123,6 +162,24 @@ const workspaceInsightStore = createWorkspaceInsightStore({
     path.join(app.getPath('userData'), workspaceInsightFileName),
   safeStorage,
 });
+const ragService = createRagService({
+  getUserDataPath: () => app.getPath('userData'),
+  getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
+  getOpenAIApiKey: () => openAICredentialStore.readApiKeyForMainProcess(),
+  getRagSettings: async () => {
+    const settings = await settingsStore.getSettings();
+    return {
+      rag: settings.rag,
+      ollamaBaseUrl: settings.localAI.endpoint,
+    };
+  },
+});
+const pendingRagFileSelections = new Map<string, string>();
+const scheduleService = createScheduleService({
+  getUserDataPath: () => app.getPath('userData'),
+  getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
+});
+const pendingScheduleFileSelections = new Map<string, string>();
 const derivedKnowledgeService = createDerivedKnowledgeService(settingsStore);
 const registryStatusService = createRegistryStatusService(settingsStore, {
   getCachePath: getRegistryCachePath,
@@ -263,6 +320,15 @@ function registerSettingsHandlers(): void {
   );
 
   ipcMain.handle(
+    'settings:updateRag',
+    async (
+      _event,
+      input: unknown,
+    ): Promise<MimoraIpcResult<MimoraSettings>> =>
+      toIpcResult(() => settingsStore.updateRagSettings(input)),
+  );
+
+  ipcMain.handle(
     'settings:updateAIMode',
     async (
       _event,
@@ -388,6 +454,268 @@ function registerRegistryHandlers(): void {
     'registry:loadKnowledgeTypes',
     async (): Promise<MimoraIpcResult<KnowledgeTypeRegistryParseResult>> =>
       toIpcResult(() => registryStatusService.loadKnowledgeTypeRegistry()),
+  );
+}
+
+function registerRagHandlers(): void {
+  function createPendingRagFileSelection(filePath: string): RagFileSelection {
+    const selectionId = randomUUID();
+
+    pendingRagFileSelections.set(selectionId, filePath);
+
+    return createRagFileSelection(selectionId, filePath);
+  }
+
+  function resolvePendingRagSourcePath(input: RagImportInput | RagReplaceInput): string {
+    if (input.selectionId) {
+      const selectedPath = pendingRagFileSelections.get(input.selectionId);
+
+      if (!selectedPath) {
+        throw new Error('Selected RAG document is no longer available.');
+      }
+
+      return selectedPath;
+    }
+
+    if (input.sourcePath) {
+      return input.sourcePath;
+    }
+
+    throw new Error('RAG source file was not selected.');
+  }
+
+  ipcMain.handle(
+    'rag:getPythonStatus',
+    async (): Promise<MimoraIpcResult<RagPythonStatus>> =>
+      toIpcResult(() => ragService.getPythonStatus()),
+  );
+
+  ipcMain.handle(
+    'rag:getStorageRoot',
+    async (): Promise<MimoraIpcResult<string>> =>
+      toIpcResult(async () => ragService.getStorageRoot()),
+  );
+
+  ipcMain.handle(
+    'rag:selectDocumentFile',
+    async (): Promise<RagFileSelection | null> => {
+      const result = await dialog.showOpenDialog({
+        filters: ragFileDialogFilters,
+        properties: ['openFile'],
+        title: 'RAG Document 선택',
+      });
+
+      if (result.canceled || !result.filePaths[0]) {
+        return null;
+      }
+
+      return createPendingRagFileSelection(result.filePaths[0]);
+    },
+  );
+
+  ipcMain.handle(
+    'rag:listDocuments',
+    async (): Promise<MimoraIpcResult<RagDocument[]>> =>
+      toIpcResult(() => ragService.listDocuments()),
+  );
+
+  ipcMain.handle(
+    'rag:importDocument',
+    async (
+      _event,
+      input: RagImportInput,
+    ): Promise<MimoraIpcResult<RagImportResult>> =>
+      toIpcResult(async () => {
+        const sourcePath = resolvePendingRagSourcePath(input);
+        const result = await ragService.importDocument({
+          sourcePath,
+          workspaceIds: input.workspaceIds,
+          security: input.security,
+        });
+
+        if (input.selectionId) {
+          pendingRagFileSelections.delete(input.selectionId);
+        }
+
+        return result;
+      }),
+  );
+
+  ipcMain.handle(
+    'rag:deleteDocument',
+    async (
+      _event,
+      ragDocumentId: string,
+    ): Promise<MimoraIpcResult<RagDeleteResult>> =>
+      toIpcResult(() => ragService.deleteDocument(ragDocumentId)),
+  );
+
+  ipcMain.handle(
+    'rag:replaceDocument',
+    async (
+      _event,
+      input: RagReplaceInput,
+    ): Promise<MimoraIpcResult<RagReplaceResult>> =>
+      toIpcResult(async () => {
+        const sourcePath = resolvePendingRagSourcePath(input);
+        const result = await ragService.replaceDocument({
+          ragDocumentId: input.ragDocumentId,
+          sourcePath,
+        });
+
+        if (input.selectionId) {
+          pendingRagFileSelections.delete(input.selectionId);
+        }
+
+        return result;
+      }),
+  );
+
+  ipcMain.handle(
+    'rag:indexDocument',
+    async (
+      _event,
+      input: RagIndexInput,
+    ): Promise<MimoraIpcResult<RagIndexResult>> =>
+      toIpcResult(() => ragService.indexDocument(input)),
+  );
+
+  ipcMain.handle(
+    'rag:search',
+    async (
+      _event,
+      input: RagSearchInput,
+    ): Promise<MimoraIpcResult<RagSearchResult[]>> =>
+      toIpcResult(() => ragService.search(input)),
+  );
+
+  ipcMain.handle(
+    'rag:checkEmbeddingStatus',
+    async (
+      _event,
+      input: RagEmbeddingStatusInput,
+    ): Promise<MimoraIpcResult<RagEmbeddingStatus>> =>
+      toIpcResult(() => ragService.checkEmbeddingStatus(input)),
+  );
+}
+
+function registerScheduleHandlers(): void {
+  function createPendingScheduleFileSelection(filePath: string): ScheduleFileSelection {
+    const selectionId = randomUUID();
+
+    pendingScheduleFileSelections.set(selectionId, filePath);
+
+    return createScheduleFileSelection(selectionId, filePath);
+  }
+
+  function resolvePendingScheduleSourcePath(
+    input: ScheduleRegisterInput,
+  ): string {
+    if (input.selectionId) {
+      const selectedPath = pendingScheduleFileSelections.get(input.selectionId);
+
+      if (!selectedPath) {
+        throw new Error('Selected Schedule file is no longer available.');
+      }
+
+      return selectedPath;
+    }
+
+    if (input.sourcePath) {
+      return input.sourcePath;
+    }
+
+    throw new Error('Schedule source file was not selected.');
+  }
+
+  ipcMain.handle(
+    'schedule:getStorageRoot',
+    async (): Promise<MimoraIpcResult<string>> =>
+      toIpcResult(() => scheduleService.getScheduleRoot()),
+  );
+
+  ipcMain.handle(
+    'schedule:selectSourceFile',
+    async (): Promise<ScheduleFileSelection | null> => {
+      const result = await dialog.showOpenDialog({
+        filters: scheduleFileDialogFilters,
+        properties: ['openFile'],
+        title: 'Schedule Excel 선택',
+      });
+
+      if (result.canceled || !result.filePaths[0]) {
+        return null;
+      }
+
+      return createPendingScheduleFileSelection(result.filePaths[0]);
+    },
+  );
+
+  ipcMain.handle(
+    'schedule:registerSource',
+    async (
+      _event,
+      input: ScheduleRegisterInput,
+    ): Promise<MimoraIpcResult<ScheduleSource>> =>
+      toIpcResult(async () => {
+        const sourcePath = resolvePendingScheduleSourcePath(input);
+        const source = await scheduleService.registerSource({
+          workspaceId: input.workspaceId,
+          sourcePath,
+        });
+
+        if (input.selectionId) {
+          pendingScheduleFileSelections.delete(input.selectionId);
+        }
+
+        return source;
+      }),
+  );
+
+  ipcMain.handle(
+    'schedule:getSource',
+    async (
+      _event,
+      workspaceId: string,
+    ): Promise<MimoraIpcResult<ScheduleSource | null>> =>
+      toIpcResult(() => scheduleService.getSource(workspaceId)),
+  );
+
+  ipcMain.handle(
+    'schedule:removeSource',
+    async (
+      _event,
+      workspaceId: string,
+    ): Promise<MimoraIpcResult<ScheduleRemoveResult>> =>
+      toIpcResult(() => scheduleService.removeSource(workspaceId)),
+  );
+
+  ipcMain.handle(
+    'schedule:refresh',
+    async (
+      _event,
+      workspaceId: string,
+      options?: ScheduleRefreshOptions,
+    ): Promise<MimoraIpcResult<ScheduleParseResult>> =>
+      toIpcResult(() => scheduleService.refresh(workspaceId, options)),
+  );
+
+  ipcMain.handle(
+    'schedule:getSummary',
+    async (
+      _event,
+      workspaceId: string,
+    ): Promise<MimoraIpcResult<ScheduleSummary>> =>
+      toIpcResult(() => scheduleService.getSummary(workspaceId)),
+  );
+
+  ipcMain.handle(
+    'schedule:query',
+    async (
+      _event,
+      input: ScheduleQueryInput,
+    ): Promise<MimoraIpcResult<ScheduleQueryResult>> =>
+      toIpcResult(() => scheduleService.query(input)),
   );
 }
 
@@ -665,7 +993,8 @@ function isExternalDocumentMetadata(
     ['internal', 'sensitive', 'personal'].includes(document.security ?? '') &&
     (document.documentSecurity === undefined ||
       document.documentSecurity === 'normal' ||
-      document.documentSecurity === 'private') &&
+      document.documentSecurity === 'private' ||
+      document.documentSecurity === 'internal') &&
     typeof document.relativePath === 'string' &&
     typeof document.fileName === 'string' &&
     (document.metadata === undefined ||
@@ -886,6 +1215,7 @@ function registerLocalAIHandlers(): void {
               queryChars: diagnostics.queryChars,
               manualContextCount: diagnostics.manualDocumentCount,
               autoContextCount: diagnostics.autoDocumentCount,
+              ragContextCount: diagnostics.ragDocumentCount,
               documentCount: diagnostics.deliveredDocumentCount,
               deduplicatedDocumentCount:
                 diagnostics.deduplicatedDocumentCount,
@@ -1011,6 +1341,8 @@ function createMainWindow(): void {
 
 registerSettingsHandlers();
 registerRegistryHandlers();
+registerRagHandlers();
+registerScheduleHandlers();
 registerChatHistoryHandlers();
 registerWorkspaceInsightHandlers();
 registerVaultFileHandlers();

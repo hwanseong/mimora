@@ -163,12 +163,8 @@ function renderWorkspaceSummary(model: WorkspaceStatusPanelModel) {
           <strong>{model.portfolio.projects}</strong>
           <span>Operations</span>
           <strong>{model.portfolio.operations}</strong>
-          <span>Planned</span>
-          <strong>{model.portfolio.planned}</strong>
           <span>Active</span>
           <strong>{model.portfolio.active}</strong>
-          <span>On Hold</span>
-          <strong>{model.portfolio.onHold}</strong>
           <span>Closed</span>
           <strong>{model.portfolio.closed}</strong>
         </div>

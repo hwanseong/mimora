@@ -12,6 +12,8 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
       <strong>Sources</strong>
       <ul>
         {sources.map((source) => {
+          const isRagSource = source.sourceType === 'rag';
+          const isScheduleSource = source.sourceType === 'schedule';
           const isProtected =
             source.vaultType === 'private' ||
             source.security === 'sensitive';
@@ -23,13 +25,34 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
 
           return (
             <li
-              key={JSON.stringify([source.vaultId, source.relativePath])}
+              key={JSON.stringify([
+                source.vaultId,
+                source.relativePath,
+                source.ragDocumentId ?? '',
+                source.page ?? '',
+                source.heading ?? '',
+              ])}
               title={`${source.relativePath} · ${vaultSecurityLabels[source.security]}`}
             >
               <span>{source.fileName}</span>
+              {isRagSource ? (
+                <span className="document-id-source-badge">RAG</span>
+              ) : null}
+              {isScheduleSource ? (
+                <span className="document-id-source-badge">Schedule</span>
+              ) : null}
+              {source.ragDocumentId ? (
+                <span className="document-id-source-badge">
+                  {source.ragDocumentId}
+                </span>
+              ) : null}
               {documentId ? (
                 <span className="document-id-source-badge">{documentId}</span>
               ) : null}
+              {source.page !== undefined && source.page !== null ? (
+                <span> · p.{source.page}</span>
+              ) : null}
+              {source.heading ? <span> · {source.heading}</span> : null}
               <span> · {source.vaultName}</span>
               {isAiDerived ? (
                 <span className="ai-derived-source-badge">AI Wiki</span>

@@ -1,6 +1,7 @@
 import {
   workspaceIdPattern,
   workspaceStatusOptions,
+  workspaceTypeOptions,
   type Workspace,
   type WorkspaceStatus,
 } from '../workspace/types';
@@ -18,6 +19,12 @@ function createIssue(
 
 function isWorkspaceStatus(value: string): value is WorkspaceStatus {
   return workspaceStatusOptions.includes(value as WorkspaceStatus);
+}
+
+function isWorkspaceType(value: string): boolean {
+  return workspaceTypeOptions.includes(
+    value as (typeof workspaceTypeOptions)[number],
+  );
 }
 
 function validateDate(value: string): boolean {
@@ -140,6 +147,19 @@ export function validateWorkspaceRegistry({
           row: row.rowNumber,
           workspaceId: row.id || undefined,
           field: 'status',
+        }),
+      );
+    }
+
+    if (row.type.trim() && !isWorkspaceType(row.type)) {
+      rowIssues.push(
+        createIssue({
+          severity: 'error',
+          code: 'invalid-workspace-type',
+          message: 'Workspace type must be project or operation.',
+          row: row.rowNumber,
+          workspaceId: row.id || undefined,
+          field: 'type',
         }),
       );
     }

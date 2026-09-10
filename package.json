@@ -1,5 +1,6 @@
 {
   "name": "mimora",
+  "productName": "Mimora",
   "version": "0.1.0",
   "private": true,
   "description": "AI Project Intelligence for PMs",
@@ -10,7 +11,47 @@
     "typecheck": "tsc --noEmit",
     "build:electron": "vite build --config vite.electron.config.ts",
     "build:renderer": "vite build",
-    "build": "npm run typecheck && npm run build:electron && npm run build:renderer"
+    "build": "npm run typecheck && npm run build:electron && npm run build:renderer",
+    "package:win": "npm run build && electron-builder --win nsis --publish never"
+  },
+  "build": {
+    "appId": "com.mimora.app",
+    "productName": "Mimora",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "python/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "python",
+        "to": "python"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mimora"
+    }
   },
   "dependencies": {
     "openai": "^7.10.0",
@@ -25,6 +66,7 @@
     "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.1.1",
     "electron": "^44.1.1",
+    "electron-builder": "^26.15.3",
     "typescript": "^7.0.2",
     "vite": "^8.2.2"
   }

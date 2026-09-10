@@ -18,6 +18,7 @@ import {
   type AttachedContext,
   type WorkspaceContexts,
 } from './attachedContext';
+import { removeInternalContextIdentifiers } from './chatCitationCleanup';
 import {
   RECENT_HISTORY_MESSAGE_LIMIT,
   type LLMChatMessage,
@@ -63,6 +64,7 @@ import {
   type DerivedKnowledgeSource,
 } from './derivedKnowledge';
 import { parseMimoraDocumentMetadata } from './metadata/mimoraMetadataParser';
+import type { DocumentSecurity } from './metadata/types';
 import type { KnowledgeDomainRegistry } from './registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeTypeRegistry } from './registry/knowledgeTypeRegistryTypes';
 import type { ContentOriginSearchScope } from './contentOrigin';
@@ -97,6 +99,13 @@ import type {
   ExternalAIPerformanceMetrics,
   ExternalAIChatResult,
 } from './externalAI';
+import type { RagDocumentSecurity, RagSearchResult } from './rag';
+import type { ScheduleQueryResult } from './schedule';
+
+const RAG_CHAT_SEARCH_TOP_K = 5;
+const RAG_CHAT_CONTEXT_LIMIT = 4;
+const RAG_CONTEXT_SNIPPET_MAX_CHARS = 320;
+const SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS = 320;
 
 type PendingExternalRequest = {
   sessionId: ChatSession['sessionId'];
@@ -112,6 +121,8 @@ type PendingExternalRequest = {
   responseUnmaskingSnapshot: ResponseUnmaskingSnapshotEntry[];
   routingDecision: RoutingDecision;
   retrievalMs: number;
+  ragRetrievalMs?: number;
+  ragRetrievalError?: string;
   inFlight: boolean;
 };
 
@@ -598,7 +609,7 @@ export function App() {
   function toDerivedSourceSecurity(input: {
     vaultType: VaultType;
     vaultSecurity: VaultSecurity;
-    documentSecurity?: 'normal' | 'private';
+    documentSecurity?: DocumentSecurity;
   }): 'normal' | 'private' {
     return input.documentSecurity === 'private' ||
       input.vaultType === 'private' ||
@@ -629,6 +640,216 @@ export function App() {
       knowledgeDomainRegistry: getKnowledgeDomainRegistryForDraft(),
       knowledgeTypeRegistry: getKnowledgeTypeRegistryForDraft(),
     }).metadata;
+  }
+
+  function getRagVaultSecurity(
+    security: RagDocumentSecurity,
+  ): VaultSecurity {
+    return security === 'personal' ? 'personal' : 'sensitive';
+  }
+
+  function getRagDocumentSecurity(
+    security: RagDocumentSecurity,
+  ): DocumentSecurity | undefined {
+    if (security === 'private') {
+      return 'private';
+    }
+
+    return security === 'internal' ? 'internal' : undefined;
+  }
+
+  function createRagContextDocumentKey(context: AutoRetrievedContext): string {
+    if (context.sourceType === 'rag') {
+      return JSON.stringify([
+        'rag',
+        context.ragDocumentId ?? context.relativePath,
+        context.documentId,
+        context.heading ?? '',
+        context.page ?? '',
+      ]);
+    }
+
+    return JSON.stringify([context.vaultId, context.relativePath]);
+  }
+
+  function toRagAutoContext(result: RagSearchResult): AutoRetrievedContext {
+    const documentSecurity = getRagDocumentSecurity(result.security);
+
+    return {
+      sourceType: 'rag',
+      documentId: result.chunkId,
+      ragDocumentId: result.ragDocumentId,
+      workspaceIds: result.workspaceIds,
+      originWorkspaceId: result.workspaceIds[0] ?? null,
+      ...(documentSecurity ? { documentSecurity } : {}),
+      vaultId: 'rag-library',
+      vaultName: 'RAG Library',
+      vaultType: 'knowledge',
+      security: getRagVaultSecurity(result.security),
+      relativePath: `rag://${result.ragDocumentId}/${result.chunkId}`,
+      fileName: result.filename,
+      score: result.adjustedScore ?? result.score,
+      snippet: result.text.slice(0, RAG_CONTEXT_SNIPPET_MAX_CHARS),
+      content: result.text,
+      page: result.page,
+      heading: result.heading,
+    };
+  }
+
+  async function retrieveRagChatContext(input: {
+    query: string;
+    workspaceId: Workspace['id'];
+    workspaceType: Workspace['type'];
+  }): Promise<{
+    contexts: AutoRetrievedContext[];
+    elapsedMs: number;
+    error?: string;
+  }> {
+    const startedTime = performance.now();
+    const workspaceIds = isAllWorkspaceScope(input.workspaceId)
+      ? []
+      : [input.workspaceId];
+    const security: RagDocumentSecurity =
+      input.workspaceType === 'private' ? 'private' : 'internal';
+
+    try {
+      const results = await window.mimora.searchRagDocuments({
+        query: input.query,
+        workspaceIds,
+        includeGlobal: true,
+        security,
+        topK: RAG_CHAT_SEARCH_TOP_K,
+      });
+      const contexts = results
+        .slice(0, RAG_CHAT_CONTEXT_LIMIT)
+        .map(toRagAutoContext);
+
+      console.info('[Mimora RAG Chat Retrieval]', {
+        queryChars: input.query.length,
+        workspaceScope: workspaceIds.length > 0 ? workspaceIds : ['global'],
+        hitCount: results.length,
+        selectedContextCount: contexts.length,
+        ragDocumentIds: [
+          ...new Set(contexts.map((context) => context.ragDocumentId)),
+        ],
+      });
+
+      return {
+        contexts,
+        elapsedMs: performance.now() - startedTime,
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'RAG context retrieval failed.';
+
+      console.warn('[Mimora RAG Chat Retrieval] Failed.', {
+        queryChars: input.query.length,
+        workspaceScope: workspaceIds.length > 0 ? workspaceIds : ['global'],
+        error: errorMessage,
+      });
+
+      return {
+        contexts: [],
+        elapsedMs: performance.now() - startedTime,
+        error: errorMessage,
+      };
+    }
+  }
+
+  function isScheduleQuestion(query: string): boolean {
+    return /일정|진척|진도|지연|지체|착수|완료\s*예정|종료\s*예정|wbs|담당자|담당|작업|schedule|progress|delay|delayed|task|resource/iu.test(
+      query,
+    );
+  }
+
+  function toScheduleAutoContext(
+    result: ScheduleQueryResult,
+  ): AutoRetrievedContext {
+    return {
+      sourceType: 'schedule',
+      documentId: `schedule:${result.workspaceId}`,
+      workspaceIds: [result.workspaceId],
+      originWorkspaceId: result.workspaceId,
+      documentSecurity: 'internal',
+      vaultId: 'schedule-intelligence',
+      vaultName: 'Schedule Intelligence',
+      vaultType: 'knowledge',
+      security: 'sensitive',
+      relativePath: `schedule://${result.workspaceId}/${result.filename}`,
+      fileName: result.filename,
+      score: 1,
+      snippet: result.contextText.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
+      content: result.contextText,
+      heading: `Last parsed: ${result.lastParsedAt}`,
+    };
+  }
+
+  async function retrieveScheduleChatContext(input: {
+    query: string;
+    workspaceId: Workspace['id'];
+  }): Promise<{
+    contexts: AutoRetrievedContext[];
+    elapsedMs: number;
+    error?: string;
+  }> {
+    const startedTime = performance.now();
+
+    if (isAllWorkspaceScope(input.workspaceId) || !isScheduleQuestion(input.query)) {
+      return {
+        contexts: [],
+        elapsedMs: performance.now() - startedTime,
+      };
+    }
+
+    try {
+      const source = await window.mimora.getScheduleSource(input.workspaceId);
+
+      if (!source) {
+        return {
+          contexts: [],
+          elapsedMs: performance.now() - startedTime,
+        };
+      }
+
+      const result = await window.mimora.querySchedule({
+        workspaceId: input.workspaceId,
+        query: input.query,
+      });
+      const context = toScheduleAutoContext(result);
+
+      console.info('[Mimora Schedule Chat Retrieval]', {
+        queryChars: input.query.length,
+        workspaceId: input.workspaceId,
+        source: result.filename,
+        kind: result.kind,
+        selectedTaskCount: result.tasks.length,
+        lastParsedAt: result.lastParsedAt,
+      });
+
+      return {
+        contexts: [context],
+        elapsedMs: performance.now() - startedTime,
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'Schedule context retrieval failed.';
+
+      console.warn('[Mimora Schedule Chat Retrieval] Failed.', {
+        queryChars: input.query.length,
+        workspaceId: input.workspaceId,
+        error: errorMessage,
+      });
+
+      return {
+        contexts: [],
+        elapsedMs: performance.now() - startedTime,
+        error: errorMessage,
+      };
+    }
   }
 
   function createDerivedSources(
@@ -1319,6 +1540,9 @@ export function App() {
     context: AttachedContext | AutoRetrievedContext,
   ): LLMContextDocument {
     return {
+      ...('sourceType' in context && context.sourceType
+        ? { sourceType: context.sourceType }
+        : {}),
       vaultId: context.vaultId,
       vaultName: context.vaultName,
       vaultType: context.vaultType,
@@ -1332,6 +1556,11 @@ export function App() {
       ...('metadata' in context && context.metadata
         ? { metadata: context.metadata }
         : {}),
+      ...('ragDocumentId' in context && context.ragDocumentId
+        ? { ragDocumentId: context.ragDocumentId }
+        : {}),
+      ...('page' in context ? { page: context.page } : {}),
+      ...('heading' in context ? { heading: context.heading } : {}),
       ...('score' in context ? { relevanceScore: context.score } : {}),
       content: context.content,
     };
@@ -1344,10 +1573,10 @@ export function App() {
     const seenDocuments = new Set<string>();
 
     return [...manualContexts, ...autoContexts].flatMap((context) => {
-      const documentKey = JSON.stringify([
-        context.vaultId,
-        context.relativePath,
-      ]);
+      const documentKey =
+        'sourceType' in context && context.sourceType === 'rag'
+          ? createRagContextDocumentKey(context)
+          : JSON.stringify([context.vaultId, context.relativePath]);
 
       if (seenDocuments.has(documentKey)) {
         return [];
@@ -1363,8 +1592,16 @@ export function App() {
           ...('documentSecurity' in context && context.documentSecurity
             ? { documentSecurity: context.documentSecurity }
             : {}),
+          ...('sourceType' in context && context.sourceType
+            ? { sourceType: context.sourceType }
+            : {}),
         relativePath: context.relativePath,
         fileName: context.fileName,
+        ...('ragDocumentId' in context && context.ragDocumentId
+          ? { ragDocumentId: context.ragDocumentId }
+          : {}),
+        ...('page' in context ? { page: context.page } : {}),
+        ...('heading' in context ? { heading: context.heading } : {}),
         ...('metadata' in context && context.metadata
           ? { metadata: context.metadata }
           : {}),
@@ -1415,6 +1652,8 @@ export function App() {
     autoContexts: AutoRetrievedContext[];
     routingDecision: RoutingDecision;
     retrievalMs: number;
+    ragRetrievalMs?: number;
+    ragRetrievalError?: string;
     totalElapsedMs: () => number;
   }): Promise<void> {
     setWorkspaceRequestStatus(input.sessionId, 'calling-local');
@@ -1443,6 +1682,8 @@ export function App() {
     const metrics: LocalAIPerformanceMetrics = {
       ...response.performance,
       retrievalMs: input.retrievalMs,
+      ragRetrievalMs: input.ragRetrievalMs,
+      ragRetrievalError: input.ragRetrievalError,
       totalElapsedMs: input.totalElapsedMs(),
     };
 
@@ -1450,6 +1691,11 @@ export function App() {
       workspaceId: input.workspaceId,
       queryChars: metrics.queryChars,
       retrieval: { ms: metrics.retrievalMs },
+      ragRetrieval: {
+        contexts: metrics.ragContextCount,
+        ms: metrics.ragRetrievalMs,
+        error: metrics.ragRetrievalError,
+      },
       contextBuild: { ms: metrics.contextBuildMs },
       context: {
         manualCount: metrics.manualContextCount,
@@ -1600,6 +1846,9 @@ export function App() {
   ): Promise<void> {
     let autoContext: AutoRetrievedContext[] = [];
     let autoContextError: string | undefined;
+    let ragContext: AutoRetrievedContext[] = [];
+    let ragRetrievalMs: number | undefined;
+    let ragRetrievalError: string | undefined;
     const retrievalStartedTime = performance.now();
 
     try {
@@ -1628,13 +1877,25 @@ export function App() {
           ? error.message
           : '자동 참조 문서를 검색하지 못했습니다.';
     }
+    const ragRetrieval = await retrieveRagChatContext({
+      query,
+      workspaceId,
+      workspaceType,
+    });
+    ragContext = ragRetrieval.contexts;
+    ragRetrievalMs = ragRetrieval.elapsedMs;
+    ragRetrievalError = ragRetrieval.error;
+
+    const combinedAutoContext = [...autoContext, ...ragContext];
+    const scheduleForcesLocal =
+      !isAllWorkspaceScope(workspaceId) && isScheduleQuestion(query);
     const retrievalMs = performance.now() - retrievalStartedTime;
 
     completeAutoContextRetrieval(
       workspaceId,
       sessionId,
       userMessageId,
-      autoContext,
+      combinedAutoContext,
       autoContextError,
     );
 
@@ -1643,7 +1904,7 @@ export function App() {
     let externalAvailable = false;
     let externalPreparationError: string | undefined;
 
-    if (requestAIMode !== 'local') {
+    if (requestAIMode !== 'local' && !scheduleForcesLocal) {
       try {
         const [settings, hasApiKey] = await Promise.all([
           window.mimora.getSettings(),
@@ -1687,10 +1948,10 @@ export function App() {
     }
 
     const routingDecision = routeAIRequest({
-      mode: requestAIMode,
+      mode: scheduleForcesLocal ? 'local' : requestAIMode,
       workspaceType,
       manualContexts,
-      autoContexts: autoContext,
+      autoContexts: combinedAutoContext,
       safetyStatus: preview?.status,
       externalAvailable,
     });
@@ -1721,10 +1982,34 @@ export function App() {
       reason: routingDecision.reason,
       manualContext: routingDecision.manualContextCount,
       autoContext: routingDecision.autoContextCount,
+      ragContext: ragContext.length,
+      ragDocumentIds: [
+        ...new Set(ragContext.map((context) => context.ragDocumentId)),
+      ],
     });
 
     try {
       if (routingDecision.provider === 'local') {
+        const scheduleRetrieval = scheduleForcesLocal
+          ? await retrieveScheduleChatContext({
+              query,
+              workspaceId,
+            })
+          : { contexts: [], elapsedMs: 0 };
+        const localAutoContexts = [
+          ...combinedAutoContext,
+          ...scheduleRetrieval.contexts,
+        ];
+
+        if (scheduleForcesLocal) {
+          console.info('[Mimora Schedule Routing]', {
+            workspaceId,
+            contextCount: scheduleRetrieval.contexts.length,
+            elapsedMs: scheduleRetrieval.elapsedMs,
+            error: 'error' in scheduleRetrieval ? scheduleRetrieval.error : undefined,
+          });
+        }
+
         await executeLocalAIRequest({
           sessionId,
           workspaceId,
@@ -1732,9 +2017,11 @@ export function App() {
           query,
           previousMessages,
           manualContexts,
-          autoContexts: autoContext,
+          autoContexts: localAutoContexts,
           routingDecision,
           retrievalMs,
+          ragRetrievalMs,
+          ragRetrievalError,
           totalElapsedMs: () => performance.now() - endToEndStartedTime,
         });
       } else {
@@ -2165,13 +2452,21 @@ export function App() {
       | 'responseUnmasking'
     >>,
   ): void {
+    const sanitizedUpdate =
+      typeof update.content === 'string'
+        ? {
+            ...update,
+            content: removeInternalContextIdentifiers(update.content),
+          }
+        : update;
+
     updateChatSession(workspaceId, sessionId, (session) => {
       return {
         ...session,
         updatedAt: new Date().toISOString(),
         messages: session.messages.map((chatMessage) =>
           chatMessage.id === assistantMessageId
-            ? { ...chatMessage, ...update }
+            ? { ...chatMessage, ...sanitizedUpdate }
             : chatMessage,
         ),
       };

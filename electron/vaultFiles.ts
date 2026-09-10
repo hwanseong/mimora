@@ -19,6 +19,7 @@ import type { createSettingsStore } from './settingsStore';
 import type { VaultConfig } from '../src/settings';
 import { createRegistryStatusService } from './registryStatus';
 import { parseMimoraDocumentMetadata } from '../src/metadata/mimoraMetadataParser';
+import { registryFileRelativePaths } from '../src/registry/types';
 import { resolveKnowledgeDomain } from '../src/registry/knowledgeDomainRegistryParser';
 import type {
   DocumentMetadataValidationIssue,
@@ -50,6 +51,18 @@ function createVaultDocumentId(vaultId: string, relativePath: string): string {
 
 function normalizeVaultRelativePath(relativePath: string): string {
   return relativePath.replace(/\\/gu, '/').replace(/^\/+/u, '');
+}
+
+const officialRegistryMarkdownPaths = new Set(
+  Object.values(registryFileRelativePaths).map((relativePath) =>
+    normalizeVaultRelativePath(relativePath),
+  ),
+);
+
+export function isOfficialRegistryMarkdownPath(relativePath: string): boolean {
+  return officialRegistryMarkdownPaths.has(
+    normalizeVaultRelativePath(relativePath),
+  );
 }
 
 function createDocumentValidationKey(
@@ -539,6 +552,7 @@ type ParsedDocumentMetadata = {
 };
 
 type MetadataRegistryOptions = {
+  knownWorkspaceIds?: Iterable<string>;
   knowledgeDomainRegistry?: KnowledgeDomainRegistry | null;
   knowledgeTypeRegistry?: KnowledgeTypeRegistry | null;
   knowledgeDomainRegistryUnavailable?: boolean;
@@ -685,7 +699,7 @@ function isArchivedDebugQuery(query: string): boolean {
   return query.includes('ARCHIVED-ONLY-777');
 }
 
-function createWorkspaceStatusMap(
+export function createWorkspaceStatusMap(
   workspaces: Array<{ id: string; status: WorkspaceStatus }>,
 ): WorkspaceStatusMap {
   return new Map(
@@ -693,7 +707,7 @@ function createWorkspaceStatusMap(
   );
 }
 
-function isDocumentEligibleForSearch(input: {
+export function isDocumentEligibleForSearch(input: {
   selectedWorkspaceId: string;
   workspaceIds: string[];
   workspaceStatusMap: WorkspaceStatusMap;
@@ -1561,7 +1575,10 @@ export function createVaultFilesService(
   });
 
   async function loadMetadataRegistryOptions(): Promise<MetadataRegistryOptions> {
-    const [domainRegistry, typeRegistry] = await Promise.all([
+    const [workspaceRegistry, domainRegistry, typeRegistry] = await Promise.all([
+      registryStatusService
+        .loadWorkspaceRegistry()
+        .catch(() => null),
       registryStatusService
         .loadKnowledgeDomainRegistry()
         .catch(() => null),
@@ -1571,6 +1588,9 @@ export function createVaultFilesService(
     ]);
 
     return {
+      knownWorkspaceIds: workspaceRegistry?.workspaces.map(
+        (workspace) => workspace.id,
+      ),
       knowledgeDomainRegistry: domainRegistry?.registry ?? null,
       knowledgeTypeRegistry: typeRegistry?.registry ?? null,
       knowledgeDomainRegistryUnavailable: !domainRegistry?.registry,
@@ -1593,6 +1613,10 @@ export function createVaultFilesService(
           await walkMarkdownFiles(rootPath, rootPath, [], files);
 
           for (const file of files) {
+            if (isOfficialRegistryMarkdownPath(file.relativePath)) {
+              continue;
+            }
+
             try {
               const content = await readMarkdownFile(rootPath, file.relativePath);
               const metadataResult = parseMimoraDocumentMetadata(

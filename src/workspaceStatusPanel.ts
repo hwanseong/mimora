@@ -44,9 +44,7 @@ export type WorkspaceStatusRecentDocument = {
 export type PortfolioWorkspaceCounts = {
   projects: number;
   operations: number;
-  planned: number;
   active: number;
-  onHold: number;
   closed: number;
 };
 
@@ -159,14 +157,8 @@ function countPortfolioWorkspaces(
     operations: activePortfolioWorkspaces.filter(
       (workspace) => workspace.type === 'operation',
     ).length,
-    planned: activePortfolioWorkspaces.filter(
-      (workspace) => workspace.status === 'planned',
-    ).length,
     active: activePortfolioWorkspaces.filter(
       (workspace) => workspace.status === 'active',
-    ).length,
-    onHold: activePortfolioWorkspaces.filter(
-      (workspace) => workspace.status === 'on_hold',
     ).length,
     closed: activePortfolioWorkspaces.filter(
       (workspace) => workspace.status === 'closed',

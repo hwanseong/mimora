@@ -14,6 +14,34 @@ import type {
   SaveDerivedKnowledgeResult,
 } from './derivedKnowledge';
 import type {
+  RagDeleteResult,
+  RagDocument,
+  RagEmbeddingStatus,
+  RagEmbeddingStatusInput,
+  RagFileSelection,
+  RagIndexInput,
+  RagIndexResult,
+  RagImportInput,
+  RagImportResult,
+  RagPythonStatus,
+  RagReplaceInput,
+  RagReplaceResult,
+  RagSearchInput,
+  RagSearchResult,
+  RagSettings,
+} from './rag';
+import type {
+  ScheduleFileSelection,
+  ScheduleParseResult,
+  ScheduleQueryInput,
+  ScheduleQueryResult,
+  ScheduleRegisterInput,
+  ScheduleRemoveResult,
+  ScheduleRefreshOptions,
+  ScheduleSource,
+  ScheduleSummary,
+} from './schedule';
+import type {
   ConnectionTestResult,
   LLMModel,
   LocalAIConnectionInput,
@@ -82,6 +110,7 @@ type MimoraApi = {
     updateExternalAISettings: (
       input: ExternalAISettings,
     ) => Promise<MimoraSettings>;
+    updateRagSettings: (input: RagSettings) => Promise<MimoraSettings>;
     hasOpenAIApiKey: () => Promise<boolean>;
     saveOpenAIApiKey: (apiKey: string) => Promise<boolean>;
     deleteOpenAIApiKey: () => Promise<boolean>;
@@ -101,6 +130,39 @@ type MimoraApi = {
     loadWorkspaceRegistry: () => Promise<WorkspaceRegistryParseResult>;
     loadKnowledgeDomainRegistry: () => Promise<KnowledgeDomainRegistryParseResult>;
     loadKnowledgeTypeRegistry: () => Promise<KnowledgeTypeRegistryParseResult>;
+    getRagPythonStatus: () => Promise<RagPythonStatus>;
+    getRagStorageRoot: () => Promise<string>;
+    selectRagDocumentFile: () => Promise<RagFileSelection | null>;
+    listRagDocuments: () => Promise<RagDocument[]>;
+    importRagDocument: (input: RagImportInput) => Promise<RagImportResult>;
+    deleteRagDocument: (
+      ragDocumentId: string,
+    ) => Promise<RagDeleteResult>;
+    replaceRagDocument: (input: RagReplaceInput) => Promise<RagReplaceResult>;
+    indexRagDocument: (input: RagIndexInput) => Promise<RagIndexResult>;
+    searchRagDocuments: (input: RagSearchInput) => Promise<RagSearchResult[]>;
+    checkRagEmbeddingStatus: (
+      input: RagEmbeddingStatusInput,
+    ) => Promise<RagEmbeddingStatus>;
+    getScheduleStorageRoot: () => Promise<string>;
+    selectScheduleSourceFile: () => Promise<ScheduleFileSelection | null>;
+    registerScheduleSource: (
+      input: ScheduleRegisterInput,
+    ) => Promise<ScheduleSource>;
+    getScheduleSource: (
+      workspaceId: string,
+    ) => Promise<ScheduleSource | null>;
+    removeScheduleSource: (
+      workspaceId: string,
+    ) => Promise<ScheduleRemoveResult>;
+    refreshSchedule: (
+      workspaceId: string,
+      options?: ScheduleRefreshOptions,
+    ) => Promise<ScheduleParseResult>;
+    getScheduleSummary: (workspaceId: string) => Promise<ScheduleSummary>;
+    querySchedule: (
+      input: ScheduleQueryInput,
+    ) => Promise<ScheduleQueryResult>;
     addMaskingEntry: (
       input: AddMaskingEntryInput,
     ) => Promise<MimoraSettings>;

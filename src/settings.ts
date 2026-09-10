@@ -20,6 +20,10 @@ import {
   type RegistrySettings,
 } from './registry/types';
 import type { ContentOriginSearchScope } from './contentOrigin';
+import {
+  defaultRagSettings,
+  type RagSettings,
+} from './rag';
 
 export const vaultTypeOptions = ['work', 'private', 'knowledge'] as const;
 export const vaultSecurityOptions = [
@@ -52,6 +56,7 @@ export type MimoraSettings = {
   search: SearchScopeSettings;
   localAI: LocalAISettings;
   externalAI: ExternalAISettings;
+  rag: RagSettings;
   aiMode: AIMode;
   masking: MaskingSettings;
   secretDetection: SecretDetectionSettings;
@@ -92,6 +97,7 @@ export const defaultSettings: MimoraSettings = {
   },
   localAI: { ...defaultLocalAISettings },
   externalAI: { ...defaultExternalAISettings },
+  rag: { ...defaultRagSettings },
   aiMode: 'auto',
   masking: createDefaultMaskingSettings(),
   secretDetection: createDefaultSecretDetectionSettings(),

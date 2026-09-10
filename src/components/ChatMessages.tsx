@@ -8,6 +8,7 @@ import {
   createExternalPayloadPreview,
   type ExternalPayloadPreview,
 } from '../security/externalPayloadPreview';
+import { removeInternalContextIdentifiers } from '../chatCitationCleanup';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { getSecretRules } from '../security/secretDetector';
 import type { Workspace } from '../workspaces';
@@ -138,7 +139,7 @@ export function ChatMessages({
               {message.role === 'assistant' ? (
                 <MarkdownRenderer
                   className="chat-markdown"
-                  content={message.content}
+                  content={removeInternalContextIdentifiers(message.content)}
                 />
               ) : (
                 <p>{message.content}</p>

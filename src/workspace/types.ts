@@ -1,16 +1,14 @@
+export const workspaceTypeOptions = ['project', 'operation'] as const;
+
 export type WorkspaceType = string;
 
 export type WorkspaceStatus =
-  | 'planned'
   | 'active'
-  | 'on_hold'
   | 'closed'
   | 'archived';
 
 export const workspaceStatusOptions = [
-  'planned',
   'active',
-  'on_hold',
   'closed',
   'archived',
 ] as const satisfies WorkspaceStatus[];

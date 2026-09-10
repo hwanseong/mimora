@@ -7,6 +7,13 @@ import {
   resolveKnowledgeType,
 } from '../registry/knowledgeTypeRegistryParser';
 import type { KnowledgeTypeRegistry } from '../registry/knowledgeTypeRegistryTypes';
+import { parseFrontmatterMetadata } from './frontmatterParser';
+import { parseLegacyMetadataTable } from './legacyMetadataParser';
+import { resolveMetadataSources } from './metadataResolver';
+import {
+  type MetadataValidationOptions,
+  validateResolvedMetadata,
+} from './metadataValidator';
 import {
   documentIdPattern,
   type ContentOrigin,
@@ -26,7 +33,7 @@ const metadataFields = [
   'security',
   'content_origin',
 ] as const;
-const documentSecurityOptions = ['normal', 'private'] as const;
+const documentSecurityOptions = ['normal', 'private', 'internal'] as const;
 const contentOriginOptions = ['human', 'ai-derived'] as const;
 
 type MetadataField = (typeof metadataFields)[number];
@@ -35,6 +42,7 @@ const emptyMetadata: MimoraDocumentMetadata = {
   workspaceIds: [],
   knowledgeDomains: [],
   knowledgeTypes: [],
+  source: 'none',
 };
 
 function createEmptyMetadata(): MimoraDocumentMetadata {
@@ -42,6 +50,7 @@ function createEmptyMetadata(): MimoraDocumentMetadata {
     workspaceIds: [],
     knowledgeDomains: [],
     knowledgeTypes: [],
+    source: 'none',
   };
 }
 
@@ -263,6 +272,40 @@ function createBodyWithoutMetadata(
 }
 
 export function parseMimoraDocumentMetadata(
+  markdown: string,
+  options: MetadataValidationOptions = {},
+): MimoraMetadataParseResult {
+  const frontmatterResult = parseFrontmatterMetadata(markdown);
+  const legacyResult = parseLegacyMetadataTable(frontmatterResult.body);
+  const resolverResult = resolveMetadataSources({
+    frontmatterValues: frontmatterResult.values,
+    legacyValues: legacyResult.values,
+    hasFrontmatterMetadata: frontmatterResult.hasMetadata,
+    hasLegacyMetadata: legacyResult.hasMetadata,
+  });
+  const validationResult = validateResolvedMetadata({
+    ...options,
+    values: resolverResult.values,
+    source: resolverResult.source,
+    hasMetadata: resolverResult.hasMetadata,
+  });
+  const issues = [
+    ...frontmatterResult.issues,
+    ...legacyResult.issues,
+    ...resolverResult.issues,
+    ...validationResult.issues,
+  ];
+
+  return {
+    metadata: validationResult.metadata,
+    issues,
+    valid: !issues.some((issue) => issue.severity === 'error'),
+    hasMetadata: resolverResult.hasMetadata,
+    body: legacyResult.body,
+  };
+}
+
+function parseLegacyMimoraDocumentMetadata(
   markdown: string,
   options: {
     knownWorkspaceIds?: Iterable<string>;

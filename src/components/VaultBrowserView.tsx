@@ -32,6 +32,7 @@ import { parseMimoraDocumentMetadata } from '../metadata/mimoraMetadataParser';
 import type { MimoraMetadataParseResult } from '../metadata/types';
 import type { KnowledgeDomainRegistryParseResult } from '../registry/knowledgeDomainRegistryTypes';
 import type { KnowledgeTypeRegistryParseResult } from '../registry/knowledgeTypeRegistryTypes';
+import type { WorkspaceRegistryParseResult } from '../registry/workspaceRegistryTypes';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import {
   documentIdValidationStatusLabels,
@@ -156,6 +157,8 @@ export function VaultBrowserView({
     useState<KnowledgeDomainRegistryParseResult | null>(null);
   const [knowledgeTypeRegistry, setKnowledgeTypeRegistry] =
     useState<KnowledgeTypeRegistryParseResult | null>(null);
+  const [workspaceRegistry, setWorkspaceRegistry] =
+    useState<WorkspaceRegistryParseResult | null>(null);
   const [documentIdValidation, setDocumentIdValidation] =
     useState<DocumentIdValidationSummary | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -210,6 +213,9 @@ export function VaultBrowserView({
     }
 
     return parseMimoraDocumentMetadata(fileContent.content, {
+      knownWorkspaceIds: workspaceRegistry?.workspaces.map(
+        (workspace) => workspace.id,
+      ),
       knowledgeDomainRegistry: knowledgeDomainRegistry?.registry ?? null,
       knowledgeTypeRegistry: knowledgeTypeRegistry?.registry ?? null,
       knowledgeDomainRegistryUnavailable:
@@ -217,21 +223,15 @@ export function VaultBrowserView({
       knowledgeTypeRegistryUnavailable:
         knowledgeTypeRegistry !== null && !knowledgeTypeRegistry.registry,
     });
-  }, [fileContent, knowledgeDomainRegistry, knowledgeTypeRegistry]);
-  const metadataWarnings =
-    selectedFileMetadata?.issues.filter(
-      (issue) =>
-        issue.severity === 'warning' &&
-        (issue.field === 'knowledge_domains' ||
-          issue.field === 'knowledge_type'),
-    ) ?? [];
+  }, [fileContent, knowledgeDomainRegistry, knowledgeTypeRegistry, workspaceRegistry]);
+  const metadataIssues = selectedFileMetadata?.issues ?? [];
   const hasKnowledgeMetadata = Boolean(
     selectedFileMetadata &&
       (selectedFileMetadata.metadata.rawKnowledgeDomains?.length ||
         selectedFileMetadata.metadata.knowledgeDomains.length ||
         selectedFileMetadata.metadata.rawKnowledgeTypes?.length ||
         selectedFileMetadata.metadata.knowledgeTypes.length ||
-        metadataWarnings.length),
+        metadataIssues.length),
   );
   const previewMarkdownContent = fileContent
     ? createPreviewMarkdownContent(fileContent, selectedFileMetadata)
@@ -283,7 +283,8 @@ export function VaultBrowserView({
   const hasMimoraMetadataCard = Boolean(
     selectedFileMetadata?.hasMetadata ||
       hasKnowledgeMetadata ||
-      effectiveSelectedDocumentIdValidation,
+      effectiveSelectedDocumentIdValidation ||
+      metadataIssues.length,
   );
 
   useEffect(() => {
@@ -293,11 +294,13 @@ export function VaultBrowserView({
       try {
         const [
           loadedSettings,
+          loadedWorkspaceRegistry,
           loadedKnowledgeDomainRegistry,
           loadedKnowledgeTypeRegistry,
           loadedDocumentIdValidation,
         ] = await Promise.all([
           window.mimora.getSettings(),
+          window.mimora.loadWorkspaceRegistry(),
           window.mimora.loadKnowledgeDomainRegistry(),
           window.mimora.loadKnowledgeTypeRegistry(),
           window.mimora.validateDocumentIds(),
@@ -308,6 +311,7 @@ export function VaultBrowserView({
         }
 
         setSettings(loadedSettings);
+        setWorkspaceRegistry(loadedWorkspaceRegistry);
         setKnowledgeDomainRegistry(loadedKnowledgeDomainRegistry);
         setKnowledgeTypeRegistry(loadedKnowledgeTypeRegistry);
         setDocumentIdValidation(loadedDocumentIdValidation);
@@ -1092,6 +1096,14 @@ export function VaultBrowserView({
                   >
                     <div className="vault-metadata-title">Mimora Metadata</div>
                     <div className="vault-metadata-row">
+                      <span>Source</span>
+                      <div>
+                        <span className="vault-metadata-value">
+                          {selectedFileMetadata.metadata.source}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="vault-metadata-row">
                       <span>Document ID</span>
                       <div>
                         {selectedFileMetadata.metadata.documentId ? (
@@ -1194,11 +1206,11 @@ export function VaultBrowserView({
                         </div>
                       </div>
                     ) : null}
-                    {metadataWarnings.length > 0 ? (
+                    {metadataIssues.length > 0 ? (
                       <div className="vault-metadata-warnings">
-                        <strong>Metadata warnings</strong>
+                        <strong>Metadata issues</strong>
                         <ul>
-                          {metadataWarnings.map((issue, index) => (
+                          {metadataIssues.map((issue, index) => (
                             <li key={`${issue.code}-${index}`}>
                               {issue.message}
                             </li>

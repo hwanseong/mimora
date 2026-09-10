@@ -19,9 +19,7 @@ export type WorkspaceSection = {
 };
 
 export const workspaceStatusLabels: Record<WorkspaceStatus, string> = {
-  planned: 'Planned',
   active: 'Active',
-  on_hold: 'On Hold',
   closed: 'Closed',
   archived: 'Archived',
 };
@@ -77,12 +75,7 @@ export function canReadWorkspaceSession(workspace: Workspace): boolean {
 }
 
 export function canWriteWorkspaceSession(workspace: Workspace): boolean {
-  return (
-    workspace.isSystem === true ||
-    workspace.status === 'planned' ||
-    workspace.status === 'active' ||
-    workspace.status === 'on_hold'
-  );
+  return workspace.isSystem === true || workspace.status === 'active';
 }
 
 export function canCreateWorkspaceSession(workspace: Workspace): boolean {

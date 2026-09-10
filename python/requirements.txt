@@ -1,0 +1,4 @@
+faiss-cpu
+numpy
+PyMuPDF
+python-docx

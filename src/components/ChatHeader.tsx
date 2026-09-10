@@ -86,7 +86,38 @@ export function ChatHeader({
           {sessionTitle ? (
             <p className="chat-session-title">{sessionTitle}</p>
           ) : null}
-          {showSearchScope ? (
+        </div>
+
+        <div className="header-meta" aria-label="채팅 설정">
+          <button
+            className="new-chat-button"
+            disabled={createSessionDisabled || !onCreateSession}
+            onClick={onCreateSession}
+            type="button"
+          >
+            + 새 대화
+          </button>
+          <label className="ai-mode-control">
+            <span>AI Mode</span>
+            <select
+              aria-label="AI Mode"
+              disabled={disabled}
+              onChange={(event) => {
+                onChangeAIMode(event.target.value as AIMode);
+              }}
+              value={aiMode}
+            >
+              <option value="auto">Auto</option>
+              <option value="local">Local</option>
+              <option value="external">External</option>
+            </select>
+          </label>
+          <span className={`security-badge ${effectiveSecurity}`}>
+            Security: {effectiveSecurityLabels[effectiveSecurity]}
+          </span>
+        </div>
+        {showSearchScope ? (
+          <div className="chat-header-filter-row">
             <label
               className="archived-search-toggle"
               title="Archived Workspace에 연결된 문서까지 검색합니다."
@@ -101,8 +132,6 @@ export function ChatHeader({
               />
               <span>과거 업무 포함</span>
             </label>
-          ) : null}
-          {showSearchScope ? (
             <div className="knowledge-filter-controls" aria-label="Knowledge filters">
               <label>
                 <span>Source</span>
@@ -190,37 +219,8 @@ export function ChatHeader({
                 </span>
               ) : null}
             </div>
-          ) : null}
-        </div>
-
-        <div className="header-meta" aria-label="채팅 설정">
-          <button
-            className="new-chat-button"
-            disabled={createSessionDisabled || !onCreateSession}
-            onClick={onCreateSession}
-            type="button"
-          >
-            + 새 대화
-          </button>
-          <label className="ai-mode-control">
-            <span>AI Mode</span>
-            <select
-              aria-label="AI Mode"
-              disabled={disabled}
-              onChange={(event) => {
-                onChangeAIMode(event.target.value as AIMode);
-              }}
-              value={aiMode}
-            >
-              <option value="auto">Auto</option>
-              <option value="local">Local</option>
-              <option value="external">External</option>
-            </select>
-          </label>
-          <span className={`security-badge ${effectiveSecurity}`}>
-            Security: {effectiveSecurityLabels[effectiveSecurity]}
-          </span>
-        </div>
+          </div>
+        ) : null}
       </div>
     </header>
   );

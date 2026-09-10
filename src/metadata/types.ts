@@ -1,6 +1,25 @@
-export type DocumentSecurity = 'normal' | 'private';
+export type DocumentSecurity = 'normal' | 'private' | 'internal';
 
 export type ContentOrigin = 'human' | 'ai-derived';
+
+export const mimoraMetadataFieldNames = [
+  'document_id',
+  'workspace_ids',
+  'origin_workspace_id',
+  'security',
+  'knowledge_domains',
+  'knowledge_type',
+  'content_origin',
+] as const;
+
+export type MimoraMetadataFieldName =
+  (typeof mimoraMetadataFieldNames)[number];
+
+export type MimoraMetadataSource =
+  | 'frontmatter'
+  | 'legacy'
+  | 'mixed'
+  | 'none';
 
 export type MimoraDocumentMetadata = {
   documentId?: string;
@@ -12,6 +31,15 @@ export type MimoraDocumentMetadata = {
   knowledgeTypes: string[];
   security?: DocumentSecurity;
   contentOrigin?: ContentOrigin;
+  source: MimoraMetadataSource;
+};
+
+export type MetadataIssueDetails = {
+  field?: string;
+  yamlValue?: unknown;
+  legacyValue?: unknown;
+  selectedValue?: unknown;
+  [key: string]: unknown;
 };
 
 export type DocumentMetadataValidationIssue = {
@@ -20,6 +48,7 @@ export type DocumentMetadataValidationIssue = {
   message: string;
   field?: string;
   documentId?: string;
+  details?: MetadataIssueDetails;
 };
 
 export type MimoraMetadataParseResult = {
