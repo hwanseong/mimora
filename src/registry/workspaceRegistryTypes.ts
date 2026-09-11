@@ -15,6 +15,7 @@ export type WorkspaceRegistryRow = {
   name: string;
   type: string;
   status: string;
+  security: string;
   startDate: string;
   endDate: string;
   description: string;

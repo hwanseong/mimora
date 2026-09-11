@@ -40,9 +40,9 @@ document_id: DOC-2026-0001
 registry_type: workspaces
 registry_version: 1
 ---
-| id | name | type | status | start_date | end_date | description |
-| --- | --- | --- | --- | --- | --- | --- |
-| WS-2026-0001 | Core Banking | project | active | 2026-01-01 | 2026-12-31 | Test |
+| id | name | type | status | security | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| WS-2026-0001 | Core Banking | project | active | internal | 2026-01-01 | 2026-12-31 | Test |
 `,
   );
   await writeMarkdown(

@@ -1,13 +1,16 @@
 import type { DocumentSecurity } from '../metadata/types';
+import type { ExternalChatProviderId } from '../externalAI';
 import type { VaultSecurity, VaultType } from '../settings';
-import type { WorkspaceType } from '../workspaces';
+import type { WorkspaceSecurity, WorkspaceType } from '../workspaces';
 import type { PayloadSafetyStatus } from './outboundPayloadSafety';
 
 export const aiModeOptions = ['auto', 'local', 'external'] as const;
 
 export type AIMode = (typeof aiModeOptions)[number];
 export type EffectiveSecurity = 'internal' | 'personal' | 'sensitive' | 'private';
-export type RoutingProvider = 'local' | 'openai';
+export type RoutingProvider = 'local' | ExternalChatProviderId;
+export type ProviderType = 'local' | 'external';
+export type QuerySecurity = 'internal' | 'sensitive';
 export type RoutingSafetyStatus = PayloadSafetyStatus | 'not-evaluated';
 export type RoutingReason =
   | 'forced-local'
@@ -30,6 +33,7 @@ export type RoutingReason =
 export type RoutingDecision = {
   mode: AIMode;
   provider: RoutingProvider;
+  providerType: ProviderType;
   security: EffectiveSecurity;
   reason: RoutingReason;
   sensitiveContextCount: number;
@@ -84,6 +88,45 @@ export const routingReasonLabels: Record<RoutingReason, string> = {
   'default-local': 'Default Local',
 };
 
+export function getRoutingProviderType(provider: RoutingProvider): ProviderType {
+  return provider === 'local' ? 'local' : 'external';
+}
+
+export function evaluateQuerySecurity(query: string | undefined): QuerySecurity {
+  const normalizedQuery = query?.trim().replace(/\s+/gu, ' ') ?? '';
+
+  if (!normalizedQuery) {
+    return 'internal';
+  }
+
+  const sensitiveSignals = [
+    /1:1/u,
+    /개인\s*정보/u,
+    /인사\s*(평가|이슈|문제|상담)/u,
+    /연봉|징계|퇴사|채용/u,
+    /고민.*멘토링|멘토링.*고민/u,
+    /내부\s*(문제|갈등|고민)/u,
+    /외부\s*업체.*갈등/u,
+    /외부.*PM.*갈등/iu,
+    /민감|비밀|confidential|secret/iu,
+  ];
+
+  return sensitiveSignals.some((pattern) => pattern.test(normalizedQuery))
+    ? 'sensitive'
+    : 'internal';
+}
+
+export function isExternalLocalOnlyRoutingReason(
+  reason: RoutingReason,
+): boolean {
+  return (
+    reason === 'private-document' ||
+    reason === 'private-workspace' ||
+    reason === 'private-vault' ||
+    reason === 'sensitive-context'
+  );
+}
+
 function deduplicateContexts(
   contexts: SecurityContextMetadata[],
 ): SecurityContextMetadata[] {
@@ -119,7 +162,7 @@ export function inspectContextSecurity(
   ).length;
   const security: EffectiveSecurity =
     privateDocumentContextCount > 0
-      ? 'private'
+      ? 'sensitive'
       : privateVaultContextCount > 0 || sensitiveContextCount > 0
         ? 'sensitive'
         : personalContextCount > 0
@@ -139,6 +182,8 @@ export function evaluateEffectiveSecurity(input: {
   documentSecurity?: DocumentSecurity;
   vaultSecurity?: VaultSecurity;
   workspaceType?: WorkspaceType;
+  workspaceSecurity?: WorkspaceSecurity;
+  query?: string;
   contextDocuments?: SecurityContextMetadata[];
 }): ContextSecuritySummary {
   const summary = inspectContextSecurity(input.contextDocuments ?? []);
@@ -147,9 +192,13 @@ export function evaluateEffectiveSecurity(input: {
     summary.privateDocumentContextCount > 0;
   const hasSensitiveVault = input.vaultSecurity === 'sensitive';
   const hasPersonalVault = input.vaultSecurity === 'personal';
+  const hasPrivateWorkspace =
+    input.workspaceSecurity === 'private' || input.workspaceType === 'private';
+  const hasSensitiveQuery = evaluateQuerySecurity(input.query) === 'sensitive';
   const security: EffectiveSecurity = hasPrivateDocument
-    ? 'private'
-    : input.workspaceType === 'private' ||
+    ? 'sensitive'
+    : hasPrivateWorkspace ||
+        hasSensitiveQuery ||
         summary.privateVaultContextCount > 0 ||
         summary.sensitiveContextCount > 0 ||
         hasSensitiveVault
@@ -167,46 +216,85 @@ export function evaluateEffectiveSecurity(input: {
 export function evaluateSecurity(
   workspaceType: WorkspaceType,
   contexts: SecurityContextMetadata[],
+  workspaceSecurity?: WorkspaceSecurity,
+  query?: string,
 ): ContextSecuritySummary {
   return evaluateEffectiveSecurity({
     workspaceType,
+    workspaceSecurity,
+    query,
     contextDocuments: contexts,
   });
+}
+
+function getExternalLocalOnlyRoutingReason(
+  workspaceType: WorkspaceType,
+  workspaceSecurity: WorkspaceSecurity | undefined,
+  security: ContextSecuritySummary,
+): RoutingReason | null {
+  if (security.privateDocumentContextCount > 0) {
+    return 'private-document';
+  }
+
+  if (workspaceSecurity === 'private' || workspaceType === 'private') {
+    return 'private-workspace';
+  }
+
+  if (security.privateVaultContextCount > 0) {
+    return 'private-vault';
+  }
+
+  if (security.sensitiveContextCount > 0 || security.security === 'sensitive') {
+    return 'sensitive-context';
+  }
+
+  return null;
 }
 
 export function routeAIRequest(input: {
   mode: AIMode;
   workspaceType: WorkspaceType;
+  workspaceSecurity?: WorkspaceSecurity;
+  query?: string;
   manualContexts: SecurityContextMetadata[];
   autoContexts: SecurityContextMetadata[];
   safetyStatus?: PayloadSafetyStatus;
   externalAvailable?: boolean;
+  externalProvider?: ExternalChatProviderId;
 }): RoutingDecision {
   const contexts = [...input.manualContexts, ...input.autoContexts];
-  const security = evaluateSecurity(input.workspaceType, contexts);
+  const security = evaluateSecurity(
+    input.workspaceType,
+    contexts,
+    input.workspaceSecurity,
+    input.query,
+  );
   const safetyStatus = input.safetyStatus ?? 'not-evaluated';
   let provider: RoutingProvider = 'local';
   let reason: RoutingReason;
+  const externalLocalOnlyReason = getExternalLocalOnlyRoutingReason(
+    input.workspaceType,
+    input.workspaceSecurity,
+    security,
+  );
+  const externalProvider = input.externalProvider ?? 'openai';
 
   if (input.mode === 'local') {
     reason = 'forced-local';
-  } else if (
-    input.mode === 'external' &&
-    security.privateDocumentContextCount > 0
-  ) {
-    provider = 'openai';
-    reason = 'external-private-content-block';
-  } else if (security.privateDocumentContextCount > 0) {
-    reason = 'private-document';
+  } else if (externalLocalOnlyReason) {
+    reason = externalLocalOnlyReason;
   } else if (input.mode === 'external') {
-    provider = 'openai';
+    provider = externalProvider;
     reason =
       safetyStatus === 'review-required'
         ? 'external-review-required'
         : safetyStatus === 'block'
           ? 'external-safety-block'
           : 'forced-external';
-  } else if (input.workspaceType === 'private') {
+  } else if (
+    input.workspaceSecurity === 'private' ||
+    input.workspaceType === 'private'
+  ) {
     reason = 'private-workspace';
   } else if (security.privateVaultContextCount > 0) {
     reason = 'private-vault';
@@ -219,13 +307,14 @@ export function routeAIRequest(input: {
   } else if (!input.externalAvailable) {
     reason = 'external-provider-unavailable';
   } else {
-    provider = 'openai';
+    provider = externalProvider;
     reason = 'auto-external-pass';
   }
 
   return {
     mode: input.mode,
     provider,
+    providerType: getRoutingProviderType(provider),
     security: security.security,
     reason,
     sensitiveContextCount: security.sensitiveContextCount,

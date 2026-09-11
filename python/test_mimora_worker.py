@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -42,6 +44,18 @@ class MimoraWorkerTests(unittest.TestCase):
                 "security": security,
             }
         )
+
+    def update_managed_file_path(self, rag_document_id: str, managed_file_path: Path) -> None:
+        with sqlite3.connect(self.storage_root / "metadata.sqlite") as connection:
+            connection.execute(
+                "UPDATE rag_documents SET managed_file_path = ? WHERE rag_document_id = ?",
+                (str(managed_file_path), rag_document_id),
+            )
+
+    def assert_worker_error(self, code: str, operation) -> None:
+        with self.assertRaises(mimora_worker.WorkerError) as context:
+            operation()
+        self.assertEqual(context.exception.code, code)
 
     def use_scored_test_embeddings(self, scores_by_marker: dict[str, float]) -> None:
         original_embeddings = mimora_worker.deterministic_test_embeddings
@@ -143,6 +157,100 @@ class MimoraWorkerTests(unittest.TestCase):
         self.assertFalse(managed_path.exists())
         self.assertEqual(mimora_worker.list_documents({"storage_root": str(self.storage_root)}), [])
 
+    def test_delete_blocks_outside_root_managed_path(self) -> None:
+        result = self.import_source(self.write_source("unsafe.txt", b"managed"))
+        rag_id = result["document"]["ragDocumentId"]
+        outside_file = self.root / "important-file.txt"
+        outside_file.write_text("keep", encoding="utf-8")
+        self.update_managed_file_path(rag_id, outside_file)
+
+        self.assert_worker_error(
+            "unsafe_managed_path",
+            lambda: mimora_worker.delete_document(
+                {"storage_root": str(self.storage_root), "rag_document_id": rag_id}
+            ),
+        )
+
+        self.assertTrue(outside_file.exists())
+        self.assertEqual(outside_file.read_text(encoding="utf-8"), "keep")
+        self.assertEqual(len(mimora_worker.list_documents({"storage_root": str(self.storage_root)})), 1)
+
+    def test_delete_blocks_traversal_managed_path(self) -> None:
+        result = self.import_source(self.write_source("traversal.txt", b"managed"))
+        rag_id = result["document"]["ragDocumentId"]
+        traversal_path = self.storage_root / "documents" / rag_id / ".." / ".." / "outside.txt"
+        self.update_managed_file_path(rag_id, traversal_path)
+
+        self.assert_worker_error(
+            "unsafe_managed_path",
+            lambda: mimora_worker.delete_document(
+                {"storage_root": str(self.storage_root), "rag_document_id": rag_id}
+            ),
+        )
+
+        self.assertEqual(len(mimora_worker.list_documents({"storage_root": str(self.storage_root)})), 1)
+
+    def test_delete_blocks_sibling_prefix_managed_path(self) -> None:
+        result = self.import_source(self.write_source("sibling.txt", b"managed"))
+        rag_id = result["document"]["ragDocumentId"]
+        sibling_dir = self.storage_root / "documents2" / rag_id
+        sibling_dir.mkdir(parents=True)
+        sibling_file = sibling_dir / "sibling.txt"
+        sibling_file.write_text("keep", encoding="utf-8")
+        self.update_managed_file_path(rag_id, sibling_file)
+
+        self.assert_worker_error(
+            "unsafe_managed_path",
+            lambda: mimora_worker.delete_document(
+                {"storage_root": str(self.storage_root), "rag_document_id": rag_id}
+            ),
+        )
+
+        self.assertTrue(sibling_file.exists())
+
+    def test_delete_blocks_db_managed_path_mismatch(self) -> None:
+        result = self.import_source(self.write_source("mismatch.txt", b"managed"))
+        rag_id = result["document"]["ragDocumentId"]
+        expected_dir = self.storage_root / "documents" / rag_id
+        mismatch_dir = expected_dir / "nested"
+        mismatch_dir.mkdir()
+        mismatch_file = mismatch_dir / "mismatch.txt"
+        mismatch_file.write_text("keep", encoding="utf-8")
+        self.update_managed_file_path(rag_id, mismatch_file)
+
+        self.assert_worker_error(
+            "unsafe_managed_path",
+            lambda: mimora_worker.delete_document(
+                {"storage_root": str(self.storage_root), "rag_document_id": rag_id}
+            ),
+        )
+
+        self.assertTrue(mismatch_file.exists())
+
+    def test_delete_blocks_symlink_escape_when_supported(self) -> None:
+        result = self.import_source(self.write_source("link.txt", b"managed"))
+        rag_id = result["document"]["ragDocumentId"]
+        document_dir = self.storage_root / "documents" / rag_id
+        outside_dir = self.root / "outside-target"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "link.txt"
+        outside_file.write_text("keep", encoding="utf-8")
+        shutil.rmtree(document_dir)
+
+        try:
+            os.symlink(outside_dir, document_dir, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"Directory symlink is unavailable: {error}")
+
+        self.assert_worker_error(
+            "unsafe_managed_path",
+            lambda: mimora_worker.delete_document(
+                {"storage_root": str(self.storage_root), "rag_document_id": rag_id}
+            ),
+        )
+
+        self.assertTrue(outside_file.exists())
+
     def test_replace_keeps_same_rag_id_and_resets_metadata(self) -> None:
         result = self.import_source(self.write_source("old.txt", b"old"))
         rag_id = result["document"]["ragDocumentId"]
@@ -175,6 +283,44 @@ class MimoraWorkerTests(unittest.TestCase):
         with sqlite3.connect(self.storage_root / "metadata.sqlite") as connection:
             chunk_count = connection.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()[0]
         self.assertEqual(chunk_count, 0)
+
+    def test_replace_blocks_unsafe_managed_path_before_cleanup(self) -> None:
+        result = self.import_source(self.write_source("replace-unsafe.txt", b"old"))
+        rag_id = result["document"]["ragDocumentId"]
+        mimora_worker.index_document(
+            {
+                "storage_root": str(self.storage_root),
+                "rag_document_id": rag_id,
+                "embedding_provider": "test",
+            }
+        )
+        outside_file = self.root / "important-replace.txt"
+        outside_file.write_text("keep", encoding="utf-8")
+        self.update_managed_file_path(rag_id, outside_file)
+        replacement = self.write_source("replacement-safe.txt", b"new")
+
+        self.assert_worker_error(
+            "unsafe_managed_path",
+            lambda: mimora_worker.replace_document(
+                {
+                    "storage_root": str(self.storage_root),
+                    "rag_document_id": rag_id,
+                    "source_path": str(replacement),
+                }
+            ),
+        )
+
+        self.assertTrue(outside_file.exists())
+        with sqlite3.connect(self.storage_root / "metadata.sqlite") as connection:
+            document_count = connection.execute("SELECT COUNT(*) FROM rag_documents").fetchone()[0]
+            chunk_count = connection.execute("SELECT COUNT(*) FROM rag_chunks").fetchone()[0]
+            try:
+                fts_count = connection.execute("SELECT COUNT(*) FROM rag_chunks_fts").fetchone()[0]
+            except sqlite3.OperationalError:
+                fts_count = chunk_count
+        self.assertEqual(document_count, 1)
+        self.assertGreater(chunk_count, 0)
+        self.assertEqual(fts_count, chunk_count)
 
     def test_replace_same_hash_is_unchanged(self) -> None:
         result = self.import_source(self.write_source("same.txt", b"same"))

@@ -23,7 +23,7 @@ export type ResponseUnmaskingSnapshotEntry = {
   entityType: MaskingEntityType;
 };
 
-export type ResponseUnmaskingProvider = 'local' | 'openai';
+export type ResponseUnmaskingProvider = 'local' | 'openai' | 'gemini';
 
 function createUnchangedResult(text: string): UnmaskingResult {
   return {
@@ -174,7 +174,7 @@ export function applyResponseUnmasking(input: {
   text: string;
   snapshot: ResponseUnmaskingSnapshotEntry[];
 }): UnmaskingResult {
-  return input.provider === 'openai'
+  return input.provider === 'openai' || input.provider === 'gemini'
     ? unmaskExternalResponseFromSnapshot(input.text, input.snapshot)
     : createUnchangedResult(input.text);
 }

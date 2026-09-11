@@ -1,4 +1,9 @@
-import { Children, isValidElement, type ReactNode } from 'react';
+import {
+  Children,
+  isValidElement,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -40,6 +45,25 @@ export function MarkdownRenderer({
   content: string;
   className?: string;
 }) {
+  function handleLinkClick(
+    event: MouseEvent<HTMLAnchorElement>,
+    href: string | undefined,
+  ): void {
+    event.preventDefault();
+
+    if (!href) {
+      return;
+    }
+
+    void window.mimora.openExternalLink(href).catch((error: unknown) => {
+      console.warn(
+        error instanceof Error
+          ? error.message
+          : 'External link could not be opened.',
+      );
+    });
+  }
+
   return (
     <div className={`markdown-renderer${className ? ` ${className}` : ''}`}>
       <ReactMarkdown
@@ -56,7 +80,11 @@ export function MarkdownRenderer({
             }
 
             return (
-              <a {...props} rel="noreferrer noopener" target="_blank">
+              <a
+                {...props}
+                onClick={(event) => handleLinkClick(event, props.href)}
+                rel="noreferrer noopener"
+              >
                 {children}
               </a>
             );

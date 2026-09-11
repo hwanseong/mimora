@@ -84,6 +84,7 @@ import type {
 } from './settings';
 import {
   evaluateSecurity,
+  getRoutingProviderType,
   routeAIRequest,
   type AIMode,
   type RoutingDecision,
@@ -100,7 +101,9 @@ import {
 import type {
   ExternalAIPerformanceMetrics,
   ExternalAIChatResult,
+  ExternalChatProviderId,
 } from './externalAI';
+import { getAIProviderDisplayName } from './externalAI';
 import type { RagDocumentSecurity, RagSearchResult } from './rag';
 import type { ScheduleQueryResult } from './schedule';
 import {
@@ -147,6 +150,7 @@ type PendingExternalRequest = {
   sessionId: ChatSession['sessionId'];
   workspaceId: Workspace['id'];
   workspaceType: Workspace['type'];
+  workspaceSecurity: Workspace['security'];
   userMessageId: string;
   assistantMessageId: string;
   query: string;
@@ -175,6 +179,8 @@ export function App() {
     useState(false);
   const [message, setMessage] = useState('');
   const [aiMode, setAIMode] = useState<AIMode>('auto');
+  const [activeExternalProvider, setActiveExternalProvider] =
+    useState<ExternalChatProviderId>('openai');
   const [isSavingAIMode, setIsSavingAIMode] = useState(false);
   const [searchScope, setSearchScope] = useState<SearchScopeSettings>({
     includeArchived: false,
@@ -320,7 +326,11 @@ export function App() {
   );
   const currentSecurity =
     latestRoutingDecision?.security ??
-    evaluateSecurity(selectedWorkspace.type, currentContexts).security;
+    evaluateSecurity(
+      selectedWorkspace.type,
+      currentContexts,
+      selectedWorkspace.security,
+    ).security;
 
   useEffect(() => {
     if (
@@ -425,6 +435,7 @@ export function App() {
         if (isMounted) {
           setAIMode(settings.aiMode);
           setSearchScope(settings.search);
+          setActiveExternalProvider(settings.externalAI.provider);
         }
       })
       .catch((error: unknown) => {
@@ -736,6 +747,7 @@ export function App() {
     query: string;
     workspaceId: Workspace['id'];
     workspaceType: Workspace['type'];
+    workspaceSecurity: Workspace['security'];
   }): Promise<{
     contexts: AutoRetrievedContext[];
     elapsedMs: number;
@@ -746,7 +758,9 @@ export function App() {
       ? []
       : [input.workspaceId];
     const security: RagDocumentSecurity =
-      input.workspaceType === 'private' ? 'private' : 'internal';
+      input.workspaceSecurity === 'private' || input.workspaceType === 'private'
+        ? 'private'
+        : 'internal';
 
     try {
       const results = await window.mimora.searchRagDocuments({
@@ -1392,6 +1406,7 @@ export function App() {
     workspaceId: Workspace['id'];
     workspaceName: string;
     workspaceType: Workspace['type'];
+    workspaceSecurity: Workspace['security'];
   }): Promise<WeeklyReportBuildResult> {
     const parsed = await window.mimora.refreshSchedule(input.workspaceId);
     const summary = parsed.summary;
@@ -1435,6 +1450,7 @@ export function App() {
       query: reportRetrievalQuery,
       workspaceId: input.workspaceId,
       workspaceType: input.workspaceType,
+      workspaceSecurity: input.workspaceSecurity,
     });
     const selectedDocumentContexts = [
       ...vaultContexts.slice(0, WEEKLY_REPORT_VAULT_CONTEXT_LIMIT),
@@ -1521,6 +1537,7 @@ export function App() {
     workspaceId: Workspace['id'];
     workspaceName: string;
     workspaceType: Workspace['type'];
+    workspaceSecurity: Workspace['security'];
     userMessageId: string;
     assistantMessageId: string;
     manualContexts: AttachedContext[];
@@ -1537,6 +1554,7 @@ export function App() {
         workspaceId: input.workspaceId,
         workspaceName: input.workspaceName,
         workspaceType: input.workspaceType,
+        workspaceSecurity: input.workspaceSecurity,
       });
       completeAutoContextRetrieval(
         input.workspaceId,
@@ -2289,6 +2307,7 @@ export function App() {
 
     const targetWorkspaceId = selectedWorkspace.id;
     const targetWorkspaceType = selectedWorkspace.type;
+    const targetWorkspaceSecurity = selectedWorkspace.security;
     const targetSessionId = targetSession.sessionId;
     const targetAIMode = aiMode;
     const isAllWorkspaceRequest = isAllWorkspaceScope(targetWorkspaceId);
@@ -2368,6 +2387,7 @@ export function App() {
         workspaceId: targetWorkspaceId,
         workspaceName: selectedWorkspace.name,
         workspaceType: targetWorkspaceType,
+        workspaceSecurity: targetWorkspaceSecurity,
         userMessageId: userMessage.id,
         assistantMessageId: assistantMessage.id,
         manualContexts,
@@ -2379,6 +2399,7 @@ export function App() {
       targetSessionId,
       targetWorkspaceId,
       targetWorkspaceType,
+      targetWorkspaceSecurity,
       targetAIMode,
       userMessage.id,
       assistantMessage.id,
@@ -2653,7 +2674,9 @@ export function App() {
 
     setWorkspaceRequestStatus(request.sessionId, 'calling-external');
     completeAssistantMessage(request.workspaceId, request.sessionId, request.assistantMessageId, {
-      content: 'OpenAI가 분석 중입니다...',
+      content: `${getAIProviderDisplayName(
+        routingDecision.provider === 'local' ? 'ollama' : routingDecision.provider,
+      )}가 분석 중입니다...`,
       generationStatus: 'loading',
       requestStatus: 'calling-external',
       generationErrorDetail: undefined,
@@ -2661,7 +2684,7 @@ export function App() {
       routingDecision,
     });
 
-    const response: ExternalAIChatResult = await window.mimora.chatWithOpenAI({
+    const response: ExternalAIChatResult = await window.mimora.chatWithExternalAI({
       workspaceId: request.workspaceId,
       mode:
         routingDecision.mode === 'external' ? 'external' : 'auto',
@@ -2683,10 +2706,10 @@ export function App() {
       ...response.performance,
       retrievalMs: request.retrievalMs,
       totalElapsedMs:
-        request.retrievalMs + response.performance.openAIRoundTripMs,
+        request.retrievalMs + response.performance.externalRoundTripMs,
     };
     const unmaskingResult = applyResponseUnmasking({
-      provider: 'openai',
+      provider: response.performance.providerId,
       text: response.content,
       snapshot: request.responseUnmaskingSnapshot,
     });
@@ -2734,6 +2757,7 @@ export function App() {
     sessionId: ChatSession['sessionId'],
     workspaceId: Workspace['id'],
     workspaceType: Workspace['type'],
+    workspaceSecurity: Workspace['security'],
     requestAIMode: AIMode,
     userMessageId: string,
     assistantMessageId: string,
@@ -2815,6 +2839,7 @@ export function App() {
         query: documentRetrievalQuery,
         workspaceId,
         workspaceType,
+        workspaceSecurity,
       });
       ragContext = ragRetrieval.contexts;
       ragRetrievalMs = ragRetrieval.elapsedMs;
@@ -2852,21 +2877,26 @@ export function App() {
     let responseUnmaskingSnapshot: ResponseUnmaskingSnapshotEntry[] = [];
     let externalAvailable = false;
     let externalPreparationError: string | undefined;
+    let selectedExternalProvider: ExternalChatProviderId = 'openai';
 
     if (requestAIMode !== 'local' && !scheduleForcesLocal) {
       try {
-        const [settings, hasApiKey] = await Promise.all([
-          window.mimora.getSettings(),
-          window.mimora.hasOpenAIApiKey(),
-        ]);
+        const settings = await window.mimora.getSettings();
+        selectedExternalProvider = settings.externalAI.provider;
+        const hasApiKey = await window.mimora.hasExternalCredential(
+          selectedExternalProvider,
+        );
         const effectiveSecurity = evaluateSecurity(
           workspaceType,
           [...manualContexts, ...autoContext],
+          workspaceSecurity,
+          query,
         ).security;
 
         preview = createExternalPayloadPreview({
           workspaceId,
           effectiveSecurity,
+          provider: selectedExternalProvider,
           model: settings.externalAI.model,
           question: query,
           manualContexts,
@@ -2899,10 +2929,13 @@ export function App() {
     const routingDecision = routeAIRequest({
       mode: scheduleForcesLocal ? 'local' : requestAIMode,
       workspaceType,
+      workspaceSecurity,
+      query,
       manualContexts,
       autoContexts: finalAutoContext,
       safetyStatus: preview?.status,
       externalAvailable,
+      externalProvider: selectedExternalProvider,
     });
 
     saveRoutingDecisionForTurn(
@@ -3008,6 +3041,7 @@ export function App() {
           sessionId,
           workspaceId,
           workspaceType,
+          workspaceSecurity,
           userMessageId,
           assistantMessageId,
           query,
@@ -3110,7 +3144,7 @@ export function App() {
       }
     } catch (error) {
       const errorMessage =
-        routingDecision.provider === 'openai'
+        routingDecision.providerType === 'external'
           ? getExternalChatErrorMessage(error)
           : getChatErrorMessage(error);
 
@@ -3140,11 +3174,14 @@ export function App() {
     const effectiveSecurity = evaluateSecurity(
       request.workspaceType,
       [...request.manualContexts, ...request.autoContexts],
+      request.workspaceSecurity,
+      request.query,
     ).security;
 
     const preview = createExternalPayloadPreview({
       workspaceId: request.workspaceId,
       effectiveSecurity,
+      provider: settings.externalAI.provider,
       model: settings.externalAI.model,
       question: request.query,
       manualContexts: request.manualContexts,
@@ -3204,6 +3241,10 @@ export function App() {
     if (!tryBeginExternalAction(request)) {
       return { ok: false, error: '이미 처리 중인 요청입니다.' };
     }
+    const externalProvider =
+      request.routingDecision.provider === 'local'
+        ? activeExternalProvider
+        : request.routingDecision.provider;
     setWorkspaceRequestStatus(request.sessionId, 'calling-external');
     completeAssistantMessage(request.workspaceId, request.sessionId, assistantMessageId, {
       content: '외부 전송을 다시 확인하는 중입니다...',
@@ -3231,7 +3272,8 @@ export function App() {
       if (revalidatedPreview.status === 'block') {
         const blockedRoutingDecision: RoutingDecision = {
           ...request.routingDecision,
-          provider: 'openai',
+          provider: externalProvider,
+          providerType: getRoutingProviderType(externalProvider),
           reason: 'external-safety-block',
           safetyStatus: 'block',
           approved: false,
@@ -3284,7 +3326,8 @@ export function App() {
       const approvedAt = new Date().toISOString();
       const routingDecision: RoutingDecision = {
         ...request.routingDecision,
-        provider: 'openai',
+        provider: externalProvider,
+        providerType: getRoutingProviderType(externalProvider),
         reason: 'user-approved',
         safetyStatus: revalidatedPreview.status,
         approved: true,
@@ -3786,6 +3829,9 @@ export function App() {
       >
         {activeView === 'settings' ? (
           <SettingsView
+            onSettingsChange={(settings) => {
+              setActiveExternalProvider(settings.externalAI.provider);
+            }}
             onVaultDocumentsChanged={refreshVaultDocumentSnapshot}
             onWorkspaceRegistryChanged={refreshWorkspaceRegistry}
           />
@@ -3849,6 +3895,7 @@ export function App() {
               workspaceStatus={
                 selectedWorkspace.isSystem ? null : selectedWorkspace.status
               }
+              workspaceSecurity={selectedWorkspace.security}
               workspaceLabel={selectedWorkspace.label}
               onCreateSession={() => {
                 openCreateSessionDialog(selectedWorkspace.id);
@@ -3891,6 +3938,7 @@ export function App() {
                   </p>
                 ) : null}
                 <ChatInput
+                  activeProviderLabel={getAIProviderDisplayName(activeExternalProvider)}
                   disabled={!canAskQuestionInCurrentWorkspace}
                   disabledMessage={composerDisabledMessage}
                   requestStatus={currentWorkspaceRequestStatus}

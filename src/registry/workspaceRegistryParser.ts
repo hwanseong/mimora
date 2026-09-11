@@ -11,12 +11,13 @@ const requiredHeaders = [
   'name',
   'type',
   'status',
-  'start_date',
-  'end_date',
   'description',
 ] as const;
+const optionalHeaders = ['security', 'start_date', 'end_date'] as const;
 
-type WorkspaceRegistryHeader = (typeof requiredHeaders)[number];
+type WorkspaceRegistryHeader =
+  | (typeof requiredHeaders)[number]
+  | (typeof optionalHeaders)[number];
 
 function normalizeMarkdownText(text: string): string {
   return text.replace(/^\uFEFF/u, '').replace(/\r\n/gu, '\n').replace(/\r/gu, '\n');
@@ -187,7 +188,15 @@ function findWorkspaceTable(lines: string[]): {
       headerMap.set(requiredHeader, headerIndex);
     }
 
-    if (headerMap.size === requiredHeaders.length) {
+    for (const optionalHeader of optionalHeaders) {
+      const headerIndex = headers.indexOf(optionalHeader);
+
+      if (headerIndex !== -1) {
+        headerMap.set(optionalHeader, headerIndex);
+      }
+    }
+
+    if (requiredHeaders.every((requiredHeader) => headerMap.has(requiredHeader))) {
       return {
         headerIndex: index,
         headerMap,
@@ -229,6 +238,7 @@ function parseWorkspaceRows(
       name: getCell('name'),
       type: getCell('type'),
       status: getCell('status'),
+      security: getCell('security'),
       startDate: getCell('start_date'),
       endDate: getCell('end_date'),
       description: getCell('description'),

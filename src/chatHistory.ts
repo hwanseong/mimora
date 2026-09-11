@@ -5,6 +5,7 @@ import type { DocumentSecurity, MimoraDocumentMetadata } from './metadata/types'
 import type { ResponseUnmaskingInfo } from './chat';
 import {
   aiModeOptions,
+  getRoutingProviderType,
   type RoutingDecision,
 } from './security/securityRouter';
 import type { SearchScopeSnapshot } from './searchScope';
@@ -229,7 +230,9 @@ function sanitizeRoutingDecision(value: unknown): RoutingDecision | undefined {
 
   if (
     !aiModeOptions.includes(value.mode as (typeof aiModeOptions)[number]) ||
-    (value.provider !== 'local' && value.provider !== 'openai') ||
+    (value.provider !== 'local' &&
+      value.provider !== 'openai' &&
+      value.provider !== 'gemini') ||
     (value.security !== 'internal' &&
       value.security !== 'personal' &&
       value.security !== 'sensitive' &&
@@ -245,6 +248,10 @@ function sanitizeRoutingDecision(value: unknown): RoutingDecision | undefined {
   return {
     mode: value.mode as RoutingDecision['mode'],
     provider: value.provider,
+    providerType:
+      value.providerType === 'local' || value.providerType === 'external'
+        ? value.providerType
+        : getRoutingProviderType(value.provider),
     security: value.security,
     reason: value.reason as RoutingDecision['reason'],
     sensitiveContextCount: value.sensitiveContextCount as number,

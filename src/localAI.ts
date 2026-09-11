@@ -1,4 +1,4 @@
-export const llmProviderOptions = ['ollama', 'openai'] as const;
+export const llmProviderOptions = ['ollama', 'openai', 'gemini'] as const;
 
 export type LLMProviderType = (typeof llmProviderOptions)[number];
 export type LocalAIProviderType = Extract<LLMProviderType, 'ollama'>;

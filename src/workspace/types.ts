@@ -1,6 +1,12 @@
 export const workspaceTypeOptions = ['project', 'operation'] as const;
 
 export type WorkspaceType = string;
+export type WorkspaceSecurity = 'internal' | 'private';
+
+export const workspaceSecurityOptions = [
+  'internal',
+  'private',
+] as const satisfies WorkspaceSecurity[];
 
 export type WorkspaceStatus =
   | 'active'
@@ -18,6 +24,7 @@ export type Workspace = {
   name: string;
   type: WorkspaceType;
   status: WorkspaceStatus;
+  security: WorkspaceSecurity;
   startDate?: string | null;
   endDate?: string | null;
   description?: string | null;
@@ -28,6 +35,7 @@ export type WorkspaceRegistryRecord = {
   name: string;
   type: WorkspaceType;
   status: WorkspaceStatus;
+  security?: WorkspaceSecurity;
   start_date?: string | null;
   end_date?: string | null;
   description?: string | null;

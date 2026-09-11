@@ -20,6 +20,7 @@ import type {
   RagEmbeddingStatus,
   RagEmbeddingStatusInput,
   RagFileSelection,
+  RagFileSelectionPurpose,
   RagIndexInput,
   RagIndexResult,
   RagImportInput,
@@ -55,6 +56,7 @@ import type {
 import type {
   ExternalAIChatInput,
   ExternalAIChatResult,
+  ExternalChatProviderId,
   ExternalAISettings,
 } from './externalAI';
 import type { LocalAIChatInput, LocalAIChatResult } from './llmChat';
@@ -116,6 +118,25 @@ type MimoraApi = {
       input: ExternalAISettings,
     ) => Promise<MimoraSettings>;
     updateRagSettings: (input: RagSettings) => Promise<MimoraSettings>;
+    hasExternalCredential: (
+      providerId: ExternalChatProviderId,
+    ) => Promise<boolean>;
+    saveExternalCredential: (
+      providerId: ExternalChatProviderId,
+      apiKey: string,
+    ) => Promise<boolean>;
+    deleteExternalCredential: (
+      providerId: ExternalChatProviderId,
+    ) => Promise<boolean>;
+    listExternalAIModels: (
+      providerId: ExternalChatProviderId,
+    ) => Promise<LLMModel[]>;
+    testExternalAIConnection: (
+      providerId: ExternalChatProviderId,
+    ) => Promise<ConnectionTestResult>;
+    chatWithExternalAI: (
+      input: ExternalAIChatInput,
+    ) => Promise<ExternalAIChatResult>;
     hasOpenAIApiKey: () => Promise<boolean>;
     saveOpenAIApiKey: (apiKey: string) => Promise<boolean>;
     deleteOpenAIApiKey: () => Promise<boolean>;
@@ -137,7 +158,9 @@ type MimoraApi = {
     loadKnowledgeTypeRegistry: () => Promise<KnowledgeTypeRegistryParseResult>;
     getRagPythonStatus: () => Promise<RagPythonStatus>;
     getRagStorageRoot: () => Promise<string>;
-    selectRagDocumentFile: () => Promise<RagFileSelection | null>;
+    selectRagDocumentFile: (
+      purpose: RagFileSelectionPurpose,
+    ) => Promise<RagFileSelection | null>;
     listRagDocuments: () => Promise<RagDocument[]>;
     importRagDocument: (input: RagImportInput) => Promise<RagImportResult>;
     deleteRagDocument: (
@@ -212,6 +235,7 @@ type MimoraApi = {
     saveDerivedKnowledgeDraft: (
       input: SaveDerivedKnowledgeInput,
     ) => Promise<SaveDerivedKnowledgeResult>;
+    openExternalLink: (url: string) => Promise<boolean>;
 };
 
 declare global {

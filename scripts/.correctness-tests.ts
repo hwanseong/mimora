@@ -18,6 +18,7 @@ import {
   type ChatSessions,
 } from '../src/chat';
 import {
+  CHAT_HISTORY_VERSION,
   createPersistedChatHistory,
 } from '../src/chatHistory';
 import { ChatInput } from '../src/components/ChatInput';
@@ -261,7 +262,7 @@ assert.ok(invalidYamlMetadata);
 assert.equal(hasMetadataIssue(invalidYamlMetadata, 'invalid_frontmatter'), true);
 
 const recentChatSessions: ChatSessions = {
-  all: [
+  __all__: [
     {
       id: 'all-user',
       role: 'user',
@@ -275,7 +276,7 @@ const recentChatSessions: ChatSessions = {
       createdAt: '2026-09-06T10:00:01.000Z',
     },
   ],
-  'pjt-a': [
+  'WS-2026-0001': [
     {
       id: 'project-user',
       role: 'user',
@@ -283,7 +284,7 @@ const recentChatSessions: ChatSessions = {
       createdAt: '2026-09-06T12:00:00.000Z',
     },
   ],
-  private: [
+  'WS-2026-0002': [
     {
       id: 'private-user',
       role: 'user',
@@ -311,28 +312,28 @@ const normalizedRecentChatSessions: ChatSessions = Object.fromEntries(
         createdAt: messages[0]?.createdAt ?? '2026-09-06T00:00:00.000Z',
         updatedAt:
           messages.at(-1)?.createdAt ?? '2026-09-06T00:00:00.000Z',
-        messages,
+        messages: messages as unknown as ChatSessions[string][number]['messages'],
       },
     ],
   ]),
 );
 const recentChatItems = createRecentChatItems(normalizedRecentChatSessions, [
   {
-    id: 'all',
+    id: '__all__',
     name: 'All Work',
     label: 'All Work',
     type: 'all',
     status: 'active',
   },
   {
-    id: 'pjt-a',
+    id: 'WS-2026-0001',
     name: 'Project A',
     label: 'Project A',
     type: 'project',
     status: 'active',
   },
   {
-    id: 'private',
+    id: 'WS-2026-0002',
     name: 'Private',
     label: 'Private',
     type: 'private',
@@ -342,7 +343,7 @@ const recentChatItems = createRecentChatItems(normalizedRecentChatSessions, [
 
 assert.deepEqual(
   recentChatItems.map((item) => item.workspace.id),
-  ['pjt-a', 'private', 'all'],
+  ['WS-2026-0001', 'WS-2026-0002', '__all__'],
 );
 assert.equal(recentChatItems[0].preview, '현재 주요 리스크를 분석해줘.');
 assert.ok(
@@ -387,21 +388,21 @@ const populatedRecentChatsHtml = renderToStaticMarkup(
     onRenameSession: () => undefined,
     workspaces: [
       {
-        id: 'all',
+        id: '__all__',
         name: 'All Work',
         label: 'All Work',
         type: 'all',
         status: 'active',
       },
       {
-        id: 'pjt-a',
+        id: 'WS-2026-0001',
         name: 'PJT-A',
         label: 'PJT-A',
         type: 'project',
         status: 'active',
       },
       {
-        id: 'private',
+        id: 'WS-2026-0002',
         name: 'PM Private 대화 기록 삭제',
         label: 'PM Private 대화 기록 삭제',
         type: 'private',
@@ -433,8 +434,8 @@ const fakeSafeStorage = {
 
 try {
   const persistenceSessions: ChatSessions = {
-    ...recentChatSessions,
-    'sys-a': [
+    ...normalizedRecentChatSessions,
+    'WS-2026-0003': [
       {
         id: 'system-user',
         role: 'user',
@@ -443,8 +444,8 @@ try {
       },
     ],
   };
-  persistenceSessions['pjt-a'][0] = {
-    ...persistenceSessions['pjt-a'][0],
+  persistenceSessions['WS-2026-0001'][0] = {
+    ...persistenceSessions['WS-2026-0001'][0],
     rawExternalResponse: 'raw-external-response-must-not-persist',
     responseUnmaskingSnapshot: [
       {
@@ -480,10 +481,28 @@ try {
       },
     ],
   };
+  persistenceSessions['WS-2026-0003'] = [
+    {
+      sessionId: 'session-WS-2026-0003',
+      workspaceId: 'WS-2026-0003',
+      title: 'WS-2026-0003',
+      sortOrder: 0,
+      createdAt: '2026-09-06T09:00:00.000Z',
+      updatedAt: '2026-09-06T09:00:00.000Z',
+      messages: [
+        {
+          id: 'system-user',
+          role: 'user',
+          content: 'SYS-A status',
+          createdAt: '2026-09-06T09:00:00.000Z',
+        },
+      ],
+    },
+  ];
   const persistedHistory = createPersistedChatHistory(persistenceSessions);
   const serializedHistory = JSON.stringify(persistedHistory);
 
-  assert.equal(persistedHistory.version, 1);
+  assert.equal(persistedHistory.version, CHAT_HISTORY_VERSION);
   assert.doesNotMatch(
     serializedHistory,
     /manual-vault-content|auto-vault-content|raw-external-response|snapshot-original/u,
@@ -512,20 +531,23 @@ try {
 
   assert.equal(restored.status, 'ready');
   assert.deepEqual(Object.keys(restored.sessions).sort(), [
-    'all',
-    'pjt-a',
-    'private',
-    'sys-a',
+    'WS-2026-0001',
+    'WS-2026-0002',
+    'WS-2026-0003',
+    '__all__',
   ]);
-  assert.equal(restored.sessions.all[0].content, recentChatSessions.all[0].content);
-  assert.equal(restored.sessions.private.length, 2);
-  assert.equal(restored.sessions['pjt-a'][0].manualContext, undefined);
-  assert.equal(restored.sessions['pjt-a'][0].autoContext, undefined);
-  assert.equal(restored.sessions['pjt-a'][0].rawExternalResponse, undefined);
-  assert.equal(restored.sessions['pjt-a'][0].responseUnmaskingSnapshot, undefined);
+  assert.equal(
+    restored.sessions.__all__[0].messages[0].content,
+    recentChatSessions.__all__[0].content,
+  );
+  assert.equal(restored.sessions['WS-2026-0002'][0].messages.length, 2);
+  assert.equal(restored.sessions['WS-2026-0001'][0].messages[0].manualContext, undefined);
+  assert.equal(restored.sessions['WS-2026-0001'][0].messages[0].autoContext, undefined);
+  assert.equal(restored.sessions['WS-2026-0001'][0].messages[0].rawExternalResponse, undefined);
+  assert.equal(restored.sessions['WS-2026-0001'][0].messages[0].responseUnmaskingSnapshot, undefined);
 
   await writeFile(protectedVaultFile, '# Vault 문서는 유지되어야 한다.', 'utf8');
-  await restartedStore.deleteWorkspaceChat('pjt-a');
+  await restartedStore.deleteWorkspaceChat('WS-2026-0001');
   assert.equal(
     await readFile(protectedVaultFile, 'utf8'),
     '# Vault 문서는 유지되어야 한다.',
@@ -539,10 +561,10 @@ try {
   const afterDelete = await afterDeleteRestart.loadChatHistory();
 
   assert.equal(afterDelete.status, 'ready');
-  assert.equal(afterDelete.sessions['pjt-a'], undefined);
-  assert.ok(afterDelete.sessions.all.length > 0);
-  assert.ok(afterDelete.sessions['sys-a'].length > 0);
-  assert.ok(afterDelete.sessions.private.length > 0);
+  assert.equal(afterDelete.sessions['WS-2026-0001'], undefined);
+  assert.ok(afterDelete.sessions.__all__.length > 0);
+  assert.ok(afterDelete.sessions['WS-2026-0003'].length > 0);
+  assert.ok(afterDelete.sessions['WS-2026-0002'].length > 0);
 
   const missingStore = createChatHistoryStore({
     getHistoryPath: () => path.join(chatHistoryRoot, 'missing-history.dat'),
@@ -640,6 +662,7 @@ try {
 
   const settingsStore = {
     getSettings: async () => ({
+      ...defaultSettings,
       vaults: [
         {
           id: 'test-vault',

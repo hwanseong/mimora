@@ -11,10 +11,8 @@ import type {
   RagFileSelection,
   RagIndexInput,
   RagIndexResult,
-  RagImportInput,
   RagImportResult,
   RagPythonStatus,
-  RagReplaceInput,
   RagReplaceResult,
   RagSearchInput,
   RagSearchResult,
@@ -233,8 +231,10 @@ async function validateSourcePath(sourcePath: unknown): Promise<string> {
   return normalizedSourcePath;
 }
 
-async function validateImportInput(input: unknown): Promise<RagImportInput & {
+async function validateImportInput(input: unknown): Promise<{
   sourcePath: string;
+  workspaceIds: string[];
+  security: RagDocumentSecurity;
 }> {
   if (!isRecord(input)) {
     throw new Error('RAG import input is invalid.');
@@ -247,7 +247,7 @@ async function validateImportInput(input: unknown): Promise<RagImportInput & {
   };
 }
 
-async function validateReplaceInput(input: unknown): Promise<RagReplaceInput & {
+async function validateReplaceInput(input: unknown): Promise<{
   ragDocumentId: string;
   sourcePath: string;
 }> {

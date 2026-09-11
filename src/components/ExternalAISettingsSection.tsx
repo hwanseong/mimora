@@ -1,6 +1,9 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import {
+  aiProviderCatalog,
   defaultExternalAISettings,
+  externalChatProviderOptions,
+  getAIProviderDisplayName,
   type ExternalAISettings,
 } from '../externalAI';
 import type { ConnectionTestResult, LLMModel } from '../localAI';
@@ -20,6 +23,18 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : 'External AI 설정을 처리하지 못했습니다.';
+}
+
+function formatProviderConnectionSuccess(
+  providerName: string,
+  modelCount: number | undefined,
+): string {
+  const countText =
+    typeof modelCount === 'number'
+      ? `사용 가능한 텍스트 모델 ${modelCount.toLocaleString()}개`
+      : '연결 상태 정상';
+
+  return `${providerName} 연결 성공 · ${countText}`;
 }
 
 export function ExternalAISettingsSection({
@@ -51,6 +66,7 @@ export function ExternalAISettingsSection({
       form.model &&
       !models.some((model) => model.model === form.model),
   );
+  const providerDisplayName = getAIProviderDisplayName(form.provider);
 
   useEffect(() => {
     setForm({ ...settings.externalAI });
@@ -60,7 +76,7 @@ export function ExternalAISettingsSection({
     let isMounted = true;
 
     void window.mimora
-      .hasOpenAIApiKey()
+      .hasExternalCredential(form.provider)
       .then((isStored) => {
         if (isMounted) {
           setHasApiKey(isStored);
@@ -76,14 +92,17 @@ export function ExternalAISettingsSection({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [form.provider]);
 
   async function saveApiKey(): Promise<void> {
     setIsSavingKey(true);
     setFeedback(null);
 
     try {
-      const isStored = await window.mimora.saveOpenAIApiKey(apiKeyInput);
+      const isStored = await window.mimora.saveExternalCredential(
+        form.provider,
+        apiKeyInput,
+      );
       setApiKeyInput('');
       setHasApiKey(isStored);
       setConnectionResult(null);
@@ -100,7 +119,9 @@ export function ExternalAISettingsSection({
     setFeedback(null);
 
     try {
-      const isStored = await window.mimora.deleteOpenAIApiKey();
+      const isStored = await window.mimora.deleteExternalCredential(
+        form.provider,
+      );
       setHasApiKey(isStored);
       setApiKeyInput('');
       setModels([]);
@@ -120,12 +141,14 @@ export function ExternalAISettingsSection({
     setFeedback(null);
 
     try {
-      const availableModels = await window.mimora.listOpenAIModels();
+      const availableModels = await window.mimora.listExternalAIModels(
+        form.provider,
+      );
       setModels(availableModels);
       setModelsLoaded(true);
       setFeedback({
         tone: 'success',
-        message: `사용 가능한 텍스트 모델 ${availableModels.length}개를 불러왔습니다.`,
+        message: `사용 가능한 텍스트 모델 ${availableModels.length.toLocaleString()}개를 불러왔습니다.`,
       });
     } catch (error) {
       setModels([]);
@@ -141,7 +164,18 @@ export function ExternalAISettingsSection({
     setFeedback(null);
 
     try {
-      setConnectionResult(await window.mimora.testOpenAIConnection());
+      const result = await window.mimora.testExternalAIConnection(form.provider);
+      setConnectionResult(
+        result.connected
+          ? {
+              ...result,
+              message: formatProviderConnectionSuccess(
+                providerDisplayName,
+                result.modelCount,
+              ),
+            }
+          : result,
+      );
     } catch (error) {
       setConnectionResult({ connected: false, message: getErrorMessage(error) });
     } finally {
@@ -170,14 +204,20 @@ export function ExternalAISettingsSection({
       <div className="local-ai-header">
         <div>
           <h2 id="external-ai-heading">External AI</h2>
-          <p>OpenAI 연결과 모델 설정 · Chat 전송은 아직 비활성화</p>
+          <p>OpenAI / Google Gemini 연결과 모델 설정</p>
         </div>
         <span
           className={`local-ai-connection ${
             connectionResult?.connected ? 'is-connected' : ''
           }`}
         >
-          {connectionResult?.connected ? '● Connected' : '○ Not connected'}
+          <span
+            className={`status-dot ${
+              connectionResult?.connected ? 'is-connected' : ''
+            }`}
+            aria-hidden="true"
+          />
+          <span>{connectionResult?.connected ? '연결됨' : '미연결'}</span>
         </span>
       </div>
 
@@ -190,8 +230,32 @@ export function ExternalAISettingsSection({
       >
         <label>
           <span>Provider</span>
-          <select disabled value={form.provider}>
-            <option value="openai">OpenAI</option>
+          <select
+            onChange={(event) => {
+              const provider =
+                event.target.value as ExternalAISettings['provider'];
+              setForm({
+                provider,
+                model:
+                  aiProviderCatalog[provider].defaultChatModel ??
+                  (settings.externalAI.provider === provider
+                    ? settings.externalAI.model
+                    : null),
+              });
+              setApiKeyInput('');
+              setHasApiKey(null);
+              setModels([]);
+              setModelsLoaded(false);
+              setConnectionResult(null);
+              setFeedback(null);
+            }}
+            value={form.provider}
+          >
+            {externalChatProviderOptions.map((provider) => (
+              <option key={provider} value={provider}>
+                {getAIProviderDisplayName(provider)}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -204,7 +268,7 @@ export function ExternalAISettingsSection({
                 setApiKeyInput(event.target.value);
                 setFeedback(null);
               }}
-              placeholder={hasApiKey ? 'API Key 저장됨' : 'OpenAI API Key 입력'}
+              placeholder={hasApiKey ? 'API Key 저장됨' : `${providerDisplayName} API Key 입력`}
               spellCheck={false}
               type="password"
               value={apiKeyInput}
@@ -218,7 +282,7 @@ export function ExternalAISettingsSection({
             }}
             type="button"
           >
-            {isSavingKey ? '저장 중…' : 'API Key 저장'}
+            {isSavingKey ? '저장 중...' : 'API Key 저장'}
           </button>
           <button
             className="secondary-button"
@@ -241,7 +305,7 @@ export function ExternalAISettingsSection({
             }}
             value={form.model ?? ''}
           >
-            {!form.model ? <option value="">모델을 선택하세요.</option> : null}
+            {!form.model ? <option value="">모델을 선택하세요</option> : null}
             {form.model && !models.some((model) => model.model === form.model) ? (
               <option value={form.model}>
                 {form.model}
@@ -265,7 +329,7 @@ export function ExternalAISettingsSection({
             }}
             type="button"
           >
-            {isRefreshingModels ? '조회 중…' : '모델 새로고침'}
+            {isRefreshingModels ? '조회 중...' : '모델 새로고침'}
           </button>
           <button
             className="secondary-button"
@@ -275,21 +339,21 @@ export function ExternalAISettingsSection({
             }}
             type="button"
           >
-            {isTestingConnection ? '확인 중…' : 'Connection Test'}
+            {isTestingConnection ? '확인 중...' : 'Connection Test'}
           </button>
           <button
             className="primary-button"
             disabled={isSavingSettings || !settingsChanged}
             type="submit"
           >
-            {isSavingSettings ? '저장 중…' : '설정 저장'}
+            {isSavingSettings ? '저장 중...' : '설정 저장'}
           </button>
         </div>
       </form>
 
       {showDeleteConfirmation ? (
         <div className="external-key-confirmation" role="alertdialog">
-          <p>저장된 OpenAI API Key를 삭제하시겠습니까?</p>
+          <p>저장된 {providerDisplayName} API Key를 삭제하시겠습니까?</p>
           <div>
             <button
               className="secondary-button"
@@ -306,7 +370,7 @@ export function ExternalAISettingsSection({
               }}
               type="button"
             >
-              {isDeletingKey ? '삭제 중…' : '삭제'}
+              {isDeletingKey ? '삭제 중...' : '삭제'}
             </button>
           </div>
         </div>
@@ -315,7 +379,7 @@ export function ExternalAISettingsSection({
       <div className="local-ai-messages" aria-live="polite">
         <p className={hasApiKey ? 'success' : 'warning'}>
           {hasApiKey === null
-            ? 'API Key 저장 상태 확인 중…'
+            ? 'API Key 저장 상태 확인 중'
             : hasApiKey
               ? 'API Key 저장됨'
               : 'API Key가 설정되지 않았습니다.'}
@@ -327,7 +391,7 @@ export function ExternalAISettingsSection({
         ) : null}
         {feedback ? <p className={feedback.tone}>{feedback.message}</p> : null}
         {configuredModelMissing ? (
-          <p className="warning">선택된 모델을 현재 접근 가능한 목록에서 확인할 수 없습니다.</p>
+          <p className="warning">선택한 모델을 현재 접근 가능한 목록에서 확인할 수 없습니다.</p>
         ) : null}
       </div>
     </section>

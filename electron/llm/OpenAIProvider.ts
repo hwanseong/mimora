@@ -15,6 +15,8 @@ import type {
   OpenAIChatRequest,
   OpenAIChatResponse,
 } from '../../src/externalAI';
+import { aiProviderCatalog } from '../../src/externalAI';
+import type { ExternalChatProvider } from './ExternalChatProvider';
 import type { LLMProvider } from './LLMProvider';
 
 export const OPENAI_CONNECTION_TIMEOUT_MS = 10_000;
@@ -206,7 +208,16 @@ export function createOpenAIResponsesRequest(
   };
 }
 
-export class OpenAIProvider implements LLMProvider {
+export class OpenAIProvider implements LLMProvider, ExternalChatProvider {
+  readonly metadata = {
+    providerId: 'openai',
+    providerType: 'external',
+    displayName: aiProviderCatalog.openai.displayName,
+    supportsChat: true,
+    supportsEmbedding: true,
+    apiKeyRequired: true,
+  } as const;
+
   private readonly client: OpenAIModelsClient;
 
   constructor(

@@ -12,13 +12,16 @@ import {
   type EffectiveSecurity,
 } from '../security/securityRouter';
 import {
+  workspaceSecurityLabels,
   workspaceStatusLabels,
+  type WorkspaceSecurity,
   type WorkspaceStatus,
 } from '../workspaces';
 
 export function ChatHeader({
   workspaceLabel,
   workspaceStatus,
+  workspaceSecurity = 'internal',
   sessionTitle,
   aiMode,
   effectiveSecurity,
@@ -42,6 +45,7 @@ export function ChatHeader({
 }: {
   workspaceLabel: string;
   workspaceStatus?: WorkspaceStatus | null;
+  workspaceSecurity?: WorkspaceSecurity;
   sessionTitle?: string | null;
   aiMode: AIMode;
   effectiveSecurity: EffectiveSecurity;
@@ -114,6 +118,9 @@ export function ChatHeader({
           </label>
           <span className={`security-badge ${effectiveSecurity}`}>
             Security: {effectiveSecurityLabels[effectiveSecurity]}
+          </span>
+          <span className={`security-badge workspace-security-badge ${workspaceSecurity}`}>
+            Workspace: {workspaceSecurityLabels[workspaceSecurity]}
           </span>
         </div>
         {showSearchScope ? (

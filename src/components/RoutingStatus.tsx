@@ -1,9 +1,11 @@
 import {
   effectiveSecurityLabels,
+  isExternalLocalOnlyRoutingReason,
   routingReasonLabels,
   type RoutingDecision,
 } from '../security/securityRouter';
 import type { ExternalApprovalInfo } from '../chat';
+import { getAIProviderDisplayName } from '../externalAI';
 
 export function RoutingStatus({
   decision,
@@ -14,10 +16,19 @@ export function RoutingStatus({
   model?: string;
   externalApproval?: ExternalApprovalInfo;
 }) {
-  const providerLabel = decision.provider === 'local' ? 'Local AI' : 'OpenAI';
+  const providerLabel =
+    decision.provider === 'local'
+      ? 'Local AI'
+      : getAIProviderDisplayName(decision.provider);
   const userApproved = externalApproval?.approved ?? decision.approved;
+  const isLocalOnlyExternalBlock =
+    decision.provider === 'local' &&
+    decision.mode === 'external' &&
+    isExternalLocalOnlyRoutingReason(decision.reason);
   const routeLabel =
-    decision.reason === 'user-selected-local-fallback'
+    isLocalOnlyExternalBlock
+      ? 'External blocked / Local only'
+      : decision.reason === 'user-selected-local-fallback'
       ? 'External · Local fallback'
       : decision.mode === 'auto'
       ? 'Auto'
@@ -42,7 +53,8 @@ export function RoutingStatus({
         {safetyLabel ? ` · ${safetyLabel}` : ''}
         {decision.provider === 'local' &&
         (decision.mode === 'auto' ||
-          decision.reason === 'user-selected-local-fallback')
+          decision.reason === 'user-selected-local-fallback' ||
+          isExternalLocalOnlyRoutingReason(decision.reason))
           ? ` · ${routingReasonLabels[decision.reason]}`
           : ''}
         {model ? ` · Model: ${model}` : ''}

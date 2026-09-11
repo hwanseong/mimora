@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -117,6 +118,13 @@ class RagChunk:
     faiss_vector_id: int
 
 
+@dataclass(frozen=True)
+class ManagedCopyPaths:
+    documents_root: Path
+    document_directory: Path
+    managed_file_path: Path
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -172,9 +180,13 @@ def get_test_index_path(storage_root: Path) -> Path:
     return storage_root / "index" / "internal-test-vectors.json"
 
 
+def get_rag_documents_root(storage_root: Path) -> Path:
+    return storage_root / "documents"
+
+
 def connect_database(storage_root: Path) -> sqlite3.Connection:
     storage_root.mkdir(parents=True, exist_ok=True)
-    (storage_root / "documents").mkdir(parents=True, exist_ok=True)
+    get_rag_documents_root(storage_root).mkdir(parents=True, exist_ok=True)
     (storage_root / "index").mkdir(parents=True, exist_ok=True)
     (storage_root / "temp").mkdir(parents=True, exist_ok=True)
 
@@ -383,6 +395,88 @@ def get_document_row(connection: sqlite3.Connection, rag_document_id: str) -> sq
     if not row:
         raise WorkerError("document_not_found", "RAG document was not found.")
     return row
+
+
+def canonical_path(path_value: Path, *, must_exist: bool = True) -> Path:
+    try:
+        return path_value.resolve(strict=must_exist)
+    except OSError as error:
+        if must_exist:
+            raise WorkerError(
+                "unsafe_managed_path",
+                "RAG 문서 저장 경로가 안전하지 않아 작업할 수 없습니다.",
+            ) from error
+        return path_value.resolve(strict=False)
+
+
+def is_path_contained_by(child: Path, parent: Path) -> bool:
+    child_value = os.path.normcase(str(child))
+    parent_value = os.path.normcase(str(parent))
+    try:
+        return os.path.commonpath([child_value, parent_value]) == parent_value
+    except ValueError:
+        return False
+
+
+def assert_managed_path_contained(child: Path, parent: Path) -> None:
+    if not is_path_contained_by(child, parent):
+        raise WorkerError(
+            "unsafe_managed_path",
+            "RAG 문서 저장 경로가 안전하지 않아 작업할 수 없습니다.",
+        )
+
+
+def resolve_managed_copy_paths(
+    storage_root: Path,
+    row: sqlite3.Row,
+) -> ManagedCopyPaths:
+    rag_document_id = str(row["rag_document_id"])
+    documents_root = get_rag_documents_root(storage_root)
+    documents_root.mkdir(parents=True, exist_ok=True)
+    documents_root_canonical = canonical_path(documents_root)
+    expected_directory = documents_root / rag_document_id
+    expected_directory_canonical = canonical_path(
+        expected_directory,
+        must_exist=expected_directory.exists(),
+    )
+
+    assert_managed_path_contained(expected_directory_canonical, documents_root_canonical)
+
+    managed_path_raw = Path(str(row["managed_file_path"]))
+    if not managed_path_raw.is_absolute():
+        raise WorkerError(
+            "unsafe_managed_path",
+            "RAG 문서 저장 경로가 안전하지 않아 작업할 수 없습니다.",
+        )
+
+    managed_path_canonical = canonical_path(
+        managed_path_raw,
+        must_exist=managed_path_raw.exists(),
+    )
+    expected_file_canonical = canonical_path(
+        expected_directory / sanitize_filename(str(row["original_filename"])),
+        must_exist=False,
+    )
+
+    if os.path.normcase(str(managed_path_canonical)) != os.path.normcase(str(expected_file_canonical)):
+        raise WorkerError(
+            "unsafe_managed_path",
+            "RAG 문서 저장 경로가 안전하지 않아 작업할 수 없습니다.",
+        )
+
+    if os.path.normcase(str(managed_path_canonical.parent)) != os.path.normcase(str(expected_directory_canonical)):
+        raise WorkerError(
+            "unsafe_managed_path",
+            "RAG 문서 저장 경로가 안전하지 않아 작업할 수 없습니다.",
+        )
+
+    assert_managed_path_contained(managed_path_canonical, expected_directory_canonical)
+
+    return ManagedCopyPaths(
+        documents_root=documents_root_canonical,
+        document_directory=expected_directory_canonical,
+        managed_file_path=managed_path_canonical,
+    )
 
 
 def generate_rag_document_id(connection: sqlite3.Connection) -> str:
@@ -1103,13 +1197,15 @@ def delete_document(input_data: dict[str, Any]) -> dict[str, Any]:
 
     with connect_database(storage_root) as connection:
         row = get_document_row(connection, rag_document_id)
-        document_directory = Path(row["managed_file_path"]).parent
+        managed_paths = resolve_managed_copy_paths(storage_root, row)
         try:
             with connection:
                 delete_document_chunks(connection, storage_root, rag_document_id)
                 connection.execute("DELETE FROM rag_document_workspaces WHERE rag_document_id = ?", (rag_document_id,))
                 connection.execute("DELETE FROM rag_documents WHERE rag_document_id = ?", (rag_document_id,))
-            shutil.rmtree(document_directory, ignore_errors=True)
+            shutil.rmtree(managed_paths.document_directory, ignore_errors=True)
+        except WorkerError:
+            raise
         except sqlite3.Error as error:
             raise WorkerError("database_failed", "RAG document could not be deleted.") from error
         except Exception as error:
@@ -1134,7 +1230,8 @@ def replace_document(input_data: dict[str, Any]) -> dict[str, Any]:
         if duplicate and duplicate["ragDocumentId"] != rag_document_id:
             return {"status": "duplicate", "document": row_to_document(connection, current_row), "duplicateOf": duplicate["ragDocumentId"]}
 
-        document_directory = Path(current_row["managed_file_path"]).parent
+        managed_paths = resolve_managed_copy_paths(storage_root, current_row)
+        document_directory = managed_paths.document_directory
         new_managed_file_path = document_directory / sanitize_filename(source_path.name)
         try:
             document_directory.mkdir(parents=True, exist_ok=True)
@@ -1163,6 +1260,8 @@ def replace_document(input_data: dict[str, Any]) -> dict[str, Any]:
                         rag_document_id,
                     ),
                 )
+        except WorkerError:
+            raise
         except sqlite3.Error as error:
             raise WorkerError("database_failed", "RAG document could not be replaced.") from error
         except Exception as error:

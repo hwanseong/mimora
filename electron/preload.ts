@@ -19,6 +19,7 @@ import type {
   RagEmbeddingStatus,
   RagEmbeddingStatusInput,
   RagFileSelection,
+  RagFileSelectionPurpose,
   RagIndexInput,
   RagIndexResult,
   RagImportInput,
@@ -54,6 +55,7 @@ import type {
 import type {
   ExternalAIChatInput,
   ExternalAIChatResult,
+  ExternalChatProviderId,
   ExternalAISettings,
 } from '../src/externalAI';
 import type {
@@ -199,6 +201,47 @@ contextBridge.exposeInMainWorld('mimora', {
         MimoraIpcResult<MimoraSettings>
       >
     ).then(unwrapIpcResult),
+  hasExternalCredential: (providerId: ExternalChatProviderId) =>
+    (
+      ipcRenderer.invoke('externalAI:hasCredential', providerId) as Promise<
+        MimoraIpcResult<boolean>
+      >
+    ).then(unwrapIpcResult),
+  saveExternalCredential: (
+    providerId: ExternalChatProviderId,
+    apiKey: string,
+  ) =>
+    (
+      ipcRenderer.invoke(
+        'externalAI:saveCredential',
+        providerId,
+        apiKey,
+      ) as Promise<MimoraIpcResult<boolean>>
+    ).then(unwrapIpcResult),
+  deleteExternalCredential: (providerId: ExternalChatProviderId) =>
+    (
+      ipcRenderer.invoke('externalAI:deleteCredential', providerId) as Promise<
+        MimoraIpcResult<boolean>
+      >
+    ).then(unwrapIpcResult),
+  listExternalAIModels: (providerId: ExternalChatProviderId) =>
+    (
+      ipcRenderer.invoke('externalAI:listModels', providerId) as Promise<
+        MimoraIpcResult<LLMModel[]>
+      >
+    ).then(unwrapIpcResult),
+  testExternalAIConnection: (providerId: ExternalChatProviderId) =>
+    (
+      ipcRenderer.invoke('externalAI:testConnection', providerId) as Promise<
+        MimoraIpcResult<ConnectionTestResult>
+      >
+    ).then(unwrapIpcResult),
+  chatWithExternalAI: (input: ExternalAIChatInput) =>
+    (
+      ipcRenderer.invoke('externalAI:chat', input) as Promise<
+        MimoraIpcResult<ExternalAIChatResult>
+      >
+    ).then(unwrapIpcResult),
   hasOpenAIApiKey: () =>
     (
       ipcRenderer.invoke('openAI:hasApiKey') as Promise<
@@ -289,9 +332,10 @@ contextBridge.exposeInMainWorld('mimora', {
         MimoraIpcResult<string>
       >
     ).then(unwrapIpcResult),
-  selectRagDocumentFile: () =>
+  selectRagDocumentFile: (purpose: RagFileSelectionPurpose) =>
     ipcRenderer.invoke(
       'rag:selectDocumentFile',
+      purpose,
     ) as Promise<RagFileSelection | null>,
   listRagDocuments: () =>
     (
@@ -481,6 +525,12 @@ contextBridge.exposeInMainWorld('mimora', {
     (
       ipcRenderer.invoke('derivedKnowledge:saveDraft', input) as Promise<
         MimoraIpcResult<SaveDerivedKnowledgeResult>
+      >
+    ).then(unwrapIpcResult),
+  openExternalLink: (url: string) =>
+    (
+      ipcRenderer.invoke('externalLink:open', url) as Promise<
+        MimoraIpcResult<boolean>
       >
     ).then(unwrapIpcResult),
 });

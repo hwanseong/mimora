@@ -288,7 +288,7 @@ export function ExternalPayloadPreviewModal({
                 }}
                 type="button"
               >
-                {isProcessing ? '전송 준비 중…' : '승인 후 OpenAI 전송'}
+                {isProcessing ? '전송 준비 중…' : '승인 후 External AI 전송'}
               </button>
             ) : null}
           </div>

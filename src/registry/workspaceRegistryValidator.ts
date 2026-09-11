@@ -1,8 +1,10 @@
 import {
   workspaceIdPattern,
+  workspaceSecurityOptions,
   workspaceStatusOptions,
   workspaceTypeOptions,
   type Workspace,
+  type WorkspaceSecurity,
   type WorkspaceStatus,
 } from '../workspace/types';
 import type {
@@ -25,6 +27,10 @@ function isWorkspaceType(value: string): boolean {
   return workspaceTypeOptions.includes(
     value as (typeof workspaceTypeOptions)[number],
   );
+}
+
+function isWorkspaceSecurity(value: string): value is WorkspaceSecurity {
+  return workspaceSecurityOptions.includes(value as WorkspaceSecurity);
 }
 
 function validateDate(value: string): boolean {
@@ -164,6 +170,32 @@ export function validateWorkspaceRegistry({
       );
     }
 
+    const workspaceSecurity = row.security.trim() || 'internal';
+
+    if (!row.security.trim()) {
+      rowIssues.push(
+        createIssue({
+          severity: 'warning',
+          code: 'workspace-security-missing',
+          message: 'workspace security가 없어 internal로 해석합니다.',
+          row: row.rowNumber,
+          workspaceId: row.id || undefined,
+          field: 'security',
+        }),
+      );
+    } else if (!isWorkspaceSecurity(workspaceSecurity)) {
+      rowIssues.push(
+        createIssue({
+          severity: 'error',
+          code: 'invalid-workspace-security',
+          message: 'Workspace security must be internal or private.',
+          row: row.rowNumber,
+          workspaceId: row.id || undefined,
+          field: 'security',
+        }),
+      );
+    }
+
     if (row.startDate && !validateDate(row.startDate)) {
       rowIssues.push(
         createIssue({
@@ -217,6 +249,7 @@ export function validateWorkspaceRegistry({
         name: row.name,
         type: row.type,
         status: row.status as WorkspaceStatus,
+        security: workspaceSecurity as WorkspaceSecurity,
         startDate: row.startDate || null,
         endDate: row.endDate || null,
         description: row.description || null,

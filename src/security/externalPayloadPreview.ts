@@ -1,4 +1,5 @@
 import type { EffectiveSecurity } from './securityRouter';
+import type { ExternalChatProviderId } from '../externalAI';
 import type { Workspace } from '../workspace/types';
 import type { VaultSecurity, VaultType } from '../settings';
 import type { MimoraDocumentMetadata } from '../metadata/types';
@@ -182,6 +183,7 @@ export function applyExternalSafeTextPipeline(input: {
 export function createExternalPayloadPreview(input: {
   workspaceId: string;
   effectiveSecurity: EffectiveSecurity;
+  provider?: ExternalChatProviderId;
   model?: string | null;
   question: string;
   manualContexts: ExternalPreviewContextInput[];
@@ -207,7 +209,7 @@ export function createExternalPayloadPreview(input: {
     };
   };
   const contextBudget = buildContextBudget({
-    profile: createContextProfile('openai', input.model ?? null),
+    profile: createContextProfile(input.provider ?? 'openai', input.model ?? null),
     systemPrompt: '',
     question: input.question,
     manualDocuments: input.manualContexts.map((document) =>
@@ -228,10 +230,11 @@ export function createExternalPayloadPreview(input: {
     [],
   );
 
-  if (
-    process.env.NODE_ENV === 'development' ||
-    import.meta.env.DEV
-  ) {
+  const isViteDev =
+    (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV ===
+    true;
+
+  if (process.env.NODE_ENV === 'development' || isViteDev) {
     console.info('[Mimora Context Budget]', createContextBudgetSummary(contextBudget));
   }
 

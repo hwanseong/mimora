@@ -12,6 +12,7 @@ import { removeInternalContextIdentifiers } from '../chatCitationCleanup';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { getSecretRules } from '../security/secretDetector';
 import type { Workspace } from '../workspaces';
+import { getAIProviderDisplayName } from '../externalAI';
 
 export function ChatMessages({
   messages,
@@ -40,6 +41,9 @@ export function ChatMessages({
   const [processingActionMessageId, setProcessingActionMessageId] =
     useState<string | null>(null);
   const processingActionMessageIdRef = useRef<string | null>(null);
+  const isDev =
+    (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV ===
+    true;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -81,6 +85,7 @@ export function ChatMessages({
         createExternalPayloadPreview({
           workspaceId,
           effectiveSecurity: message.routingDecision.security,
+          provider: settings.externalAI.provider,
           model: settings.externalAI.model,
           question: message.content,
           manualContexts: message.manualContext ?? [],
@@ -195,7 +200,7 @@ export function ChatMessages({
                 />
               ) : null}
               {message.role === 'assistant' &&
-              message.routingDecision?.provider === 'openai' &&
+              message.routingDecision?.providerType === 'external' &&
               message.responseUnmasking &&
               message.responseUnmasking.replacementCount > 0 ? (
                 <small className="message-unmasking">
@@ -268,9 +273,13 @@ export function ChatMessages({
               ) : null}
               {message.role === 'assistant' && message.externalPerformance ? (
                 <small className="message-performance external">
-                  <strong>OpenAI</strong>
+                  <strong>
+                    {getAIProviderDisplayName(
+                      message.externalPerformance.providerId,
+                    )}
+                  </strong>
                   <span>
-                    {(message.externalPerformance.openAIRoundTripMs / 1_000).toFixed(1)}s
+                    {(message.externalPerformance.externalRoundTripMs / 1_000).toFixed(1)}s
                     {message.usage?.inputTokens === undefined
                       ? ''
                       : ` · Input ${message.usage.inputTokens.toLocaleString()} tokens`}
@@ -280,7 +289,7 @@ export function ChatMessages({
                   </span>
                 </small>
               ) : null}
-              {import.meta.env.DEV &&
+              {isDev &&
               message.role === 'assistant' &&
               message.performance ? (
                 <small className="message-performance">

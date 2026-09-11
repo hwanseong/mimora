@@ -1,6 +1,6 @@
 import type { LLMChatMessage } from '../llmChat';
 
-export type ContextProvider = 'local' | 'openai';
+export type ContextProvider = 'local' | 'openai' | 'gemini';
 
 export type ContextProfile = {
   provider: ContextProvider;
@@ -56,9 +56,15 @@ const openAIModelProfiles = [
   { pattern: /^gpt-5(?:-|$)/iu, contextWindowTokens: 400_000 },
 ];
 
+const geminiModelProfiles = [
+  { pattern: /^gemini-2\.5(?:-|$)/iu, contextWindowTokens: 1_000_000 },
+  { pattern: /^gemini-3(?:\.|-|$)/iu, contextWindowTokens: 1_000_000 },
+];
+
 const fallbackContextWindowTokens: Record<ContextProvider, number> = {
   local: 4096,
   openai: 128_000,
+  gemini: 128_000,
 };
 
 export function createContextProfile(
@@ -67,7 +73,11 @@ export function createContextProfile(
 ): ContextProfile {
   const normalizedModel = model?.trim() || `${provider}-default`;
   const registry =
-    provider === 'local' ? localModelProfiles : openAIModelProfiles;
+    provider === 'local'
+      ? localModelProfiles
+      : provider === 'gemini'
+        ? geminiModelProfiles
+        : openAIModelProfiles;
   const matchedProfile = registry.find((profile) =>
     profile.pattern.test(normalizedModel),
   );

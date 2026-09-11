@@ -7,7 +7,7 @@ import {
   shell,
 } from 'electron';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import type {
   ConnectionTestResult,
@@ -17,6 +17,11 @@ import type {
   ExternalAIChatInput,
   ExternalAIChatResult,
   ExternalAISettings,
+  ExternalChatProviderId,
+} from '../src/externalAI';
+import {
+  getAIProviderDisplayName,
+  isExternalChatProviderId,
 } from '../src/externalAI';
 import type {
   LocalAIChatResult,
@@ -25,10 +30,12 @@ import type {
 } from '../src/llmChat';
 import {
   evaluateSecurity,
+  getRoutingProviderType,
   type AIMode,
 } from '../src/security/securityRouter';
 import {
   allWorkspaceId,
+  type WorkspaceSecurity,
   type WorkspaceType,
 } from '../src/workspaces';
 import {
@@ -36,6 +43,7 @@ import {
   evaluateOutboundPayload,
   type OutboundPayloadDocumentMetadata,
 } from '../src/security/outboundPayloadSafety';
+import { validateExternalLinkUrl } from '../src/security/externalLinkSafety';
 import type {
   AddMaskingEntryInput,
   MaskingEntry,
@@ -75,6 +83,7 @@ import type {
   RagDeleteResult,
   RagDocument,
   RagFileSelection,
+  RagFileSelectionPurpose,
   RagEmbeddingStatus,
   RagEmbeddingStatusInput,
   RagIndexInput,
@@ -88,6 +97,7 @@ import type {
   RagSearchResult,
   RagSettings,
 } from '../src/rag';
+import { ragFileSelectionPurposeOptions } from '../src/rag';
 import type {
   ScheduleFileSelection,
   ScheduleParseResult,
@@ -109,20 +119,22 @@ import { createRegistryStatusService } from './registryStatus';
 import { createVaultFilesService } from './vaultFiles';
 import { createDerivedKnowledgeService } from './derivedKnowledgeService';
 import {
-  createRagFileSelection,
   createRagService,
   ragFileDialogFilters,
 } from './ragService';
 import {
-  createScheduleFileSelection,
   createScheduleService,
   scheduleFileDialogFilters,
 } from './scheduleService';
+import {
+  createSecureFileSelectionStore,
+  validateSelectionOnlyIpcInput,
+} from './secureFileSelection';
 import { createWeeklyReportService } from './weeklyReportService';
 import { createLLMProvider } from './llm/createLLMProvider';
-import { OpenAIProvider } from './llm/OpenAIProvider';
+import { createExternalChatProvider } from './llm/externalChatProviderFactory';
 import { buildLocalAIChatRequest } from './llm/promptBuilder';
-import { createOpenAICredentialStore } from './openAICredentialStore';
+import { createExternalCredentialStore } from './externalCredentialStore';
 import type {
   VaultFile,
   VaultFileContent,
@@ -139,6 +151,7 @@ import { createWorkspaceInsightStore } from './workspaceInsightStore';
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const settingsFileName = 'mimora-settings.json';
 const openAICredentialFileName = 'openai-api-key.safe';
+const externalCredentialDirectoryName = 'credentials';
 const chatHistoryFileName = 'chat-history.dat';
 const registryCacheFileName = 'registry-runtime-cache.json';
 const workspaceInsightFileName = 'workspace-insights.dat';
@@ -154,8 +167,14 @@ function getRegistryCachePath(): string {
 const settingsStore = createSettingsStore({
   getSettingsPath,
 });
-const openAICredentialStore = createOpenAICredentialStore({
-  getCredentialPath: () =>
+const externalCredentialStore = createExternalCredentialStore({
+  getCredentialPath: (providerId) =>
+    path.join(
+      app.getPath('userData'),
+      externalCredentialDirectoryName,
+      `${providerId}.safe`,
+    ),
+  getLegacyOpenAICredentialPath: () =>
     path.join(app.getPath('userData'), openAICredentialFileName),
   safeStorage,
 });
@@ -171,7 +190,8 @@ const workspaceInsightStore = createWorkspaceInsightStore({
 const ragService = createRagService({
   getUserDataPath: () => app.getPath('userData'),
   getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
-  getOpenAIApiKey: () => openAICredentialStore.readApiKeyForMainProcess(),
+  getOpenAIApiKey: () =>
+    externalCredentialStore.readApiKeyForMainProcess('openai'),
   getRagSettings: async () => {
     const settings = await settingsStore.getSettings();
     return {
@@ -180,12 +200,11 @@ const ragService = createRagService({
     };
   },
 });
-const pendingRagFileSelections = new Map<string, string>();
 const scheduleService = createScheduleService({
   getUserDataPath: () => app.getPath('userData'),
   getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
 });
-const pendingScheduleFileSelections = new Map<string, string>();
+const secureFileSelections = createSecureFileSelectionStore();
 const weeklyReportService = createWeeklyReportService({
   getUserDataPath: () => app.getPath('userData'),
   getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
@@ -198,11 +217,14 @@ const vaultFilesService = createVaultFilesService(settingsStore, {
   getRegistryCachePath,
 });
 
-async function getWorkspaceTypeForRequest(
+async function getWorkspaceSecurityDescriptorForRequest(
   workspaceId: string,
-): Promise<WorkspaceType> {
+): Promise<{
+  type: WorkspaceType;
+  security: WorkspaceSecurity;
+}> {
   if (workspaceId === allWorkspaceId) {
-    return 'all';
+    return { type: 'all', security: 'internal' };
   }
 
   const registry = await registryStatusService.loadWorkspaceRegistry();
@@ -212,7 +234,10 @@ async function getWorkspaceTypeForRequest(
     throw new Error('External AI 요청의 Workspace를 확인할 수 없습니다.');
   }
 
-  return workspace.type;
+  return {
+    type: workspace.type,
+    security: workspace.security,
+  };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -468,30 +493,17 @@ function registerRegistryHandlers(): void {
 }
 
 function registerRagHandlers(): void {
-  function createPendingRagFileSelection(filePath: string): RagFileSelection {
-    const selectionId = randomUUID();
-
-    pendingRagFileSelections.set(selectionId, filePath);
-
-    return createRagFileSelection(selectionId, filePath);
-  }
-
-  function resolvePendingRagSourcePath(input: RagImportInput | RagReplaceInput): string {
-    if (input.selectionId) {
-      const selectedPath = pendingRagFileSelections.get(input.selectionId);
-
-      if (!selectedPath) {
-        throw new Error('Selected RAG document is no longer available.');
-      }
-
-      return selectedPath;
+  function validateRagSelectionPurpose(
+    value: unknown,
+  ): RagFileSelectionPurpose {
+    if (
+      typeof value === 'string' &&
+      ragFileSelectionPurposeOptions.includes(value as RagFileSelectionPurpose)
+    ) {
+      return value as RagFileSelectionPurpose;
     }
 
-    if (input.sourcePath) {
-      return input.sourcePath;
-    }
-
-    throw new Error('RAG source file was not selected.');
+    throw new Error('RAG file selection purpose is invalid.');
   }
 
   ipcMain.handle(
@@ -508,7 +520,8 @@ function registerRagHandlers(): void {
 
   ipcMain.handle(
     'rag:selectDocumentFile',
-    async (): Promise<RagFileSelection | null> => {
+    async (_event, purpose: unknown): Promise<RagFileSelection | null> => {
+      const selectionPurpose = validateRagSelectionPurpose(purpose);
       const result = await dialog.showOpenDialog({
         filters: ragFileDialogFilters,
         properties: ['openFile'],
@@ -519,7 +532,10 @@ function registerRagHandlers(): void {
         return null;
       }
 
-      return createPendingRagFileSelection(result.filePaths[0]);
+      return secureFileSelections.create(
+        result.filePaths[0],
+        selectionPurpose,
+      ) as Promise<RagFileSelection>;
     },
   );
 
@@ -533,21 +549,24 @@ function registerRagHandlers(): void {
     'rag:importDocument',
     async (
       _event,
-      input: RagImportInput,
+      rawInput: unknown,
     ): Promise<MimoraIpcResult<RagImportResult>> =>
       toIpcResult(async () => {
-        const sourcePath = resolvePendingRagSourcePath(input);
-        const result = await ragService.importDocument({
+        const input = validateSelectionOnlyIpcInput<RagImportInput>(
+          rawInput,
+          ['selectionId', 'workspaceIds', 'security'],
+          'RAG import',
+        );
+        const sourcePath = await secureFileSelections.consume(
+          input.selectionId,
+          'rag-import',
+        );
+
+        return ragService.importDocument({
           sourcePath,
           workspaceIds: input.workspaceIds,
           security: input.security,
         });
-
-        if (input.selectionId) {
-          pendingRagFileSelections.delete(input.selectionId);
-        }
-
-        return result;
       }),
   );
 
@@ -564,20 +583,23 @@ function registerRagHandlers(): void {
     'rag:replaceDocument',
     async (
       _event,
-      input: RagReplaceInput,
+      rawInput: unknown,
     ): Promise<MimoraIpcResult<RagReplaceResult>> =>
       toIpcResult(async () => {
-        const sourcePath = resolvePendingRagSourcePath(input);
-        const result = await ragService.replaceDocument({
+        const input = validateSelectionOnlyIpcInput<RagReplaceInput>(
+          rawInput,
+          ['ragDocumentId', 'selectionId'],
+          'RAG replace',
+        );
+        const sourcePath = await secureFileSelections.consume(
+          input.selectionId,
+          'rag-replace',
+        );
+
+        return ragService.replaceDocument({
           ragDocumentId: input.ragDocumentId,
           sourcePath,
         });
-
-        if (input.selectionId) {
-          pendingRagFileSelections.delete(input.selectionId);
-        }
-
-        return result;
       }),
   );
 
@@ -610,34 +632,6 @@ function registerRagHandlers(): void {
 }
 
 function registerScheduleHandlers(): void {
-  function createPendingScheduleFileSelection(filePath: string): ScheduleFileSelection {
-    const selectionId = randomUUID();
-
-    pendingScheduleFileSelections.set(selectionId, filePath);
-
-    return createScheduleFileSelection(selectionId, filePath);
-  }
-
-  function resolvePendingScheduleSourcePath(
-    input: ScheduleRegisterInput,
-  ): string {
-    if (input.selectionId) {
-      const selectedPath = pendingScheduleFileSelections.get(input.selectionId);
-
-      if (!selectedPath) {
-        throw new Error('Selected Schedule file is no longer available.');
-      }
-
-      return selectedPath;
-    }
-
-    if (input.sourcePath) {
-      return input.sourcePath;
-    }
-
-    throw new Error('Schedule source file was not selected.');
-  }
-
   ipcMain.handle(
     'schedule:getStorageRoot',
     async (): Promise<MimoraIpcResult<string>> =>
@@ -657,7 +651,10 @@ function registerScheduleHandlers(): void {
         return null;
       }
 
-      return createPendingScheduleFileSelection(result.filePaths[0]);
+      return secureFileSelections.create(
+        result.filePaths[0],
+        'schedule-register',
+      ) as Promise<ScheduleFileSelection>;
     },
   );
 
@@ -665,20 +662,23 @@ function registerScheduleHandlers(): void {
     'schedule:registerSource',
     async (
       _event,
-      input: ScheduleRegisterInput,
+      rawInput: unknown,
     ): Promise<MimoraIpcResult<ScheduleSource>> =>
       toIpcResult(async () => {
-        const sourcePath = resolvePendingScheduleSourcePath(input);
-        const source = await scheduleService.registerSource({
+        const input = validateSelectionOnlyIpcInput<ScheduleRegisterInput>(
+          rawInput,
+          ['workspaceId', 'selectionId'],
+          'Schedule register',
+        );
+        const sourcePath = await secureFileSelections.consume(
+          input.selectionId,
+          'schedule-register',
+        );
+
+        return scheduleService.registerSource({
           workspaceId: input.workspaceId,
           sourcePath,
         });
-
-        if (input.selectionId) {
-          pendingScheduleFileSelections.delete(input.selectionId);
-        }
-
-        return source;
       }),
   );
 
@@ -811,18 +811,142 @@ function registerWorkspaceInsightHandlers(): void {
   );
 }
 
+function validateExternalChatProviderId(
+  providerId: unknown,
+): ExternalChatProviderId {
+  if (!isExternalChatProviderId(providerId)) {
+    throw new Error('지원하지 않는 External AI Provider입니다.');
+  }
+
+  return providerId;
+}
+
+function createProviderApiKeyMissingMessage(
+  providerId: ExternalChatProviderId,
+): string {
+  return `${getAIProviderDisplayName(providerId)} API Key가 설정되지 않았습니다. Settings에서 API Key를 저장하세요.`;
+}
+
 function registerOpenAIHandlers(): void {
+  ipcMain.handle(
+    'externalAI:hasCredential',
+    async (
+      _event,
+      providerId: unknown,
+    ): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(() =>
+        externalCredentialStore.hasApiKey(
+          validateExternalChatProviderId(providerId),
+        ),
+      ),
+  );
+
+  ipcMain.handle(
+    'externalAI:saveCredential',
+    async (
+      _event,
+      providerId: unknown,
+      apiKey: unknown,
+    ): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(async () => {
+        await externalCredentialStore.saveApiKey(
+          validateExternalChatProviderId(providerId),
+          apiKey,
+        );
+        return true;
+      }),
+  );
+
+  ipcMain.handle(
+    'externalAI:deleteCredential',
+    async (
+      _event,
+      providerId: unknown,
+    ): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(async () => {
+        await externalCredentialStore.deleteApiKey(
+          validateExternalChatProviderId(providerId),
+        );
+        return false;
+      }),
+  );
+
+  ipcMain.handle(
+    'externalAI:listModels',
+    async (
+      _event,
+      providerId: unknown,
+    ): Promise<MimoraIpcResult<LLMModel[]>> =>
+      toIpcResult(async () => {
+        const externalProviderId = validateExternalChatProviderId(providerId);
+        const apiKey =
+          await externalCredentialStore.readApiKeyForMainProcess(
+            externalProviderId,
+          );
+        return createExternalChatProvider(externalProviderId, apiKey).listModels();
+      }),
+  );
+
+  ipcMain.handle(
+    'externalAI:testConnection',
+    async (
+      _event,
+      providerId: unknown,
+    ): Promise<MimoraIpcResult<ConnectionTestResult>> =>
+      toIpcResult(async () => {
+        const externalProviderId = validateExternalChatProviderId(providerId);
+        const startedAt = performance.now();
+        let result: ConnectionTestResult;
+
+        try {
+          const apiKey =
+            await externalCredentialStore.readApiKeyForMainProcess(
+              externalProviderId,
+            );
+          result = await createExternalChatProvider(
+            externalProviderId,
+            apiKey,
+          ).testConnection();
+        } catch (error) {
+          result = {
+            connected: false,
+            message:
+              error instanceof Error
+                ? error.message
+                : `${getAIProviderDisplayName(externalProviderId)}에 연결할 수 없습니다.`,
+          };
+        }
+
+        console.info('[Mimora External AI] Connection test.', {
+          provider: externalProviderId,
+          status: result.connected ? 'success' : 'failure',
+          elapsedMs: Math.round(performance.now() - startedAt),
+        });
+
+        return result;
+      }),
+  );
+
+  ipcMain.handle(
+    'externalAI:chat',
+    async (
+      _event,
+      rawInput: unknown,
+    ): Promise<MimoraIpcResult<ExternalAIChatResult>> =>
+      toIpcResult(async () => executeExternalAIChat(rawInput)),
+  );
+
   ipcMain.handle(
     'openAI:hasApiKey',
     async (): Promise<MimoraIpcResult<boolean>> =>
-      toIpcResult(() => openAICredentialStore.hasApiKey()),
+      toIpcResult(() => externalCredentialStore.hasApiKey('openai')),
   );
 
   ipcMain.handle(
     'openAI:saveApiKey',
     async (_event, apiKey: unknown): Promise<MimoraIpcResult<boolean>> =>
       toIpcResult(async () => {
-        await openAICredentialStore.saveApiKey(apiKey);
+        await externalCredentialStore.saveApiKey('openai', apiKey);
         return true;
       }),
   );
@@ -831,7 +955,7 @@ function registerOpenAIHandlers(): void {
     'openAI:deleteApiKey',
     async (): Promise<MimoraIpcResult<boolean>> =>
       toIpcResult(async () => {
-        await openAICredentialStore.deleteApiKey();
+        await externalCredentialStore.deleteApiKey('openai');
         return false;
       }),
   );
@@ -840,8 +964,9 @@ function registerOpenAIHandlers(): void {
     'openAI:listModels',
     async (): Promise<MimoraIpcResult<LLMModel[]>> =>
       toIpcResult(async () => {
-        const apiKey = await openAICredentialStore.readApiKeyForMainProcess();
-        return new OpenAIProvider(apiKey).listModels();
+        const apiKey =
+          await externalCredentialStore.readApiKeyForMainProcess('openai');
+        return createExternalChatProvider('openai', apiKey).listModels();
       }),
   );
 
@@ -853,8 +978,12 @@ function registerOpenAIHandlers(): void {
         let result: ConnectionTestResult;
 
         try {
-          const apiKey = await openAICredentialStore.readApiKeyForMainProcess();
-          result = await new OpenAIProvider(apiKey).testConnection();
+          const apiKey =
+            await externalCredentialStore.readApiKeyForMainProcess('openai');
+          result = await createExternalChatProvider(
+            'openai',
+            apiKey,
+          ).testConnection();
         } catch (error) {
           result = {
             connected: false,
@@ -886,10 +1015,11 @@ function registerOpenAIHandlers(): void {
         const startedTime = performance.now();
         const requestStartedAt = new Date();
         const settings = await settingsStore.getSettings();
-        const workspaceType = await getWorkspaceTypeForRequest(input.workspaceId);
+        const workspaceSecurity =
+          await getWorkspaceSecurityDescriptorForRequest(input.workspaceId);
 
         const effectiveSecurity = evaluateSecurity(
-          workspaceType,
+          workspaceSecurity.type,
           input.documents.map((document) => ({
             vaultId: document.documentId,
             relativePath: document.relativePath,
@@ -898,6 +1028,8 @@ function registerOpenAIHandlers(): void {
             documentSecurity:
               document.documentSecurity ?? document.metadata?.security,
           })),
+          workspaceSecurity.security,
+          input.externalText,
         ).security;
         const secretDetection = detectSecrets(
           input.externalText,
@@ -943,21 +1075,45 @@ function registerOpenAIHandlers(): void {
               maskingEntries: maskingEntriesForTurn,
               effectiveSecurity,
             });
+        const providerId = settings.externalAI.provider;
+        const providerType = getRoutingProviderType(providerId);
         const model = settings.externalAI.model;
+        const hasExternalLocalOnlyContext =
+          effectiveSecurity === 'private' ||
+          effectiveSecurity === 'sensitive' ||
+          input.documents.some(
+            (document) =>
+              document.vaultType === 'private' ||
+              document.security === 'sensitive' ||
+              document.documentSecurity === 'private' ||
+              document.metadata?.security === 'private',
+          ) ||
+          safety.blockers.some((blocker) =>
+            [
+              'private-document-context',
+              'private-vault-context',
+              'sensitive-context',
+            ].includes(blocker),
+          );
         const authorization = authorizeExternalSend({
           status: safety.status,
           mode: input.mode,
           approved: input.approved,
+          providerId,
+          providerType,
           hasPrivateDocument: input.documents.some(
             (document) =>
               document.documentSecurity === 'private' ||
               document.metadata?.security === 'private',
           ),
+          hasExternalLocalOnlyContext,
         });
         let status: 'success' | 'failure' = 'failure';
+        let blockReason: string | undefined;
 
         try {
           if (!authorization.allowed) {
+            blockReason = authorization.message;
             throw new Error(authorization.message);
           }
 
@@ -970,14 +1126,17 @@ function registerOpenAIHandlers(): void {
           let apiKey: string;
 
           try {
-            apiKey = await openAICredentialStore.readApiKeyForMainProcess();
+            apiKey =
+              await externalCredentialStore.readApiKeyForMainProcess(
+                providerId,
+              );
           } catch {
             throw new Error(
               'OpenAI API Key가 설정되지 않았습니다. Settings에서 API Key를 저장하세요.',
             );
           }
 
-          const response = await new OpenAIProvider(apiKey).chat({
+          const response = await createExternalChatProvider(providerId, apiKey).chat({
             model,
             input: input.externalText,
           });
@@ -991,7 +1150,9 @@ function registerOpenAIHandlers(): void {
             model: response.model ?? model,
             safetyStatus: safety.status,
             performance: {
+              externalRoundTripMs: openAIRoundTripMs,
               openAIRoundTripMs,
+              providerId,
               payloadChars: input.externalText.length,
               documentCount: input.documents.length,
               responseChars: response.content.length,
@@ -1001,9 +1162,12 @@ function registerOpenAIHandlers(): void {
           };
         } finally {
           console.info('[Mimora External Request]', {
+            providerId,
+            providerType,
             workspace: input.workspaceId,
             mode: input.mode,
             safety: safety.status,
+            blockReason,
             documents: input.documents.length,
             maskedPayloadChars: input.externalText.length,
             model: model ?? 'not-selected',
@@ -1014,6 +1178,157 @@ function registerOpenAIHandlers(): void {
         }
       }),
   );
+}
+
+async function executeExternalAIChat(
+  rawInput: unknown,
+): Promise<ExternalAIChatResult> {
+  const input = validateExternalAIChatInput(rawInput);
+  const startedTime = performance.now();
+  const requestStartedAt = new Date();
+  const settings = await settingsStore.getSettings();
+  const workspaceSecurity =
+    await getWorkspaceSecurityDescriptorForRequest(input.workspaceId);
+
+  const effectiveSecurity = evaluateSecurity(
+    workspaceSecurity.type,
+    input.documents.map((document) => ({
+      vaultId: document.documentId,
+      relativePath: document.relativePath,
+      vaultType: document.vaultType,
+      security: document.security,
+      documentSecurity:
+        document.documentSecurity ?? document.metadata?.security,
+    })),
+    workspaceSecurity.security,
+    input.externalText,
+  ).security;
+  const secretDetection = detectSecrets(
+    input.externalText,
+    getSecretRules(settings.secretDetection.customRules),
+  );
+  const maskingEntriesForTurn = createMaskingEntriesFromSnapshot(
+    input.maskingSnapshot,
+  );
+  const safety = secretDetection.detected
+    ? {
+        status: 'block' as const,
+        checks: [
+          {
+            id: 'secret-detected',
+            label: 'Secret / Credential Detection',
+            status: 'fail' as const,
+            message:
+              'Secret 또는 Credential 정보가 감지되어 외부 전송을 차단했습니다.',
+          },
+        ],
+        blockers: ['secret-detected'],
+        warnings: [],
+      }
+    : evaluateOutboundPayload({
+        externalText: input.externalText,
+        documents: input.documents,
+        maskingEntries: maskingEntriesForTurn,
+        effectiveSecurity,
+      });
+  const providerId = settings.externalAI.provider;
+  const providerType = getRoutingProviderType(providerId);
+  const model = settings.externalAI.model;
+  const providerDisplayName = getAIProviderDisplayName(providerId);
+  const hasExternalLocalOnlyContext =
+    effectiveSecurity === 'private' ||
+    effectiveSecurity === 'sensitive' ||
+    input.documents.some(
+      (document) =>
+        document.vaultType === 'private' ||
+        document.security === 'sensitive' ||
+        document.documentSecurity === 'private' ||
+        document.metadata?.security === 'private',
+    ) ||
+    safety.blockers.some((blocker) =>
+      [
+        'private-document-context',
+        'private-vault-context',
+        'sensitive-context',
+      ].includes(blocker),
+    );
+  const authorization = authorizeExternalSend({
+    status: safety.status,
+    mode: input.mode,
+    approved: input.approved,
+    providerId,
+    providerType,
+    hasPrivateDocument: input.documents.some(
+      (document) =>
+        document.documentSecurity === 'private' ||
+        document.metadata?.security === 'private',
+    ),
+    hasExternalLocalOnlyContext,
+  });
+  let status: 'success' | 'failure' = 'failure';
+  let blockReason: string | undefined;
+
+  try {
+    if (!authorization.allowed) {
+      blockReason = authorization.message;
+      throw new Error(authorization.message);
+    }
+
+    if (!model) {
+      throw new Error(
+        `${providerDisplayName} 모델이 선택되지 않았습니다. Settings에서 모델을 선택하세요.`,
+      );
+    }
+
+    let apiKey: string;
+
+    try {
+      apiKey =
+        await externalCredentialStore.readApiKeyForMainProcess(providerId);
+    } catch {
+      throw new Error(createProviderApiKeyMissingMessage(providerId));
+    }
+
+    const response = await createExternalChatProvider(providerId, apiKey).chat({
+      model,
+      input: input.externalText,
+    });
+    const responseCompletedAt = new Date();
+    const externalRoundTripMs = performance.now() - startedTime;
+
+    status = 'success';
+
+    return {
+      ...response,
+      model: response.model ?? model,
+      safetyStatus: safety.status,
+      performance: {
+        externalRoundTripMs,
+        openAIRoundTripMs: externalRoundTripMs,
+        providerId,
+        payloadChars: input.externalText.length,
+        documentCount: input.documents.length,
+        responseChars: response.content.length,
+        requestStartedAt: requestStartedAt.toISOString(),
+        responseCompletedAt: responseCompletedAt.toISOString(),
+      },
+    };
+  } finally {
+    console.info('[Mimora External Request]', {
+      providerId,
+      providerType,
+      workspace: input.workspaceId,
+      mode: input.mode,
+      safety: safety.status,
+      blockReason,
+      documents: input.documents.length,
+      maskedPayloadChars: input.externalText.length,
+      model: model ?? 'not-selected',
+      approved: input.approved,
+      status,
+      elapsedMs: Math.round(performance.now() - startedTime),
+    });
+  }
 }
 
 function isExternalDocumentMetadata(
@@ -1372,6 +1687,88 @@ function registerDerivedKnowledgeHandlers(): void {
   );
 }
 
+async function openValidatedExternalLink(
+  url: string,
+  source: 'markdown' | 'window-open' | 'will-navigate',
+): Promise<boolean> {
+  const decision = validateExternalLinkUrl(url);
+
+  if (!decision.allowed) {
+    console.warn('[Mimora External Link] Blocked.', {
+      source,
+      reason: decision.reason,
+      protocol: decision.protocol ?? null,
+    });
+
+    return false;
+  }
+
+  await shell.openExternal(decision.normalizedUrl);
+
+  console.info('[Mimora External Link] Opened.', {
+    source,
+    protocol: decision.protocol,
+  });
+
+  return true;
+}
+
+function openValidatedExternalLinkInBackground(
+  url: string,
+  source: 'window-open' | 'will-navigate',
+): void {
+  void openValidatedExternalLink(url, source).catch((error: unknown) => {
+    console.warn('[Mimora External Link] Open failed.', {
+      source,
+      error: getErrorMessage(error),
+    });
+  });
+}
+
+function isAppNavigationUrl(navigationUrl: string): boolean {
+  try {
+    const parsed = new URL(navigationUrl);
+
+    if (devServerUrl) {
+      return parsed.origin === new URL(devServerUrl).origin;
+    }
+
+    if (parsed.protocol !== 'file:') {
+      return false;
+    }
+
+    const appDistPath = path.resolve(__dirname, '../dist');
+    const targetPath = path.resolve(fileURLToPath(parsed));
+
+    return (
+      targetPath === appDistPath ||
+      targetPath.startsWith(`${appDistPath}${path.sep}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function registerExternalLinkHandlers(): void {
+  ipcMain.handle(
+    'externalLink:open',
+    async (_event, url: unknown): Promise<MimoraIpcResult<boolean>> =>
+      toIpcResult(async () => {
+        if (typeof url !== 'string') {
+          throw new Error('External link URL must be a string.');
+        }
+
+        const opened = await openValidatedExternalLink(url, 'markdown');
+
+        if (!opened) {
+          throw new Error('Blocked external link protocol.');
+        }
+
+        return true;
+      }),
+  );
+}
+
 function createMainWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1100,
@@ -1389,8 +1786,17 @@ function createMainWindow(): void {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    openValidatedExternalLinkInBackground(url, 'window-open');
     return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (isAppNavigationUrl(navigationUrl)) {
+      return;
+    }
+
+    event.preventDefault();
+    openValidatedExternalLinkInBackground(navigationUrl, 'will-navigate');
   });
 
   if (devServerUrl) {
@@ -1412,6 +1818,7 @@ registerVaultFileHandlers();
 registerDerivedKnowledgeHandlers();
 registerLocalAIHandlers();
 registerOpenAIHandlers();
+registerExternalLinkHandlers();
 
 void app.whenReady().then(() => {
   createMainWindow();

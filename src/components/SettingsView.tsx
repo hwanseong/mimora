@@ -1198,7 +1198,7 @@ export function RagDocumentLibrarySection({
   }, [ragSettings.defaultTopK, ragSettings.similarityThreshold]);
 
   async function handleSelectFile(): Promise<void> {
-    const selection = await window.mimora.selectRagDocumentFile();
+    const selection = await window.mimora.selectRagDocumentFile('rag-import');
 
     if (selection) {
       setSelectedFile(selection);
@@ -1259,7 +1259,7 @@ export function RagDocumentLibrarySection({
   }
 
   async function handleReplace(document: RagDocument): Promise<void> {
-    const selection = await window.mimora.selectRagDocumentFile();
+    const selection = await window.mimora.selectRagDocumentFile('rag-replace');
 
     if (!selection) {
       return;
@@ -1737,9 +1737,11 @@ export function RagDocumentLibrarySection({
 
 export function SettingsView({
   onVaultDocumentsChanged,
+  onSettingsChange,
   onWorkspaceRegistryChanged,
 }: {
   onVaultDocumentsChanged?: () => void;
+  onSettingsChange?: (settings: MimoraSettings) => void;
   onWorkspaceRegistryChanged?: () => Promise<void> | void;
 }) {
   const [settings, setSettings] = useState<MimoraSettings>(defaultSettings);
@@ -2674,7 +2676,10 @@ export function SettingsView({
       </section>
 
       <ExternalAISettingsSection
-        onSettingsChange={setSettings}
+        onSettingsChange={(nextSettings) => {
+          setSettings(nextSettings);
+          onSettingsChange?.(nextSettings);
+        }}
         settings={settings}
       />
 

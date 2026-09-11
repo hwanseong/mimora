@@ -1,6 +1,10 @@
 import type { VaultSecurity } from './settings';
 
 export const ragSupportedExtensions = ['.pdf', '.docx', '.md', '.txt'] as const;
+export const ragFileSelectionPurposeOptions = [
+  'rag-import',
+  'rag-replace',
+] as const;
 export const ragEmbeddingProviderOptions = ['local', 'openai'] as const;
 export const defaultRagEmbeddingProvider = 'local';
 export const defaultLocalRagEmbeddingModel = 'bge-m3';
@@ -25,6 +29,8 @@ export const ragDocumentStatusOptions = [
 export type RagDocumentStatus = (typeof ragDocumentStatusOptions)[number];
 export type RagDocumentSecurity = VaultSecurity | 'private';
 export type RagEmbeddingProvider = (typeof ragEmbeddingProviderOptions)[number];
+export type RagFileSelectionPurpose =
+  (typeof ragFileSelectionPurposeOptions)[number];
 
 export type RagSettings = {
   embeddingProvider: RagEmbeddingProvider;
@@ -80,16 +86,14 @@ export type RagPythonStatus = {
 };
 
 export type RagImportInput = {
-  selectionId?: string;
-  sourcePath?: string;
+  selectionId: string;
   workspaceIds: string[];
   security: RagDocumentSecurity;
 };
 
 export type RagReplaceInput = {
   ragDocumentId: string;
-  selectionId?: string;
-  sourcePath?: string;
+  selectionId: string;
 };
 
 export type RagImportResult = {

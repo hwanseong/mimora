@@ -7,6 +7,7 @@ import {
 } from '../src/localAI';
 import {
   defaultExternalAISettings,
+  isExternalChatProviderId,
   type ExternalAISettings,
 } from '../src/externalAI';
 import {
@@ -505,7 +506,7 @@ function parseExternalAISettings(value: unknown): ExternalAISettings | null {
   if (
     typeof value !== 'object' ||
     value === null ||
-    (value as ExternalAISettings).provider !== 'openai' ||
+    !isExternalChatProviderId((value as Partial<ExternalAISettings>).provider) ||
     !(
       (value as ExternalAISettings).model === null ||
       typeof (value as ExternalAISettings).model === 'string'
@@ -517,7 +518,7 @@ function parseExternalAISettings(value: unknown): ExternalAISettings | null {
   const model = (value as ExternalAISettings).model;
 
   return {
-    provider: 'openai',
+    provider: (value as ExternalAISettings).provider,
     model: typeof model === 'string' && model.trim() ? model.trim() : null,
   };
 }

@@ -1,11 +1,12 @@
 import {
   workspaceIdPattern,
   type Workspace as RegistryWorkspace,
+  type WorkspaceSecurity,
   type WorkspaceStatus,
   type WorkspaceType,
 } from './workspace/types';
 
-export type { WorkspaceStatus, WorkspaceType };
+export type { WorkspaceSecurity, WorkspaceStatus, WorkspaceType };
 
 export type Workspace = RegistryWorkspace & {
   label: string;
@@ -24,6 +25,11 @@ export const workspaceStatusLabels: Record<WorkspaceStatus, string> = {
   archived: 'Archived',
 };
 
+export const workspaceSecurityLabels: Record<WorkspaceSecurity, string> = {
+  internal: 'Internal',
+  private: 'Private',
+};
+
 export const allWorkspaceId = '__all__';
 export const legacyAllWorkspaceId = 'all';
 
@@ -37,6 +43,7 @@ export const defaultWorkspace: Workspace = {
   label: '전체 업무',
   type: 'all',
   status: 'active',
+  security: 'internal',
   isSystem: true,
 };
 

@@ -7,7 +7,6 @@ import type {
   ScheduleParseResult,
   ScheduleQueryInput,
   ScheduleQueryResult,
-  ScheduleRegisterInput,
   ScheduleRemoveResult,
   ScheduleRefreshOptions,
   ScheduleSource,
@@ -137,7 +136,7 @@ async function createScheduleSource(
   };
 }
 
-function validateRegisterInput(input: unknown): ScheduleRegisterInput & {
+function validateRegisterInput(input: unknown): {
   workspaceId: string;
   sourcePath: string;
 } {
@@ -148,9 +147,6 @@ function validateRegisterInput(input: unknown): ScheduleRegisterInput & {
   return {
     workspaceId: validateWorkspaceId(input.workspaceId),
     sourcePath: String(input.sourcePath ?? ''),
-    ...(typeof input.selectionId === 'string'
-      ? { selectionId: input.selectionId }
-      : {}),
   };
 }
 

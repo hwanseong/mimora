@@ -24,8 +24,7 @@ export type ScheduleSource = {
 
 export type ScheduleRegisterInput = {
   workspaceId: string;
-  selectionId?: string;
-  sourcePath?: string;
+  selectionId: string;
 };
 
 export type ScheduleRemoveResult = {

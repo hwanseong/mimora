@@ -4,7 +4,7 @@ import {
   findRemainingRegisteredEntityIds,
   type MaskingEntry,
 } from './maskingEngine';
-import type { EffectiveSecurity } from './securityRouter';
+import type { EffectiveSecurity, ProviderType } from './securityRouter';
 import {
   containsAbsoluteFilesystemPath,
   containsInternalNetworkAddress,
@@ -35,12 +35,16 @@ export function authorizeExternalSend(input: {
   status: PayloadSafetyStatus;
   mode: 'auto' | 'external';
   approved: boolean;
+  providerId?: string;
+  providerType?: ProviderType;
   hasPrivateDocument?: boolean;
+  hasExternalLocalOnlyContext?: boolean;
 }): ExternalSendAuthorization {
-  if (input.hasPrivateDocument) {
+  if (input.hasPrivateDocument || input.hasExternalLocalOnlyContext) {
     return {
       allowed: false,
-      message: 'Private 문서가 포함되어 외부 AI로 전송할 수 없습니다.',
+      message:
+        'Private 또는 민감한 자료가 포함되어 External AI를 사용할 수 없습니다. Local AI만 사용할 수 있습니다.',
     };
   }
 
@@ -236,17 +240,17 @@ export function evaluateOutboundPayload(input: {
     check(
       'private-vault-context',
       'Private Vault context',
-      hasPrivateContext ? 'warn' : 'pass',
+      hasPrivateContext ? 'fail' : 'pass',
       hasPrivateContext
-        ? 'Private Vault Context는 수동 검토가 필요합니다.'
+        ? 'Private Vault Context는 External AI로 전송할 수 없습니다.'
         : 'Private Vault Context가 없습니다.',
     ),
     check(
       'sensitive-context',
       'Sensitive context',
-      hasSensitiveContext ? 'warn' : 'pass',
+      hasSensitiveContext ? 'fail' : 'pass',
       hasSensitiveContext
-        ? 'Sensitive Context는 수동 검토가 필요합니다.'
+        ? 'Sensitive Context는 External AI로 전송할 수 없습니다.'
         : 'Sensitive Context가 없습니다.',
     ),
     check(

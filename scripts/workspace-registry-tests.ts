@@ -26,11 +26,11 @@ const validWorkspaceRegistryMarkdown = `---
 registry_type: workspaces
 registry_version: 1
 ---
-| id | name | type | status | start_date | end_date | description |
-| --- | --- | --- | --- | --- | --- | --- |
-| WS-2026-0001 | Card Renewal | project | active | 2026-01-01 | 2026-06-30 | Active project |
-| WS-2026-0002 | Daily Settlement | operation | closed | 2026-01-01 | 2026-03-31 | Closed operation |
-| WS-2026-0003 | Legacy Migration | project | archived | 2025-01-01 | 2025-12-31 | Archived project |
+| id | name | type | status | security | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| WS-2026-0001 | Card Renewal | project | active | internal | 2026-01-01 | 2026-06-30 | Active project |
+| WS-2026-0002 | Daily Settlement | operation | closed | internal | 2026-01-01 | 2026-03-31 | Closed operation |
+| WS-2026-0003 | Legacy Migration | project | archived | private | 2025-01-01 | 2025-12-31 | Archived project |
 `;
 
 function hasIssue(
@@ -45,8 +45,8 @@ function createRegistryWithRow(row: string): ReturnType<typeof parseWorkspaceReg
 registry_type: workspaces
 registry_version: 1
 ---
-| id | name | type | status | start_date | end_date | description |
-| --- | --- | --- | --- | --- | --- | --- |
+| id | name | type | status | security | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 ${row}
 `);
 }
@@ -60,37 +60,67 @@ assert.deepEqual(
   validWorkspaceRegistry.workspaces.map((workspace) => workspace.status),
   ['active', 'closed', 'archived'],
 );
+assert.deepEqual(
+  validWorkspaceRegistry.workspaces.map((workspace) => workspace.security),
+  ['internal', 'internal', 'private'],
+);
 
 const duplicateWorkspaceRegistry = parseWorkspaceRegistry(`---
 registry_type: workspaces
 registry_version: 1
 ---
-| id | name | type | status | start_date | end_date | description |
-| --- | --- | --- | --- | --- | --- | --- |
-| WS-2026-0001 | A | project | active | | | |
-| WS-2026-0001 | B | operation | active | | | |
+| id | name | type | status | security | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| WS-2026-0001 | A | project | active | internal | | | |
+| WS-2026-0001 | B | operation | active | internal | | | |
 `);
 assert.equal(hasIssue(duplicateWorkspaceRegistry, 'duplicate-workspace-id'), true);
 
 assert.equal(
   hasIssue(
-    createRegistryWithRow('| WS-26-1 | Bad ID | project | active | | | |'),
+    createRegistryWithRow('| WS-26-1 | Bad ID | project | active | internal | | | |'),
     'invalid-workspace-id',
   ),
   true,
 );
 assert.equal(
   hasIssue(
-    createRegistryWithRow('| WS-2026-0004 | Bad Type | product | active | | | |'),
+    createRegistryWithRow('| WS-2026-0004 | Bad Type | product | active | internal | | | |'),
     'invalid-workspace-type',
   ),
   true,
 );
 assert.equal(
   hasIssue(
-    createRegistryWithRow('| WS-2026-0005 | Bad Status | project | paused | | | |'),
+    createRegistryWithRow('| WS-2026-0005 | Bad Status | project | paused | internal | | | |'),
     'invalid-workspace-status',
   ),
+  true,
+);
+assert.equal(
+  hasIssue(
+    createRegistryWithRow('| WS-2026-0006 | Bad Security | project | active | secret | | | |'),
+    'invalid-workspace-security',
+  ),
+  true,
+);
+
+const missingWorkspaceSecurityRegistry = parseWorkspaceRegistry(`---
+registry_type: workspaces
+registry_version: 1
+---
+| id | name | type | status | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- |
+| WS-2026-0007 | Legacy Registry | project | active | 2026-01-01 | 2026-12-31 | Security column missing |
+`);
+
+assert.equal(missingWorkspaceSecurityRegistry.valid, true);
+assert.equal(
+  missingWorkspaceSecurityRegistry.workspaces[0]?.security,
+  'internal',
+);
+assert.equal(
+  hasIssue(missingWorkspaceSecurityRegistry, 'workspace-security-missing'),
   true,
 );
 assert.equal(
@@ -99,9 +129,9 @@ assert.equal(
 registry_type: knowledge-domains
 registry_version: 1
 ---
-| id | name | type | status | start_date | end_date | description |
-| --- | --- | --- | --- | --- | --- | --- |
-| WS-2026-0001 | A | project | active | | | |
+| id | name | type | status | security | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| WS-2026-0001 | A | project | active | internal | | | |
 `),
     'invalid-registry-type',
   ),
@@ -113,9 +143,9 @@ assert.equal(
 registry_type: workspaces
 registry_version: 2
 ---
-| id | name | type | status | start_date | end_date | description |
-| --- | --- | --- | --- | --- | --- | --- |
-| WS-2026-0001 | A | project | active | | | |
+| id | name | type | status | security | start_date | end_date | description |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| WS-2026-0001 | A | project | active | internal | | | |
 `),
     'unsupported-version',
   ),

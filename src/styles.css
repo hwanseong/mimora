@@ -4062,6 +4062,9 @@ button {
 }
 
 .local-ai-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   flex: 0 0 auto;
   color: #667085;
   font-size: 12px;
@@ -4070,6 +4073,17 @@ button {
 
 .local-ai-connection.is-connected {
   color: #237a4b;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #98a2b3;
+}
+
+.status-dot.is-connected {
+  background: #2e9f68;
 }
 
 .local-ai-form {
