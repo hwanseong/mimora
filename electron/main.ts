@@ -69,6 +69,7 @@ import type {
 import type {
   SaveDerivedKnowledgeInput,
   SaveDerivedKnowledgeResult,
+  SuggestedDocumentIdResult,
 } from '../src/derivedKnowledge';
 import type {
   RagDeleteResult,
@@ -98,6 +99,10 @@ import type {
   ScheduleSource,
   ScheduleSummary,
 } from '../src/schedule';
+import type {
+  WeeklyReportRenderInput,
+  WeeklyReportRenderResult,
+} from '../src/weeklyReport';
 import { createChatHistoryStore } from './chatHistoryStore';
 import { createSettingsStore } from './settingsStore';
 import { createRegistryStatusService } from './registryStatus';
@@ -113,6 +118,7 @@ import {
   createScheduleService,
   scheduleFileDialogFilters,
 } from './scheduleService';
+import { createWeeklyReportService } from './weeklyReportService';
 import { createLLMProvider } from './llm/createLLMProvider';
 import { OpenAIProvider } from './llm/OpenAIProvider';
 import { buildLocalAIChatRequest } from './llm/promptBuilder';
@@ -180,6 +186,10 @@ const scheduleService = createScheduleService({
   getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
 });
 const pendingScheduleFileSelections = new Map<string, string>();
+const weeklyReportService = createWeeklyReportService({
+  getUserDataPath: () => app.getPath('userData'),
+  getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
+});
 const derivedKnowledgeService = createDerivedKnowledgeService(settingsStore);
 const registryStatusService = createRegistryStatusService(settingsStore, {
   getCachePath: getRegistryCachePath,
@@ -716,6 +726,47 @@ function registerScheduleHandlers(): void {
       input: ScheduleQueryInput,
     ): Promise<MimoraIpcResult<ScheduleQueryResult>> =>
       toIpcResult(() => scheduleService.query(input)),
+  );
+}
+
+function registerWeeklyReportHandlers(): void {
+  ipcMain.handle(
+    'weeklyReport:getStorageRoot',
+    async (): Promise<MimoraIpcResult<string>> =>
+      toIpcResult(() => weeklyReportService.getReportRoot()),
+  );
+
+  ipcMain.handle(
+    'weeklyReport:render',
+    async (
+      _event,
+      input: WeeklyReportRenderInput,
+    ): Promise<MimoraIpcResult<WeeklyReportRenderResult>> =>
+      toIpcResult(async () => {
+        const result = await dialog.showSaveDialog({
+          defaultPath: input.defaultFileName,
+          filters: [
+            {
+              name: 'Word Document',
+              extensions: ['docx'],
+            },
+          ],
+          properties: ['createDirectory', 'showOverwriteConfirmation'],
+          title: '주간보고서 저장',
+        });
+
+        if (result.canceled || !result.filePath) {
+          return {
+            canceled: true,
+          };
+        }
+
+        return weeklyReportService.renderWeeklyReport({
+          data: input.data,
+          outputPath: result.filePath,
+          templatePath: input.templatePath ?? null,
+        });
+      }),
   );
 }
 
@@ -1299,6 +1350,17 @@ function registerVaultFileHandlers(): void {
 
 function registerDerivedKnowledgeHandlers(): void {
   ipcMain.handle(
+    'derivedKnowledge:suggestDocumentId',
+    async (
+      _event,
+      generatedAt?: string | null,
+    ): Promise<MimoraIpcResult<SuggestedDocumentIdResult>> =>
+      toIpcResult(() =>
+        derivedKnowledgeService.suggestDocumentId(generatedAt),
+      ),
+  );
+
+  ipcMain.handle(
     'derivedKnowledge:saveDraft',
     async (
       _event,
@@ -1343,6 +1405,7 @@ registerSettingsHandlers();
 registerRegistryHandlers();
 registerRagHandlers();
 registerScheduleHandlers();
+registerWeeklyReportHandlers();
 registerChatHistoryHandlers();
 registerWorkspaceInsightHandlers();
 registerVaultFileHandlers();

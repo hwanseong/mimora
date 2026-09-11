@@ -59,6 +59,7 @@ import type { RegistryRuntimeMode } from './registry/types';
 import {
   createDerivedKnowledgeSuggestion,
   deriveSecurityFromSources,
+  isDerivedKnowledgeRequest,
   normalizeDerivedKnowledgeDraft,
   type DerivedKnowledgeDraft,
   type DerivedKnowledgeSource,
@@ -107,6 +108,15 @@ import {
   hasScheduleChatSignal,
   type WorkspaceChatQueryRoute,
 } from './scheduleUx';
+import {
+  createWeeklyReportDefaultFileName,
+  createWeeklyReportScheduleSource,
+  getWeeklyReportPeriods,
+  selectWeeklyScheduleTasks,
+  toWeeklyReportSource,
+  type WeeklyReportData,
+  type WeeklyReportSource,
+} from './weeklyReport';
 
 const RAG_CHAT_SEARCH_TOP_K = 5;
 const RAG_CHAT_CONTEXT_LIMIT = 4;
@@ -117,12 +127,19 @@ const COMBINED_RAG_CONTEXT_LIMIT = 2;
 const COMBINED_SCHEDULE_TASK_LIMIT = 5;
 const COMBINED_VAULT_EXCERPT_MAX_CHARS = 1_200;
 const COMBINED_TOTAL_CONTEXT_MAX_CHARS = 14_000;
+const WEEKLY_REPORT_VAULT_CONTEXT_LIMIT = 5;
+const WEEKLY_REPORT_RAG_CONTEXT_LIMIT = 3;
 
 type ChatContextRetrievalResult = {
   contexts: AutoRetrievedContext[];
   elapsedMs: number;
   error?: string;
   scheduleResult?: ScheduleQueryResult;
+};
+
+type WeeklyReportBuildResult = {
+  data: WeeklyReportData;
+  contexts: AutoRetrievedContext[];
 };
 
 type PendingExternalRequest = {
@@ -1305,6 +1322,287 @@ export function App() {
     }
   }
 
+  function isWeeklyReportRequest(query: string): boolean {
+    return /주간\s*보고서|주간보고서|weekly\s*report/iu.test(query);
+  }
+
+  function sourceMatchesReportCategory(
+    source: WeeklyReportSource,
+    category: 'issue' | 'risk' | 'decision',
+  ): boolean {
+    const text = `${source.filename}\n${source.path}\n${source.excerpt ?? ''}`;
+    const patterns = {
+      issue: /이슈|문제|결함|지연|issue|problem|defect|delay/iu,
+      risk: /리스크|위험|risk/iu,
+      decision: /의사결정|결정|decision|decided/iu,
+    };
+
+    return patterns[category].test(text);
+  }
+
+  function createWeeklyReportFallbackSummary(data: WeeklyReportData): string {
+    return [
+      `${data.workspace_name} 주간보고서 초안입니다.`,
+      `보고기간은 ${data.report_period.start}부터 ${data.report_period.end}까지입니다.`,
+      `Schedule 기준 계획 진척률은 ${formatAuthoritativePercent(
+        data.schedule.planned_progress,
+      )}, 실적 진척률은 ${formatAuthoritativePercent(
+        data.schedule.actual_progress,
+      )}이며 지연 Leaf Task는 ${data.schedule.delayed_task_count.toLocaleString()}개입니다.`,
+      `Forecast는 현실적 운영 추정 ${formatAuthoritativeDate(
+        data.schedule.forecast?.primaryEstimate,
+      )}를 기준으로 검토해야 합니다.`,
+    ].join('\n');
+  }
+
+  async function createWeeklyReportSummaryWithLocalAI(
+    data: WeeklyReportData,
+  ): Promise<string> {
+    const prompt = [
+      '다음 WeeklyReportData를 바탕으로 한국어 주간보고서 초안 요약문을 작성하세요.',
+      '숫자는 Schedule Excel에서 온 값을 그대로 사용하고 재계산하지 마세요.',
+      '근거가 없는 이슈/리스크/결정은 만들지 마세요.',
+      'DOCX 렌더링용 본문이므로 과도한 서론 없이 간결하게 작성하세요.',
+      JSON.stringify({ ...data, summary: '' }, null, 2),
+    ].join('\n\n');
+
+    try {
+      const response = await window.mimora.chatWithLocalAI({
+        workspaceId: data.workspace_id,
+        question: prompt,
+        history: [],
+        manualContexts: [],
+        autoContexts: [],
+      });
+
+      return (
+        removeInternalContextIdentifiers(response.content).trim() ||
+        createWeeklyReportFallbackSummary(data)
+      );
+    } catch (error) {
+      console.warn('[Mimora Weekly Report] Local summary failed.', {
+        error: getChatErrorMessage(error),
+      });
+      return createWeeklyReportFallbackSummary(data);
+    }
+  }
+
+  async function buildWeeklyReportData(input: {
+    workspaceId: Workspace['id'];
+    workspaceName: string;
+    workspaceType: Workspace['type'];
+  }): Promise<WeeklyReportBuildResult> {
+    const parsed = await window.mimora.refreshSchedule(input.workspaceId);
+    const summary = parsed.summary;
+    const asOfDate = summary.progressAsOfDate;
+    const { reportPeriod, nextWeekPeriod } = getWeeklyReportPeriods(asOfDate);
+    const scheduleTasks = selectWeeklyScheduleTasks({
+      tasks: parsed.schedule.tasks,
+      reportPeriod,
+      nextWeekPeriod,
+      asOfDate,
+    });
+    const performanceResult = await window.mimora.querySchedule({
+      workspaceId: input.workspaceId,
+      query: '현재 일정 성과는?',
+      asOfDate,
+    });
+    const forecastResult = await window.mimora.querySchedule({
+      workspaceId: input.workspaceId,
+      query: '현재 추세면 프로젝트 언제 끝나?',
+      asOfDate,
+    });
+    const scheduleContext = toScheduleAutoContext(performanceResult, {
+      includeDetailedContext: false,
+      taskLimit: COMBINED_SCHEDULE_TASK_LIMIT,
+    });
+    const reportRetrievalQuery = [
+      input.workspaceName,
+      `${reportPeriod.start} ${reportPeriod.end}`,
+      '주간보고 회의록 이슈 리스크 의사결정 변경 외부기관 통합테스트 차주 계획',
+    ].join('\n');
+
+    const vaultContexts = await window.mimora.retrieveAutoContext({
+      query: reportRetrievalQuery,
+      workspaceId: input.workspaceId,
+      limit: WEEKLY_REPORT_VAULT_CONTEXT_LIMIT,
+      includeArchived: false,
+      knowledgeFilters: emptyKnowledgeSearchFilters,
+      contentOriginScope: 'all',
+    });
+    const ragRetrieval = await retrieveRagChatContext({
+      query: reportRetrievalQuery,
+      workspaceId: input.workspaceId,
+      workspaceType: input.workspaceType,
+    });
+    const selectedDocumentContexts = [
+      ...vaultContexts.slice(0, WEEKLY_REPORT_VAULT_CONTEXT_LIMIT),
+      ...ragRetrieval.contexts.slice(0, WEEKLY_REPORT_RAG_CONTEXT_LIMIT),
+    ];
+    const sources = selectedDocumentContexts.map(toWeeklyReportSource);
+    const sourceDocumentIds = [
+      ...new Set(
+        sources
+          .filter((source) => source.source_type !== 'rag')
+          .map((source) => source.document_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const sourceRagIds = [
+      ...new Set(
+        sources
+          .map((source) => source.rag_document_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const containsSensitiveContext = selectedDocumentContexts.some(
+      (context) =>
+        context.security !== 'internal' ||
+        (context.documentSecurity !== undefined &&
+          context.documentSecurity !== 'internal'),
+    );
+    const data: WeeklyReportData = {
+      workspace_id: input.workspaceId,
+      workspace_name: input.workspaceName,
+      generated_at: new Date().toISOString(),
+      report_period: reportPeriod,
+      next_week_period: nextWeekPeriod,
+      schedule: {
+        source_filename: summary.source.filename,
+        as_of_date: asOfDate,
+        planned_progress: summary.plannedProgress,
+        actual_progress: summary.actualProgress,
+        delayed_task_count: summary.delayedTaskCount,
+        delayed_tasks: scheduleTasks.delayed,
+        forecast: forecastResult.advancedAnalysis ?? null,
+        performance: performanceResult.advancedAnalysis ?? null,
+      },
+      this_week: {
+        completed: scheduleTasks.completed,
+        in_progress: scheduleTasks.inProgress,
+        key_activities: [
+          ...scheduleTasks.completed.slice(0, 5).map((task) => `${task.wbs} ${task.name} 완료`),
+          ...scheduleTasks.inProgress.slice(0, 5).map((task) => `${task.wbs} ${task.name} 진행 중`),
+        ],
+      },
+      next_week: {
+        planned_tasks: scheduleTasks.nextWeekPlanned,
+      },
+      issues: sources.filter((source) =>
+        sourceMatchesReportCategory(source, 'issue'),
+      ),
+      risks: sources.filter((source) =>
+        sourceMatchesReportCategory(source, 'risk'),
+      ),
+      decisions: sources.filter((source) =>
+        sourceMatchesReportCategory(source, 'decision'),
+      ),
+      source_document_ids: sourceDocumentIds,
+      source_rag_ids: sourceRagIds,
+      schedule_source: createWeeklyReportScheduleSource({ summary }),
+      security: {
+        contains_sensitive_context: containsSensitiveContext,
+        note: containsSensitiveContext ? '민감정보 포함' : null,
+      },
+      summary: '',
+    };
+
+    data.summary = await createWeeklyReportSummaryWithLocalAI(data);
+
+    return {
+      data,
+      contexts: [scheduleContext, ...selectedDocumentContexts],
+    };
+  }
+
+  async function executeWeeklyReportRequest(input: {
+    sessionId: ChatSession['sessionId'];
+    workspaceId: Workspace['id'];
+    workspaceName: string;
+    workspaceType: Workspace['type'];
+    userMessageId: string;
+    assistantMessageId: string;
+    manualContexts: AttachedContext[];
+  }): Promise<void> {
+    setWorkspaceRequestStatus(input.sessionId, 'calling-local');
+    completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
+      content: '주간보고서 데이터를 수집하고 있습니다...',
+      requestStatus: 'calling-local',
+      generationStatus: 'loading',
+    });
+
+    try {
+      const buildResult = await buildWeeklyReportData({
+        workspaceId: input.workspaceId,
+        workspaceName: input.workspaceName,
+        workspaceType: input.workspaceType,
+      });
+      completeAutoContextRetrieval(
+        input.workspaceId,
+        input.sessionId,
+        input.userMessageId,
+        buildResult.contexts,
+      );
+      completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
+        content: '주간보고서 DOCX 저장 위치를 선택하세요...',
+        requestStatus: 'calling-local',
+        generationStatus: 'loading',
+      });
+      const renderResult = await window.mimora.renderWeeklyReport({
+        data: buildResult.data,
+        defaultFileName: createWeeklyReportDefaultFileName({
+          asOfDate: buildResult.data.schedule.as_of_date,
+          workspaceName: buildResult.data.workspace_name,
+        }),
+      });
+
+      if (renderResult.canceled) {
+        completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
+          content: '주간보고서 생성이 취소되었습니다.',
+          requestStatus: 'completed',
+          generationStatus: 'complete',
+          sources: getContextSources(input.manualContexts, buildResult.contexts),
+        });
+        setWorkspaceRequestStatus(input.sessionId, 'completed');
+        return;
+      }
+
+      completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
+        content: [
+          '주간보고서 초안이 생성되었습니다.',
+          '',
+          `파일: ${renderResult.outputPath ?? '-'}`,
+          `보고기간: ${buildResult.data.report_period.start} ~ ${buildResult.data.report_period.end}`,
+          `계획 진척률: ${formatAuthoritativePercent(buildResult.data.schedule.planned_progress)}`,
+          `실적 진척률: ${formatAuthoritativePercent(buildResult.data.schedule.actual_progress)}`,
+          `지연 Leaf Task: ${buildResult.data.schedule.delayed_task_count.toLocaleString()}개`,
+          '',
+          buildResult.data.summary,
+        ].join('\n'),
+        requestStatus: 'completed',
+        generationStatus: 'complete',
+        sources: getContextSources(input.manualContexts, buildResult.contexts),
+      });
+      setWorkspaceRequestStatus(input.sessionId, 'completed');
+    } catch (error) {
+      const errorMessage = getChatErrorMessage(error);
+      completeAutoContextRetrieval(
+        input.workspaceId,
+        input.sessionId,
+        input.userMessageId,
+        [],
+        errorMessage,
+      );
+      completeAssistantMessage(input.workspaceId, input.sessionId, input.assistantMessageId, {
+        content: '주간보고서 초안을 생성하지 못했습니다.',
+        requestStatus: 'error',
+        generationStatus: 'error',
+        generationErrorDetail: errorMessage,
+      });
+      setWorkspaceRequestStatus(input.sessionId, 'error');
+    }
+  }
+
   function createDerivedSources(
     manualContexts: AttachedContext[],
     autoContexts: AutoRetrievedContext[],
@@ -1315,6 +1613,7 @@ export function App() {
     for (const context of manualContexts) {
       const metadata = getManualContextMetadata(context);
       const source: DerivedKnowledgeSource = {
+        sourceType: 'vault',
         vaultId: context.vaultId,
         ...(metadata.documentId ? { documentId: metadata.documentId } : {}),
         relativePath: context.relativePath,
@@ -1334,12 +1633,14 @@ export function App() {
 
     for (const context of autoContexts) {
       const source: DerivedKnowledgeSource = {
+        ...(context.sourceType ? { sourceType: context.sourceType } : {}),
         vaultId: context.vaultId,
         ...(context.mimoraDocumentId
           ? { documentId: context.mimoraDocumentId }
           : context.metadata?.documentId
             ? { documentId: context.metadata.documentId }
             : {}),
+        ...(context.ragDocumentId ? { ragDocumentId: context.ragDocumentId } : {}),
         relativePath: context.relativePath,
         workspaceIds: context.metadata?.workspaceIds ?? context.workspaceIds,
         originWorkspaceId:
@@ -1358,10 +1659,12 @@ export function App() {
 
     for (const context of assistantSources) {
       const source: DerivedKnowledgeSource = {
+        ...(context.sourceType ? { sourceType: context.sourceType } : {}),
         vaultId: context.vaultId,
         ...(context.metadata?.documentId
           ? { documentId: context.metadata.documentId }
           : {}),
+        ...(context.ragDocumentId ? { ragDocumentId: context.ragDocumentId } : {}),
         relativePath: context.relativePath,
         workspaceIds: context.metadata?.workspaceIds ?? [],
         originWorkspaceId: context.metadata?.originWorkspaceId ?? null,
@@ -1387,17 +1690,28 @@ export function App() {
     sources: DerivedKnowledgeSource[],
   ): string {
     const security = deriveSecurityFromSources(sources);
+    const isPrivateVault = (vault: VaultConfig) =>
+      vault.type === 'private' || vault.security !== 'internal';
     const candidates =
-      security === 'private'
-        ? vaults.filter(
-            (vault) => vault.type === 'private' || vault.security !== 'internal',
-          )
-        : vaults;
-    const sourceVault = candidates.find((vault) =>
-      sources.some((source) => source.vaultId === vault.id),
+      security === 'private' ? vaults.filter(isPrivateVault) : vaults;
+    const sourceVault = candidates.find((vault) => {
+      if (security === 'private') {
+        return sources.some((source) => source.vaultId === vault.id);
+      }
+
+      return (
+        !isPrivateVault(vault) &&
+        sources.some((source) => source.vaultId === vault.id)
+      );
+    });
+    const preferredWorkVault = candidates.find(
+      (vault) =>
+        security === 'private'
+          ? vault.type === 'private'
+          : vault.type === 'work' && vault.security === 'internal',
     );
 
-    return sourceVault?.id ?? candidates[0]?.id ?? '';
+    return sourceVault?.id ?? preferredWorkVault?.id ?? candidates[0]?.id ?? '';
   }
 
   function createDerivedDraftFromTurn(input: {
@@ -1449,6 +1763,70 @@ export function App() {
         sourceDocuments,
       ),
     });
+  }
+
+  async function withSuggestedDerivedDocumentId(
+    draft: DerivedKnowledgeDraft,
+  ): Promise<DerivedKnowledgeDraft> {
+    if (draft.documentId.trim()) {
+      return draft;
+    }
+
+    const suggestion = await window.mimora.suggestDerivedKnowledgeDocumentId(
+      draft.generatedAt,
+    );
+
+    return normalizeDerivedKnowledgeDraft({
+      ...draft,
+      documentId: suggestion.documentId,
+    });
+  }
+
+  async function openDerivedKnowledgeDraftFromCompletedResponse(input: {
+    workspaceId: Workspace['id'];
+    query: string;
+    content: string;
+    manualContexts: AttachedContext[];
+    autoContexts: AutoRetrievedContext[];
+    assistantSources: LLMContextSource[];
+  }): Promise<void> {
+    setDerivedDraftError(null);
+    setDerivedDraftSavedPath(null);
+
+    try {
+      const settings = await window.mimora.getSettings();
+      const now = new Date().toISOString();
+      const draft = await withSuggestedDerivedDocumentId(
+        createDerivedDraftFromTurn({
+          workspaceId: input.workspaceId,
+          userMessage: {
+            id: `derived-user-${now}`,
+            role: 'user',
+            content: input.query,
+            createdAt: now,
+            manualContext: input.manualContexts,
+            autoContext: input.autoContexts,
+          },
+          assistantMessage: {
+            id: `derived-assistant-${now}`,
+            role: 'assistant',
+            content: input.content,
+            createdAt: now,
+            sources: input.assistantSources,
+          },
+          vaults: settings.vaults,
+        }),
+      );
+
+      setDerivedDraftVaults(settings.vaults);
+      setDerivedDraft(draft);
+    } catch (error) {
+      setDerivedDraftError(
+        error instanceof Error
+          ? error.message
+          : 'AI Wiki Draft를 만들지 못했습니다.',
+      );
+    }
   }
 
   function handleSelectWorkspace(workspace: Workspace): void {
@@ -1780,12 +2158,14 @@ export function App() {
 
     try {
       const settings = await window.mimora.getSettings();
-      const draft = createDerivedDraftFromTurn({
-        workspaceId: selectedWorkspace.id,
-        userMessage,
-        assistantMessage,
-        vaults: settings.vaults,
-      });
+      const draft = await withSuggestedDerivedDocumentId(
+        createDerivedDraftFromTurn({
+          workspaceId: selectedWorkspace.id,
+          userMessage,
+          assistantMessage,
+          vaults: settings.vaults,
+        }),
+      );
 
       if (import.meta.env.DEV) {
         const manualContextCount = userMessage.manualContext?.length ?? 0;
@@ -1827,9 +2207,17 @@ export function App() {
       return;
     }
 
-    setIsSavingDerivedDraft(true);
     setDerivedDraftError(null);
     setDerivedDraftSavedPath(null);
+
+    if (registryRuntimeMode !== 'normal') {
+      setDerivedDraftError(
+        'Registry가 Normal 상태일 때만 AI Wiki를 저장할 수 있습니다.',
+      );
+      return;
+    }
+
+    setIsSavingDerivedDraft(true);
 
     try {
       const result = await window.mimora.saveDerivedKnowledgeDraft(
@@ -1838,11 +2226,40 @@ export function App() {
 
       setDerivedDraftSavedPath(result.relativePath);
     } catch (error) {
-      setDerivedDraftError(
+      const errorMessage =
         error instanceof Error
           ? error.message
-          : 'AI Wiki Draft를 저장하지 못했습니다.',
-      );
+          : 'AI Wiki Draft를 저장하지 못했습니다.';
+      const isDuplicateDocumentIdError =
+        errorMessage.includes('Document ID') &&
+        (errorMessage.includes('duplicate_document_id') ||
+          errorMessage.includes('이미 존재') ||
+          errorMessage.includes('already exists'));
+
+      if (isDuplicateDocumentIdError) {
+        try {
+          const suggestion = await window.mimora.suggestDerivedKnowledgeDocumentId(
+            derivedDraft.generatedAt,
+          );
+
+          setDerivedDraft(
+            normalizeDerivedKnowledgeDraft({
+              ...derivedDraft,
+              documentId: suggestion.documentId,
+            }),
+          );
+          setDerivedDraftError(
+            errorMessage +
+              ' New suggested ID ' +
+              suggestion.documentId +
+              ' has been filled in. Review it and save again.',
+          );
+        } catch {
+          setDerivedDraftError(errorMessage);
+        }
+      } else {
+        setDerivedDraftError(errorMessage);
+      }
     } finally {
       setIsSavingDerivedDraft(false);
     }
@@ -1925,7 +2342,12 @@ export function App() {
       searchScopeSnapshot: targetSearchScopeSnapshot,
     };
     const assistantMessage: ChatMessage = {
-      ...createMessage('assistant', '참고 문서를 찾는 중입니다...'),
+      ...createMessage(
+        'assistant',
+        isWeeklyReportRequest(trimmedMessage)
+          ? '주간보고서 생성을 준비하고 있습니다...'
+          : '참고 문서를 찾는 중입니다...',
+      ),
       requestStatus: 'retrieving-context',
       requestedMode: targetAIMode,
       searchScopeSnapshot: targetSearchScopeSnapshot,
@@ -1938,6 +2360,19 @@ export function App() {
       assistantMessage,
     ], targetSession);
     setMessage('');
+
+    if (isWeeklyReportRequest(trimmedMessage)) {
+      void executeWeeklyReportRequest({
+        sessionId: targetSessionId,
+        workspaceId: targetWorkspaceId,
+        workspaceName: selectedWorkspace.name,
+        workspaceType: targetWorkspaceType,
+        userMessageId: userMessage.id,
+        assistantMessageId: assistantMessage.id,
+        manualContexts,
+      });
+      return;
+    }
 
     void completeChatRequest(
       targetSessionId,
@@ -2186,6 +2621,18 @@ export function App() {
       externalSafetyAction: undefined,
       model: response.model,
     });
+
+    if (isDerivedKnowledgeRequest(input.query)) {
+      await openDerivedKnowledgeDraftFromCompletedResponse({
+        workspaceId: input.workspaceId,
+        query: input.query,
+        content: removeInternalContextIdentifiers(response.content),
+        manualContexts: input.manualContexts,
+        autoContexts: input.autoContexts,
+        assistantSources: response.sources,
+      });
+    }
+
     setWorkspaceRequestStatus(input.sessionId, 'completed');
   }
 
@@ -2308,6 +2755,7 @@ export function App() {
     const queryRoute: WorkspaceChatQueryRoute = isAllWorkspaceScope(workspaceId)
       ? 'document_only'
       : classifyWorkspaceChatQueryRoute(query);
+    const derivedKnowledgeRequest = isDerivedKnowledgeRequest(query);
     const scheduleQuestion = queryRoute !== 'document_only';
     const scheduleOnlyQuery = queryRoute === 'schedule_only';
     const combinedQuery = queryRoute === 'combined';
@@ -2388,7 +2836,7 @@ export function App() {
           documentContexts: documentAutoContext,
         })
       : documentAutoContext;
-    const scheduleForcesLocal = scheduleQuestion;
+    const scheduleForcesLocal = scheduleQuestion || derivedKnowledgeRequest;
     const retrievalMs = performance.now() - retrievalStartedTime;
 
     completeAutoContextRetrieval(

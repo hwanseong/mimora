@@ -1,13 +1,18 @@
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   buildDerivedKnowledgeMarkdown,
+  formatLocalIsoDateTime,
   normalizeDerivedKnowledgeDraft,
   validateDerivedKnowledgeDraft,
   type SaveDerivedKnowledgeInput,
   type SaveDerivedKnowledgeResult,
 } from '../src/derivedKnowledge';
-import { parseMimoraDocumentMetadata } from '../src/metadata/mimoraMetadataParser';
+import {
+  isDocumentIdAvailable,
+  suggestNextDocumentId,
+} from './documentIdScanner';
+import type { SuggestedDocumentIdResult } from '../src/derivedKnowledge';
 import type { createSettingsStore } from './settingsStore';
 
 type SettingsStore = ReturnType<typeof createSettingsStore>;
@@ -74,12 +79,22 @@ function validateSaveInput(input: unknown): SaveDerivedKnowledgeInput {
 
       return typeof item.vaultId === 'string' &&
         typeof item.relativePath === 'string' &&
-        (item.security === 'normal' || item.security === 'private')
+        (item.security === 'normal' ||
+          item.security === 'private' ||
+          item.security === 'internal')
         ? [
             {
+              ...(item.sourceType === 'vault' ||
+              item.sourceType === 'rag' ||
+              item.sourceType === 'schedule'
+                ? { sourceType: item.sourceType }
+                : {}),
               vaultId: item.vaultId,
               ...(typeof item.documentId === 'string'
                 ? { documentId: item.documentId }
+                : {}),
+              ...(typeof item.ragDocumentId === 'string'
+                ? { ragDocumentId: item.ragDocumentId }
                 : {}),
               relativePath: item.relativePath,
               workspaceIds: Array.isArray(item.workspaceIds)
@@ -154,6 +169,10 @@ function validateSaveInput(input: unknown): SaveDerivedKnowledgeInput {
     targetVaultId: candidate.targetVaultId,
     documentId: candidate.documentId,
     filename: candidate.filename,
+    generatedAt:
+      typeof candidate.generatedAt === 'string'
+        ? candidate.generatedAt
+        : undefined,
   });
   const errors = validateDerivedKnowledgeDraft(draft);
 
@@ -164,74 +183,41 @@ function validateSaveInput(input: unknown): SaveDerivedKnowledgeInput {
   return draft;
 }
 
-async function walkMarkdownFiles(
-  rootPath: string,
-  directoryPath: string,
-  files: string[],
-): Promise<void> {
-  const entries = await readdir(directoryPath, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const absolutePath = path.join(directoryPath, entry.name);
-
-    if (entry.isDirectory()) {
-      await walkMarkdownFiles(rootPath, absolutePath, files);
-    } else if (entry.isFile() && entry.name.toLocaleLowerCase().endsWith('.md')) {
-      files.push(path.relative(rootPath, absolutePath).split(path.sep).join('/'));
-    }
-  }
-}
-
 async function assertDocumentIdIsUnique(
   settingsStore: SettingsStore,
   documentId: string,
+  generatedAt?: string | null,
 ): Promise<void> {
-  const settings = await settingsStore.getSettings();
+  const available = await isDocumentIdAvailable({ settingsStore, documentId });
 
-  for (const vault of settings.vaults) {
-    let rootPath: string;
+  if (!available) {
+    const suggestion = await suggestNextDocumentId({
+      settingsStore,
+      generatedAt,
+    });
 
-    try {
-      rootPath = await realpath(path.resolve(vault.path));
-    } catch {
-      continue;
-    }
-
-    const files: string[] = [];
-
-    try {
-      await walkMarkdownFiles(rootPath, rootPath, files);
-    } catch {
-      continue;
-    }
-
-    for (const relativePath of files) {
-      try {
-        const absolutePath = path.resolve(rootPath, relativePath);
-        const content = await readFile(absolutePath, 'utf8');
-        const metadataResult = parseMimoraDocumentMetadata(content);
-
-        if (metadataResult.metadata.documentId === documentId) {
-          throw new Error('이미 존재하는 Document ID입니다.');
-        }
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message === '이미 존재하는 Document ID입니다.'
-        ) {
-          throw error;
-        }
-      }
-    }
+    throw new Error(
+      `duplicate_document_id: Document ID already exists. Suggested ID: ${suggestion.documentId}`,
+    );
   }
 }
 
 export function createDerivedKnowledgeService(settingsStore: SettingsStore) {
   return {
+    async suggestDocumentId(
+      generatedAt?: string | null,
+    ): Promise<SuggestedDocumentIdResult> {
+      return suggestNextDocumentId({ settingsStore, generatedAt });
+    },
+
     async saveDerivedKnowledgeDraft(
       input: unknown,
     ): Promise<SaveDerivedKnowledgeResult> {
-      const draft = validateSaveInput(input);
+      const inputDraft = validateSaveInput(input);
+      const draft = normalizeDerivedKnowledgeDraft({
+        ...inputDraft,
+        generatedAt: formatLocalIsoDateTime(),
+      });
       const settings = await settingsStore.getSettings();
       const targetVault = settings.vaults.find(
         (vault) => vault.id === draft.targetVaultId,
@@ -287,7 +273,11 @@ export function createDerivedKnowledgeService(settingsStore: SettingsStore) {
         }
       }
 
-      await assertDocumentIdIsUnique(settingsStore, draft.documentId);
+      await assertDocumentIdIsUnique(
+        settingsStore,
+        draft.documentId,
+        draft.generatedAt,
+      );
       await mkdir(wikiDirectoryPath, { recursive: true });
       await writeFile(targetFilePath, buildDerivedKnowledgeMarkdown(draft), {
         encoding: 'utf8',

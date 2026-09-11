@@ -183,6 +183,10 @@ export function DerivedKnowledgeDraftModal({
                 value={draft.documentId}
               />
             </label>
+            <p className="derived-draft-help">
+              AI Wiki 신규 문서용 추천 ID입니다. 저장 전 중복 여부를 다시
+              확인합니다.
+            </p>
             <label>
               <span>Filename</span>
               <input

@@ -3375,6 +3375,137 @@ def schedule_summary_command(input_data: dict[str, Any]) -> dict[str, Any]:
     return schedule_summary(schedule, source, input_data.get("as_of_date"))
 
 
+def percent_text(value: Any) -> str:
+    return f"{float(value) * 100:.2f}%" if isinstance(value, (int, float)) and math.isfinite(float(value)) else "-"
+
+
+def report_date_text(value: Any) -> str:
+    text = cell_to_text(value)
+    return text[:10] if text else "-"
+
+
+def add_report_paragraphs(document: Any, text: str) -> None:
+    for line in normalize_text(text).splitlines():
+        if line.strip():
+            document.add_paragraph(line.strip())
+
+
+def add_report_task_table(document: Any, tasks: list[dict[str, Any]]) -> None:
+    if not tasks:
+        document.add_paragraph("해당 항목 없음")
+        return
+    table = document.add_table(rows=1, cols=5)
+    table.style = "Table Grid"
+    headers = ["WBS", "작업", "계획 기간", "실적", "상태"]
+    for index, header in enumerate(headers):
+        table.rows[0].cells[index].text = header
+    for task in tasks:
+        cells = table.add_row().cells
+        cells[0].text = cell_to_text(task.get("wbs"))
+        cells[1].text = cell_to_text(task.get("name"))
+        cells[2].text = f"{report_date_text(task.get('planned_start'))} ~ {report_date_text(task.get('planned_finish'))}"
+        cells[3].text = percent_text(task.get("actual_progress"))
+        cells[4].text = cell_to_text(task.get("status")) or "-"
+
+
+def add_report_source_list(document: Any, title: str, sources: list[dict[str, Any]]) -> None:
+    document.add_heading(title, level=2)
+    if not sources:
+        document.add_paragraph("관련 근거 없음")
+        return
+    for source in sources:
+        paragraph = document.add_paragraph(style=None)
+        paragraph.add_run(cell_to_text(source.get("filename")) or "source").bold = True
+        if source.get("rag_document_id"):
+            paragraph.add_run(f" / {cell_to_text(source.get('rag_document_id'))}")
+        excerpt = cell_to_text(source.get("excerpt"))
+        if excerpt:
+            document.add_paragraph(excerpt[:700])
+
+
+def weekly_report_render(input_data: dict[str, Any]) -> dict[str, Any]:
+    report_data = input_data.get("report_data")
+    output_path_text = cell_to_text(input_data.get("output_path"))
+    template_path_text = cell_to_text(input_data.get("template_path"))
+    if not isinstance(report_data, dict) or not output_path_text:
+        raise WorkerError("invalid_input", "report_data and output_path are required.")
+    output_path = Path(output_path_text)
+    if output_path.suffix.lower() != ".docx":
+        raise WorkerError("output_write_failed", "Weekly report output must be a .docx file.")
+    try:
+        from docx import Document
+    except ImportError as error:
+        raise WorkerError("docx_render_failed", "python-docx is required to render DOCX reports.") from error
+
+    try:
+        if template_path_text:
+            template_path = Path(template_path_text)
+            if not template_path.exists():
+                raise WorkerError("template_missing", "Weekly report template was not found.")
+            document = Document(str(template_path))
+        else:
+            document = Document()
+
+        document.add_heading("Mimora 주간보고서 초안", level=0)
+        document.add_paragraph(f"프로젝트: {cell_to_text(report_data.get('workspace_name'))}")
+        report_period = report_data.get("report_period") if isinstance(report_data.get("report_period"), dict) else {}
+        document.add_paragraph(
+            f"보고기간: {report_date_text(report_period.get('start'))} ~ {report_date_text(report_period.get('end'))}"
+        )
+        document.add_paragraph(f"생성시각: {cell_to_text(report_data.get('generated_at'))}")
+
+        schedule = report_data.get("schedule") if isinstance(report_data.get("schedule"), dict) else {}
+        document.add_heading("1. 프로젝트 개요", level=1)
+        document.add_paragraph(f"Schedule Source: {cell_to_text(schedule.get('source_filename'))}")
+        document.add_paragraph(f"기준일: {report_date_text(schedule.get('as_of_date'))}")
+
+        document.add_heading("2. 금주 수행내용", level=1)
+        this_week = report_data.get("this_week") if isinstance(report_data.get("this_week"), dict) else {}
+        add_report_task_table(document, this_week.get("completed") if isinstance(this_week.get("completed"), list) else [])
+        add_report_paragraphs(document, "\n".join(this_week.get("key_activities") if isinstance(this_week.get("key_activities"), list) else []))
+
+        document.add_heading("3. 일정/진척 현황", level=1)
+        document.add_paragraph(f"계획 진척률: {percent_text(schedule.get('planned_progress'))}")
+        document.add_paragraph(f"실적 진척률: {percent_text(schedule.get('actual_progress'))}")
+        document.add_paragraph(f"지연 Leaf Task: {cell_to_text(schedule.get('delayed_task_count'))}개")
+        add_report_task_table(document, schedule.get("delayed_tasks") if isinstance(schedule.get("delayed_tasks"), list) else [])
+
+        add_report_source_list(document, "4. 주요 이슈", report_data.get("issues") if isinstance(report_data.get("issues"), list) else [])
+        add_report_source_list(document, "5. 주요 리스크", report_data.get("risks") if isinstance(report_data.get("risks"), list) else [])
+        add_report_source_list(document, "6. 주요 의사결정", report_data.get("decisions") if isinstance(report_data.get("decisions"), list) else [])
+
+        document.add_heading("7. 차주 계획", level=1)
+        next_week = report_data.get("next_week") if isinstance(report_data.get("next_week"), dict) else {}
+        add_report_task_table(document, next_week.get("planned_tasks") if isinstance(next_week.get("planned_tasks"), list) else [])
+
+        document.add_heading("8. Forecast / 주의사항", level=1)
+        forecast = schedule.get("forecast") if isinstance(schedule.get("forecast"), dict) else {}
+        document.add_paragraph(f"현실적 운영 추정: {report_date_text(forecast.get('primaryEstimate'))}")
+        scenario = forecast.get("performanceScenario") if isinstance(forecast.get("performanceScenario"), dict) else {}
+        document.add_paragraph(f"누적 일정성과 시나리오: {report_date_text(scenario.get('estimate'))}")
+        security = report_data.get("security") if isinstance(report_data.get("security"), dict) else {}
+        if security.get("contains_sensitive_context"):
+            document.add_paragraph("민감정보 포함: 생성 근거에 민감/비공개 컨텍스트가 포함되어 있습니다.")
+
+        summary = cell_to_text(report_data.get("summary"))
+        if summary:
+            document.add_heading("요약", level=1)
+            add_report_paragraphs(document, summary)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        document.save(str(output_path))
+    except WorkerError:
+        raise
+    except Exception as error:
+        raise WorkerError("docx_render_failed", "Weekly report DOCX rendering failed.") from error
+
+    return {
+        "canceled": False,
+        "outputPath": str(output_path),
+        "templatePath": template_path_text or None,
+    }
+
+
 COMMANDS = {
     "runtime-check": runtime_check,
     "embedding-check": check_embedding_status,
@@ -3388,6 +3519,7 @@ COMMANDS = {
     "schedule-parse": parse_schedule,
     "schedule-summary": schedule_summary_command,
     "schedule-query": schedule_query,
+    "weekly-report-render": weekly_report_render,
 }
 
 

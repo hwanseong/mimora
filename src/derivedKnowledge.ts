@@ -13,8 +13,10 @@ import type { KnowledgeDomainRegistry } from './registry/knowledgeDomainRegistry
 import type { KnowledgeTypeRegistry } from './registry/knowledgeTypeRegistryTypes';
 
 export type DerivedKnowledgeSource = {
+  sourceType?: 'vault' | 'rag' | 'schedule';
   vaultId: string;
   documentId?: string;
+  ragDocumentId?: string;
   relativePath: string;
   workspaceIds: string[];
   originWorkspaceId?: string | null;
@@ -44,6 +46,7 @@ export type DerivedKnowledgeDraft = {
   targetVaultId: string;
   documentId: string;
   filename: string;
+  generatedAt?: string;
 };
 
 export type SaveDerivedKnowledgeInput = DerivedKnowledgeDraft;
@@ -53,6 +56,13 @@ export type SaveDerivedKnowledgeResult = {
   relativePath: string;
   fileName: string;
   documentId: string;
+};
+
+export type SuggestedDocumentIdResult = {
+  documentId: string;
+  year: number;
+  sequence: number;
+  scannedDocumentCount: number;
 };
 
 export type DerivedKnowledgeSuggestionInput = {
@@ -74,6 +84,32 @@ export function deriveSecurityFromSources(
   return sources.some((source) => source.security === 'private')
     ? 'private'
     : 'normal';
+}
+
+export function isDerivedKnowledgeRequest(query: string): boolean {
+  const normalizedQuery = query.toLocaleLowerCase('ko-KR');
+
+  return (
+    normalizedQuery.includes('ai wiki') ||
+    normalizedQuery.includes('wiki') ||
+    normalizedQuery.includes('위키') ||
+    normalizedQuery.includes('ai 위키') ||
+    (normalizedQuery.includes('정리') &&
+      (normalizedQuery.includes('교훈') ||
+        normalizedQuery.includes('원칙') ||
+        normalizedQuery.includes('재사용')))
+  );
+}
+
+export function formatLocalIsoDateTime(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 function uniqueValues(values: string[]): string[] {
@@ -149,9 +185,13 @@ export function normalizeDerivedKnowledgeDraft(
   draft: DerivedKnowledgeDraft,
 ): DerivedKnowledgeDraft {
   const normalizedSources = draft.sourceDocuments.map((source) => ({
+    ...(source.sourceType ? { sourceType: source.sourceType } : {}),
     vaultId: source.vaultId.trim(),
     ...(source.documentId?.trim()
       ? { documentId: source.documentId.trim() }
+      : {}),
+    ...(source.ragDocumentId?.trim()
+      ? { ragDocumentId: source.ragDocumentId.trim() }
       : {}),
     relativePath: source.relativePath.trim(),
     workspaceIds: uniqueValues(source.workspaceIds ?? []),
@@ -178,6 +218,7 @@ export function normalizeDerivedKnowledgeDraft(
     targetVaultId: draft.targetVaultId.trim(),
     documentId: draft.documentId.trim(),
     filename: draft.filename.trim(),
+    generatedAt: draft.generatedAt?.trim() || formatLocalIsoDateTime(),
   };
 }
 
@@ -412,11 +453,81 @@ export function createDerivedKnowledgeSuggestion(
     targetVaultId: input.targetVaultId,
     documentId: '',
     filename: createDraftFilename(title),
+    generatedAt: formatLocalIsoDateTime(),
   });
 }
 
-function formatMetadataValue(values: string[]): string {
-  return uniqueValues(values).join(', ');
+function toYamlSecurity(security: DocumentSecurity): DocumentSecurity {
+  return security === 'normal' ? 'internal' : security;
+}
+
+function escapeYamlString(value: string): string {
+  return value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"');
+}
+
+function formatYamlScalar(value?: string | null): string {
+  if (!value?.trim()) {
+    return 'null';
+  }
+
+  return `"${escapeYamlString(value.trim())}"`;
+}
+
+function formatYamlList(fieldName: string, values: string[]): string[] {
+  const unique = uniqueValues(values);
+
+  if (unique.length === 0) {
+    return [`${fieldName}: []`];
+  }
+
+  return [`${fieldName}:`, ...unique.map((value) => `  - ${formatYamlScalar(value)}`)];
+}
+
+function getSourceDocumentIds(sources: DerivedKnowledgeSource[]): string[] {
+  return uniqueValues(
+    sources.flatMap((source) => (source.documentId ? [source.documentId] : [])),
+  );
+}
+
+function getSourceRagIds(sources: DerivedKnowledgeSource[]): string[] {
+  return uniqueValues(
+    sources.flatMap((source) =>
+      source.ragDocumentId ? [source.ragDocumentId] : [],
+    ),
+  );
+}
+
+function getSourceWorkspaceIds(sources: DerivedKnowledgeSource[]): string[] {
+  return uniqueValues(
+    sources.flatMap((source) => [
+      ...source.workspaceIds,
+      ...(source.originWorkspaceId ? [source.originWorkspaceId] : []),
+    ]),
+  );
+}
+
+function buildDerivedKnowledgeFrontmatter(
+  draft: DerivedKnowledgeDraft,
+): string {
+  const sourceWorkspaceIds = getSourceWorkspaceIds(draft.sourceDocuments);
+  const knowledgeType = draft.knowledgeTypes[0] ?? null;
+
+  return [
+    '---',
+    `document_id: ${formatYamlScalar(draft.documentId)}`,
+    ...formatYamlList('workspace_ids', draft.workspaceIds),
+    `origin_workspace_id: ${formatYamlScalar(draft.originWorkspaceId)}`,
+    `security: ${formatYamlScalar(toYamlSecurity(draft.security))}`,
+    ...formatYamlList('knowledge_domains', draft.knowledgeDomains),
+    `knowledge_type: ${formatYamlScalar(knowledgeType)}`,
+    `content_origin: ${formatYamlScalar(draft.contentOrigin)}`,
+    ...formatYamlList('source_document_ids', getSourceDocumentIds(draft.sourceDocuments)),
+    ...formatYamlList('source_rag_ids', getSourceRagIds(draft.sourceDocuments)),
+    ...formatYamlList('source_workspace_ids', sourceWorkspaceIds),
+    `generated_by: ${formatYamlScalar('mimora')}`,
+    `generated_at: ${formatYamlScalar(draft.generatedAt ?? formatLocalIsoDateTime())}`,
+    '---',
+  ].join('\n');
 }
 
 function formatSources(sources: DerivedKnowledgeSource[]): string {
@@ -425,11 +536,18 @@ function formatSources(sources: DerivedKnowledgeSource[]): string {
   }
 
   return sources
-    .map((source) =>
-      source.documentId
-        ? `- ${source.documentId}`
-        : `- ${source.vaultId}:${source.relativePath}`,
-    )
+    .map((source) => {
+      const sourceLabel =
+        source.sourceType === 'rag'
+          ? `RAG ${source.ragDocumentId ?? source.relativePath}`
+          : source.sourceType === 'schedule'
+            ? `Schedule ${source.relativePath}`
+            : source.documentId
+              ? source.documentId
+              : `${source.vaultId}:${source.relativePath}`;
+
+      return `- ${sourceLabel}`;
+    })
     .join('\n');
 }
 
@@ -439,19 +557,7 @@ export function buildDerivedKnowledgeMarkdown(
   const normalizedDraft = normalizeDerivedKnowledgeDraft(draft);
 
   return [
-    '## Mimora Metadata',
-    '',
-    '| field | value |',
-    '| --- | --- |',
-    `| document_id | ${normalizedDraft.documentId} |`,
-    `| workspace_ids | ${formatMetadataValue(normalizedDraft.workspaceIds)} |`,
-    `| origin_workspace_id | ${normalizedDraft.originWorkspaceId ?? ''} |`,
-    `| knowledge_domains | ${formatMetadataValue(
-      normalizedDraft.knowledgeDomains,
-    )} |`,
-    `| knowledge_type | ${formatMetadataValue(normalizedDraft.knowledgeTypes)} |`,
-    `| security | ${normalizedDraft.security} |`,
-    `| content_origin | ${normalizedDraft.contentOrigin} |`,
+    buildDerivedKnowledgeFrontmatter(normalizedDraft),
     '',
     `# ${normalizedDraft.title}`,
     '',

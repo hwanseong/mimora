@@ -11,6 +11,7 @@ import type {
 import type {
   SaveDerivedKnowledgeInput,
   SaveDerivedKnowledgeResult,
+  SuggestedDocumentIdResult,
 } from '../src/derivedKnowledge';
 import type {
   RagDeleteResult,
@@ -40,6 +41,10 @@ import type {
   ScheduleSource,
   ScheduleSummary,
 } from '../src/schedule';
+import type {
+  WeeklyReportRenderInput,
+  WeeklyReportRenderResult,
+} from '../src/weeklyReport';
 import type {
   ConnectionTestResult,
   LLMModel,
@@ -379,6 +384,18 @@ contextBridge.exposeInMainWorld('mimora', {
         MimoraIpcResult<ScheduleQueryResult>
       >
     ).then(unwrapIpcResult),
+  getWeeklyReportStorageRoot: () =>
+    (
+      ipcRenderer.invoke('weeklyReport:getStorageRoot') as Promise<
+        MimoraIpcResult<string>
+      >
+    ).then(unwrapIpcResult),
+  renderWeeklyReport: (input: WeeklyReportRenderInput) =>
+    (
+      ipcRenderer.invoke('weeklyReport:render', input) as Promise<
+        MimoraIpcResult<WeeklyReportRenderResult>
+      >
+    ).then(unwrapIpcResult),
   addMaskingEntry: (input: AddMaskingEntryInput) =>
     (
       ipcRenderer.invoke('settings:addMaskingEntry', input) as Promise<
@@ -452,6 +469,13 @@ contextBridge.exposeInMainWorld('mimora', {
       ipcRenderer.invoke('vaultFiles:retrieveAutoContext', input) as Promise<
         MimoraIpcResult<AutoRetrievedContext[]>
       >
+    ).then(unwrapIpcResult),
+  suggestDerivedKnowledgeDocumentId: (generatedAt?: string | null) =>
+    (
+      ipcRenderer.invoke(
+        'derivedKnowledge:suggestDocumentId',
+        generatedAt,
+      ) as Promise<MimoraIpcResult<SuggestedDocumentIdResult>>
     ).then(unwrapIpcResult),
   saveDerivedKnowledgeDraft: (input: SaveDerivedKnowledgeInput) =>
     (

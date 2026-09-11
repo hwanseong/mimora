@@ -12,6 +12,7 @@ import type {
 import type {
   SaveDerivedKnowledgeInput,
   SaveDerivedKnowledgeResult,
+  SuggestedDocumentIdResult,
 } from './derivedKnowledge';
 import type {
   RagDeleteResult,
@@ -41,6 +42,10 @@ import type {
   ScheduleSource,
   ScheduleSummary,
 } from './schedule';
+import type {
+  WeeklyReportRenderInput,
+  WeeklyReportRenderResult,
+} from './weeklyReport';
 import type {
   ConnectionTestResult,
   LLMModel,
@@ -163,6 +168,10 @@ type MimoraApi = {
     querySchedule: (
       input: ScheduleQueryInput,
     ) => Promise<ScheduleQueryResult>;
+    getWeeklyReportStorageRoot: () => Promise<string>;
+    renderWeeklyReport: (
+      input: WeeklyReportRenderInput,
+    ) => Promise<WeeklyReportRenderResult>;
     addMaskingEntry: (
       input: AddMaskingEntryInput,
     ) => Promise<MimoraSettings>;
@@ -197,6 +206,9 @@ type MimoraApi = {
     retrieveAutoContext: (
       input: AutoContextRetrievalInput,
     ) => Promise<AutoRetrievedContext[]>;
+    suggestDerivedKnowledgeDocumentId: (
+      generatedAt?: string | null,
+    ) => Promise<SuggestedDocumentIdResult>;
     saveDerivedKnowledgeDraft: (
       input: SaveDerivedKnowledgeInput,
     ) => Promise<SaveDerivedKnowledgeResult>;
