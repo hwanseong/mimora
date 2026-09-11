@@ -198,9 +198,11 @@ function NavSection({
 
 export function Sidebar({
   isRecentChatsActive,
+  isRagDocumentsActive,
   isVaultBrowserActive,
   isSettingsActive,
   onOpenRecentChats,
+  onOpenRagDocuments,
   onOpenVaultBrowser,
   onOpenSettings,
   registryRuntimeMode = 'normal',
@@ -216,9 +218,11 @@ export function Sidebar({
   onReorderSession,
 }: {
   isRecentChatsActive: boolean;
+  isRagDocumentsActive: boolean;
   isVaultBrowserActive: boolean;
   isSettingsActive: boolean;
   onOpenRecentChats: () => void;
+  onOpenRagDocuments: () => void;
   onOpenVaultBrowser: () => void;
   onOpenSettings: () => void;
   registryRuntimeMode?: RegistryRuntimeMode;
@@ -283,6 +287,14 @@ export function Sidebar({
           type="button"
         >
           Vault Browser
+        </button>
+        <button
+          aria-pressed={isRagDocumentsActive}
+          className={`nav-item${isRagDocumentsActive ? ' active' : ''}`}
+          onClick={onOpenRagDocuments}
+          type="button"
+        >
+          RAG 문서
         </button>
         <button
           aria-pressed={isSettingsActive}

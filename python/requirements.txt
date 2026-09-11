@@ -1,4 +1,6 @@
 faiss-cpu
 numpy
-PyMuPDF
+openpyxl
+pymupdf
+pypdf
 python-docx

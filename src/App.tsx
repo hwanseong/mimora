@@ -33,6 +33,7 @@ import { ChatMessages } from './components/ChatMessages';
 import { ContextPanel } from './components/ContextPanel';
 import { DerivedKnowledgeDraftModal } from './components/DerivedKnowledgeDraftModal';
 import { QuickPromptBar } from './components/QuickPromptBar';
+import { RagDocumentsView } from './components/RagDocumentsView';
 import { RecentChatsView } from './components/RecentChatsView';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
@@ -163,7 +164,7 @@ type PendingExternalRequest = {
 
 export function App() {
   const [activeView, setActiveView] = useState<
-    'chat' | 'recent-chats' | 'vault-browser' | 'settings'
+    'chat' | 'recent-chats' | 'vault-browser' | 'rag-documents' | 'settings'
   >('chat');
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
@@ -3739,6 +3740,7 @@ export function App() {
       <Sidebar
         chatSessions={chatSessions}
         isRecentChatsActive={activeView === 'recent-chats'}
+        isRagDocumentsActive={activeView === 'rag-documents'}
         isVaultBrowserActive={activeView === 'vault-browser'}
         isSettingsActive={activeView === 'settings'}
         onOpenRecentChats={() => {
@@ -3747,6 +3749,10 @@ export function App() {
         }}
         onOpenVaultBrowser={() => {
           setActiveView('vault-browser');
+          setMessage('');
+        }}
+        onOpenRagDocuments={() => {
+          setActiveView('rag-documents');
           setMessage('');
         }}
         onOpenSettings={() => {
@@ -3769,6 +3775,8 @@ export function App() {
         aria-label={
           activeView === 'settings'
             ? '설정'
+            : activeView === 'rag-documents'
+              ? 'RAG 문서'
             : activeView === 'recent-chats'
               ? '최근 대화'
             : activeView === 'vault-browser'
@@ -3781,6 +3789,8 @@ export function App() {
             onVaultDocumentsChanged={refreshVaultDocumentSnapshot}
             onWorkspaceRegistryChanged={refreshWorkspaceRegistry}
           />
+        ) : activeView === 'rag-documents' ? (
+          <RagDocumentsView />
         ) : activeView === 'recent-chats' ? (
           <RecentChatsView
             chatSessions={chatSessions}

@@ -2871,6 +2871,10 @@ button {
   box-shadow: 0 1px 2px rgb(15 23 42 / 4%);
 }
 
+.rag-documents-view .rag-library-card {
+  width: min(1120px, 100%);
+}
+
 .masking-card {
   display: grid;
   gap: 12px;
@@ -2890,6 +2894,28 @@ button {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.rag-library-card .rag-library-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.rag-library-card .rag-library-summary-grid span {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 9px 10px;
+  color: #667085;
+  font-size: 11px;
+}
+
+.rag-library-card .rag-library-summary-grid strong {
+  color: #111827;
+  font-size: 15px;
 }
 
 .rag-library-card .rag-import-panel > span {
@@ -2933,6 +2959,26 @@ button {
 .rag-library-card .rag-document-list {
   display: grid;
   gap: 8px;
+}
+
+.rag-library-card .rag-document-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(130px, auto));
+  gap: 8px;
+  align-items: center;
+}
+
+.rag-library-card .rag-document-filter-bar input,
+.rag-library-card .rag-document-filter-bar select {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid #dfe3e8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #111827;
+  padding: 5px 8px;
+  font: inherit;
+  outline: 0;
 }
 
 .rag-library-card .rag-document-row {
@@ -3057,6 +3103,8 @@ button {
 .schedule-intelligence-card {
   display: grid;
   gap: 12px;
+  width: min(900px, 100%);
+  margin: 0 auto 16px;
   border: 1px solid #edf0f3;
   border-radius: 8px;
   background: #ffffff;
@@ -3066,7 +3114,7 @@ button {
 .schedule-intelligence-card .schedule-source-controls,
 .schedule-intelligence-card .schedule-query-test {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) auto minmax(160px, 1fr) auto auto;
+  grid-template-columns: minmax(180px, 240px) minmax(118px, auto) minmax(180px, 1fr) minmax(92px, auto) minmax(92px, auto);
   gap: 8px;
   align-items: end;
 }
@@ -3081,7 +3129,7 @@ button {
 
 .schedule-intelligence-card .schedule-source-status {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
 }
 
@@ -3153,7 +3201,7 @@ button {
 
 .schedule-intelligence-card .schedule-summary-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(90px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
   gap: 8px;
 }
 
@@ -3281,6 +3329,8 @@ button {
 
 @media (max-width: 900px) {
   .rag-library-card .rag-document-row,
+  .rag-library-card .rag-document-filter-bar,
+  .rag-library-card .rag-library-summary-grid,
   .rag-library-card .rag-search-controls,
   .schedule-intelligence-card .schedule-source-controls,
   .schedule-intelligence-card .schedule-source-status,

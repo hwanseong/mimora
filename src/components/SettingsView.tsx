@@ -104,6 +104,10 @@ function getRagSecurityLabel(security: RagDocument['security']): string {
   return security === 'private' ? 'Private' : vaultSecurityLabels[security];
 }
 
+function getRagStatusLabel(status: RagDocument['status']): string {
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 function formatProgress(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value)
     ? `${(value * 100).toFixed(2)}%`
@@ -1106,7 +1110,7 @@ function ScheduleIntelligenceSection({
   );
 }
 
-function RagDocumentLibrarySection({
+export function RagDocumentLibrarySection({
   ragSettings,
   workspaceRegistry,
 }: {
@@ -1131,6 +1135,14 @@ function RagDocumentLibrarySection({
   );
   const [searchResults, setSearchResults] = useState<RagSearchResult[]>([]);
   const [isSearchBusy, setIsSearchBusy] = useState(false);
+  const [documentSearchQuery, setDocumentSearchQuery] = useState('');
+  const [documentWorkspaceFilter, setDocumentWorkspaceFilter] = useState('all');
+  const [documentSecurityFilter, setDocumentSecurityFilter] = useState<
+    'all' | RagDocument['security']
+  >('all');
+  const [documentStatusFilter, setDocumentStatusFilter] = useState<
+    'all' | RagDocument['status']
+  >('all');
   const importableWorkspaces = useMemo(
     () =>
       (workspaceRegistry?.workspaces ?? []).filter(
@@ -1339,13 +1351,38 @@ function RagDocumentLibrarySection({
     ragSettings.embeddingProvider === 'openai'
       ? ragSettings.openAIEmbeddingModel
       : ragSettings.localEmbeddingModel;
+  const indexedDocumentCount = documents.filter(
+    (document) => document.status === 'indexed',
+  ).length;
+  const globalDocumentCount = documents.filter(
+    (document) => document.workspaceIds.length === 0,
+  ).length;
+  const workspaceDocumentCount = documents.length - globalDocumentCount;
+  const filteredDocuments = documents.filter((document) => {
+    const filenameMatches = document.originalFilename
+      .toLocaleLowerCase()
+      .includes(documentSearchQuery.trim().toLocaleLowerCase());
+    const workspaceMatches =
+      documentWorkspaceFilter === 'all' ||
+      (documentWorkspaceFilter === 'global'
+        ? document.workspaceIds.length === 0
+        : document.workspaceIds.includes(documentWorkspaceFilter));
+    const securityMatches =
+      documentSecurityFilter === 'all' ||
+      document.security === documentSecurityFilter;
+    const statusMatches =
+      documentStatusFilter === 'all' ||
+      document.status === documentStatusFilter;
+
+    return filenameMatches && workspaceMatches && securityMatches && statusMatches;
+  });
 
   return (
     <section className="rag-library-card" aria-labelledby="rag-library-heading">
       <div className="registry-header">
         <div>
-          <h2 id="rag-library-heading">RAG Documents</h2>
-          <p>Managed imports only. Original files and Vault Markdown are not modified.</p>
+          <h2 id="rag-library-heading">RAG 문서 라이브러리</h2>
+          <p>Managed Copy 기반으로 관리합니다. 원본 파일과 Vault Markdown은 수정하지 않습니다.</p>
         </div>
         <button
           className="secondary-button"
@@ -1355,7 +1392,7 @@ function RagDocumentLibrarySection({
           }}
           type="button"
         >
-          Refresh
+          새로고침
         </button>
       </div>
 
@@ -1373,6 +1410,25 @@ function RagDocumentLibrarySection({
       {message ? <p className="settings-success-message">{message}</p> : null}
       {error ? <p className="settings-error-message">{error}</p> : null}
 
+      <div className="rag-library-summary-grid">
+        <span>
+          등록 문서
+          <strong>{documents.length.toLocaleString()}</strong>
+        </span>
+        <span>
+          Indexed
+          <strong>{indexedDocumentCount.toLocaleString()}</strong>
+        </span>
+        <span>
+          Global
+          <strong>{globalDocumentCount.toLocaleString()}</strong>
+        </span>
+        <span>
+          Workspace
+          <strong>{workspaceDocumentCount.toLocaleString()}</strong>
+        </span>
+      </div>
+
       <div className="rag-import-panel">
         <button
           className="secondary-button"
@@ -1382,9 +1438,9 @@ function RagDocumentLibrarySection({
           }}
           type="button"
         >
-          Select Document
+          문서 파일 선택
         </button>
-        <span>{selectedFile?.name ?? 'No file selected'}</span>
+        <span>{selectedFile?.name ?? '선택된 문서 없음'}</span>
         <label>
           <span>Security</span>
           <select
@@ -1409,7 +1465,7 @@ function RagDocumentLibrarySection({
           }}
           type="button"
         >
-          Import
+          등록
         </button>
       </div>
 
@@ -1443,11 +1499,64 @@ function RagDocumentLibrarySection({
 
       {documents.length === 0 ? (
         <p className="document-id-validation-meta">
-          No RAG documents imported yet.
+          아직 등록된 RAG 문서가 없습니다.
         </p>
       ) : (
+        <>
+        <div className="rag-document-filter-bar">
+          <input
+            onChange={(event) => {
+              setDocumentSearchQuery(event.target.value);
+            }}
+            placeholder="파일명 검색"
+            type="search"
+            value={documentSearchQuery}
+          />
+          <select
+            onChange={(event) => {
+              setDocumentWorkspaceFilter(event.target.value);
+            }}
+            value={documentWorkspaceFilter}
+          >
+            <option value="all">Workspace 전체</option>
+            <option value="global">Global</option>
+            {importableWorkspaces.map((workspace) => (
+              <option key={workspace.id} value={workspace.id}>
+                {workspace.name}
+              </option>
+            ))}
+          </select>
+          <select
+            onChange={(event) => {
+              setDocumentSecurityFilter(
+                event.target.value as 'all' | RagDocument['security'],
+              );
+            }}
+            value={documentSecurityFilter}
+          >
+            <option value="all">Security 전체</option>
+            <option value="internal">Internal</option>
+            <option value="private">Private</option>
+            <option value="sensitive">Sensitive</option>
+            <option value="personal">Personal</option>
+          </select>
+          <select
+            onChange={(event) => {
+              setDocumentStatusFilter(
+                event.target.value as 'all' | RagDocument['status'],
+              );
+            }}
+            value={documentStatusFilter}
+          >
+            <option value="all">Status 전체</option>
+            <option value="imported">Imported</option>
+            <option value="indexing">Indexing</option>
+            <option value="indexed">Indexed</option>
+            <option value="failed">Failed</option>
+          </select>
+        </div>
         <div className="rag-document-list">
-          {documents.map((document) => (
+          {filteredDocuments.map((document) => (
             <article className="rag-document-row" key={document.ragDocumentId}>
               <div>
                 <strong>{document.originalFilename}</strong>
@@ -1462,7 +1571,7 @@ function RagDocumentLibrarySection({
               </span>
               <span>{getRagSecurityLabel(document.security)}</span>
               <span>{document.fileType}</span>
-              <span>{document.status}</span>
+              <span>{getRagStatusLabel(document.status)}</span>
               <span>
                 {document.chunkCount.toLocaleString()} chunks
                 {document.embeddingModel ? ` · ${document.embeddingModel}` : ''}
@@ -1503,13 +1612,19 @@ function RagDocumentLibrarySection({
             </article>
           ))}
         </div>
+        {filteredDocuments.length === 0 ? (
+          <p className="document-id-validation-meta">
+            필터 조건에 맞는 RAG 문서가 없습니다.
+          </p>
+        ) : null}
+        </>
       )}
 
       <div className="rag-search-test-panel">
         <div className="registry-header">
           <div>
             <h3>RAG Search Test</h3>
-            <p>Returns indexed chunks only. Chat retrieval is not connected yet.</p>
+            <p>인덱싱된 RAG chunk 검색 품질을 검증합니다.</p>
           </div>
           <span>
             {ragSettings.embeddingProvider} · {activeEmbeddingModel}
@@ -1521,7 +1636,7 @@ function RagDocumentLibrarySection({
             onChange={(event) => {
               setSearchQuery(event.target.value);
             }}
-            placeholder="Search indexed RAG documents"
+            placeholder="RAG 문서 검색 테스트"
             type="search"
             value={searchQuery}
           />
@@ -1585,7 +1700,7 @@ function RagDocumentLibrarySection({
             }}
             type="button"
           >
-            Search
+            검색 테스트
           </button>
         </div>
         {searchResults.length > 0 ? (
@@ -2883,11 +2998,6 @@ export function SettingsView({
       </section>
 
       <ScheduleIntelligenceSection workspaceRegistry={workspaceRegistry} />
-
-      <RagDocumentLibrarySection
-        ragSettings={settings.rag}
-        workspaceRegistry={workspaceRegistry}
-      />
 
       <MaskingSettingsSection
         onSettingsChange={setSettings}

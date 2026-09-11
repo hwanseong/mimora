@@ -1,7 +1,7 @@
 {
   "name": "mimora",
   "productName": "Mimora",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "AI Project Intelligence for PMs",
   "type": "module",
@@ -24,13 +24,16 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "python/**/*",
       "package.json"
     ],
     "extraResources": [
       {
         "from": "python",
-        "to": "python"
+        "to": "python",
+        "filter": [
+          "mimora_worker.py",
+          "requirements.txt"
+        ]
       }
     ],
     "win": {
