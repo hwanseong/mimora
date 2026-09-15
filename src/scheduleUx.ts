@@ -105,7 +105,10 @@ export type ScheduleQueryResultDisplayState = {
 
 export type WorkspaceChatQueryRoute =
   | 'schedule_only'
+  | 'issue_only'
   | 'document_only'
+  | 'issue_document'
+  | 'schedule_issue'
   | 'combined';
 
 const taskListQueryKinds = new Set([
@@ -264,6 +267,18 @@ export function hasScheduleChatSignal(query: string): boolean {
   );
 }
 
+export function hasExplicitScheduleContextSignal(query: string): boolean {
+  const normalizedQuery = normalizeChatQuery(query);
+
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return /일정|진척|진도|작업|선행|후행|의존성|wbs|프로그램[가-힣A-Za-z0-9]*|schedule|progress|task|dependency|earned\s*schedule|spi|sv\(t\)|sv/iu.test(
+    normalizedQuery,
+  );
+}
+
 export function hasDocumentExplanationSignal(query: string): boolean {
   const normalizedQuery = normalizeChatQuery(query);
 
@@ -271,7 +286,43 @@ export function hasDocumentExplanationSignal(query: string): boolean {
     return false;
   }
 
-  return /왜|원인|이유|이슈|리스크|회의|결정|변경|문제|근거|관련|설명|영향|관찰|사인|issue|risk|decision|change|reason|cause|evidence/iu.test(
+  return /왜|원인|이유|회의|결정|변경|문제|근거|관련|설명|영향|관찰|사인|문서|자료|decision|change|reason|cause|evidence|meeting|document|reference/iu.test(
+    normalizedQuery,
+  );
+}
+
+export function hasIssueDocumentContextSignal(query: string): boolean {
+  const normalizedQuery = normalizeChatQuery(query);
+
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return /왜|원인|이유|회의|결정|근거|관련\s*(문서|회의|결정|자료)|설명|교훈|유사\s*사례|참고|why|cause|reason|meeting|decision|evidence|document|reference|lesson|similar\s*case/iu.test(
+    normalizedQuery,
+  );
+}
+
+export function hasIssueChatSignal(query: string): boolean {
+  const normalizedQuery = normalizeChatQuery(query);
+
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return /이슈|위험|리스크|해결\s*안\s*된|해결안된|미해결|안\s*끝난|안끝난|진행\s*중|진행중|열린\s*이슈|오픈\s*이슈|남은\s*이슈|남아있는\s*이슈|누가|맡|담당자|병목|조직지원|조치\s*예정|조치일자|기한|오래된|overdue|unresolved|issue|risk|owner|assignee|bottleneck|support|stale|open issues?|current issues?/iu.test(
+    normalizedQuery,
+  );
+}
+
+export function hasResolvedCaseRagSignal(query: string): boolean {
+  const normalizedQuery = normalizeChatQuery(query);
+
+  if (!normalizedQuery) {
+    return false;
+  }
+
+  return /과거|이전|완료된|해결\s*사례|교훈|유사\s*사례|참고|past|previous|resolved|lesson|case|similar/iu.test(
     normalizedQuery,
   );
 }
@@ -280,7 +331,22 @@ export function classifyWorkspaceChatQueryRoute(
   query: string,
 ): WorkspaceChatQueryRoute {
   const hasScheduleSignal = hasScheduleChatSignal(query);
+  const hasExplicitScheduleSignal = hasExplicitScheduleContextSignal(query);
+  const hasIssueSignal = hasIssueChatSignal(query);
   const hasExplanationSignal = hasDocumentExplanationSignal(query);
+  const hasIssueDocumentSignal = hasIssueDocumentContextSignal(query);
+
+  if (hasScheduleSignal && hasIssueSignal && hasExplicitScheduleSignal) {
+    return 'schedule_issue';
+  }
+
+  if (hasIssueSignal && hasIssueDocumentSignal) {
+    return 'issue_document';
+  }
+
+  if (hasIssueSignal) {
+    return 'issue_only';
+  }
 
   if (hasScheduleSignal && hasExplanationSignal) {
     return 'combined';

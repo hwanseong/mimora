@@ -31,14 +31,28 @@ Mimora installer does not include:
 
 ## Python Runtime Strategy
 
-Phase 2 uses a bundled Python worker with an external Python runtime.
+Production builds must use a bundled Python runtime. System Python is only a
+development fallback and is not a product prerequisite.
 
-The application starts the worker from the packaged resource directory and tries:
+The application resolves Python runtime candidates in this order:
 
-1. `python`
-2. `py -3`
+1. `MIMORA_PYTHON_PATH`
+2. Packaged resource: `<app resources>\python\python.exe`
+3. Dev bundled paths:
+   - `resources/python/python.exe`
+   - `runtime/python/python.exe`
+   - `buildResources/python/python.exe`
+4. Dev fallback:
+   - Windows: `py -3`, `python`
+   - macOS/Linux: `python3`, `python`
 
-The target PC must have Python installed and must install these packages into the Python environment used by Mimora:
+If no candidate is available, Mimora reports `runtime_not_found` and shows:
+
+```text
+Mimora Python runtime을 찾을 수 없습니다.
+```
+
+The bundled runtime must include these packages:
 
 ```text
 faiss-cpu
@@ -49,13 +63,23 @@ pypdf
 python-docx
 ```
 
-Recommended install command:
+Development-only verification can use:
 
 ```powershell
-python -m pip install -r "<Mimora install directory>\resources\python\requirements.txt"
+$env:MIMORA_PYTHON_PATH = "C:\path\to\python.exe"
+npm run build
 ```
 
-If `python` and `py -3` point to different environments, install packages into the one Mimora detects in Settings > Python status.
+Packaging TODO:
+
+- Add the actual Windows Python runtime under `buildResources/python/` or
+  another resolver-supported bundled path before creating a production
+  installer.
+- Include the bundled runtime directory in Electron `extraResources` so the
+  packaged app contains `<resources>\python\python.exe`.
+- Keep `mimora_worker.py` and `requirements.txt` in the packaged Python
+  resource directory.
+- Do not require users to install system Python.
 
 ## Ollama And Model Strategy
 

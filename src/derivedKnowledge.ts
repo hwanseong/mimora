@@ -13,7 +13,7 @@ import type { KnowledgeDomainRegistry } from './registry/knowledgeDomainRegistry
 import type { KnowledgeTypeRegistry } from './registry/knowledgeTypeRegistryTypes';
 
 export type DerivedKnowledgeSource = {
-  sourceType?: 'vault' | 'rag' | 'schedule';
+  sourceType?: 'vault' | 'rag' | 'schedule' | 'issue';
   vaultId: string;
   documentId?: string;
   ragDocumentId?: string;
@@ -542,6 +542,8 @@ function formatSources(sources: DerivedKnowledgeSource[]): string {
           ? `RAG ${source.ragDocumentId ?? source.relativePath}`
           : source.sourceType === 'schedule'
             ? `Schedule ${source.relativePath}`
+            : source.sourceType === 'issue'
+              ? `Issue ${source.relativePath}`
             : source.documentId
               ? source.documentId
               : `${source.vaultId}:${source.relativePath}`;

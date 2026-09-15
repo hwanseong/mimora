@@ -1,25 +1,10 @@
-import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   WeeklyReportData,
   WeeklyReportRenderResult,
 } from '../src/weeklyReport';
-
-type WorkerSuccess<T> = {
-  ok: true;
-  data: T;
-};
-
-type WorkerFailure = {
-  ok: false;
-  error: {
-    code: string;
-    message: string;
-  };
-};
-
-type WorkerResult<T> = WorkerSuccess<T> | WorkerFailure;
+import { runPythonWorker } from './pythonRuntime';
 
 type WeeklyReportServiceOptions = {
   getUserDataPath: () => string;
@@ -32,18 +17,6 @@ export type WeeklyReportRenderServiceInput = {
   outputPath: string;
   templatePath?: string | null;
 };
-
-const pythonExecutableCandidates =
-  process.platform === 'win32'
-    ? [
-        { executable: 'python', args: [] as string[] },
-        { executable: 'py', args: ['-3'] },
-      ]
-    : [{ executable: 'python3', args: [] as string[] }];
-
-function getWorkerPath(getAppRoot?: () => string): string {
-  return path.resolve(getAppRoot?.() ?? process.cwd(), 'python', 'mimora_worker.py');
-}
 
 function getReportRoot(userDataPath: string): string {
   return path.join(userDataPath, 'report');
@@ -89,60 +62,12 @@ export function createWeeklyReportService(options: WeeklyReportServiceOptions) {
       return options.runWorker<T>(command, input);
     }
 
-    const workerPath = getWorkerPath(options.getAppRoot);
-    let lastError: unknown;
-
-    for (const candidate of pythonExecutableCandidates) {
-      try {
-        return await new Promise<T>((resolve, reject) => {
-          const child = spawn(
-            candidate.executable,
-            [...candidate.args, workerPath, command],
-            {
-              shell: false,
-              stdio: ['pipe', 'pipe', 'pipe'],
-              windowsHide: true,
-            },
-          );
-          let stdout = '';
-          let stderr = '';
-
-          child.stdout.setEncoding('utf8');
-          child.stderr.setEncoding('utf8');
-          child.stdout.on('data', (chunk: string) => {
-            stdout += chunk;
-          });
-          child.stderr.on('data', (chunk: string) => {
-            stderr += chunk;
-          });
-          child.on('error', reject);
-          child.on('close', (code) => {
-            if (code !== 0 && !stdout.trim()) {
-              reject(new Error(stderr.trim() || 'Weekly report worker failed.'));
-              return;
-            }
-
-            try {
-              const parsed = JSON.parse(stdout.trim()) as WorkerResult<T>;
-              if (parsed.ok) {
-                resolve(parsed.data);
-              } else {
-                reject(new Error(parsed.error.message));
-              }
-            } catch (error) {
-              reject(error);
-            }
-          });
-          child.stdin.end(JSON.stringify(input));
-        });
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('Weekly report Python worker is unavailable.');
+    return runPythonWorker<T>({
+      command,
+      input,
+      getAppRoot: options.getAppRoot,
+      serviceName: 'Weekly report',
+    });
   }
 
   return {

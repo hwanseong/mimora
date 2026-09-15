@@ -38,6 +38,7 @@ import {
 import type {
   CanonicalScheduleTask,
   ScheduleFileSelection,
+  ScheduleParseWarning,
   ScheduleQueryResult,
   ScheduleSource,
   ScheduleTaskAnalysis,
@@ -180,6 +181,8 @@ function getScheduleQueryKindLabel(kind: ScheduleQueryResult['kind']): string {
       return '지연 작업';
     case 'active_tasks':
       return '진행 중 작업';
+    case 'remaining_tasks':
+      return '남은 작업';
     case 'starting_between':
       return '착수 예정 작업';
     case 'finishing_between':
@@ -263,6 +266,23 @@ function formatAnalysisWarnings(
     : '-';
 }
 
+function formatScheduleParseWarningReason(reason: string): string {
+  switch (reason) {
+    case 'missing_wbs_and_task_name':
+      return 'WBS/작업명 없음';
+    case 'missing_task_name':
+      return '작업명 없음';
+    default:
+      return formatScheduleDisplayValue(reason);
+  }
+}
+
+function formatScheduleParseWarningValue(
+  value: string | null | undefined,
+): string {
+  return value && value.trim() ? value : '-';
+}
+
 function getScheduleStatusLabel(
   status: ScheduleTaskAnalysis['status'] | undefined,
 ): string {
@@ -281,7 +301,7 @@ function getScheduleStatusLabel(
   }
 }
 
-function ScheduleIntelligenceSection({
+export function ScheduleIntelligenceSection({
   workspaceRegistry,
 }: {
   workspaceRegistry: WorkspaceRegistryParseResult | null;
@@ -303,6 +323,8 @@ function ScheduleIntelligenceSection({
   const [queryResult, setQueryResult] =
     useState<ScheduleQueryResult | null>(null);
   const [showRawQueryJson, setShowRawQueryJson] = useState(false);
+  const [showScheduleParseWarnings, setShowScheduleParseWarnings] =
+    useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stage, setStage] = useState<ScheduleOperationStage>('idle');
@@ -339,6 +361,7 @@ function ScheduleIntelligenceSection({
         setSummary(null);
         setQueryResult(null);
         setShowRawQueryJson(false);
+        setShowScheduleParseWarnings(false);
         setError(null);
         setStage('idle');
       } catch (loadError) {
@@ -398,6 +421,7 @@ function ScheduleIntelligenceSection({
       setSummary(null);
       setQueryResult(null);
       setShowRawQueryJson(false);
+      setShowScheduleParseWarnings(false);
       setSelectedFile(null);
       setStage('parsing');
 
@@ -408,6 +432,7 @@ function ScheduleIntelligenceSection({
       setStage('building_cache');
       setSource(result.source);
       setSummary(result.summary);
+      setShowScheduleParseWarnings(false);
       setMessage(
         `Parsed: ${result.summary.taskCount.toLocaleString()} WBS nodes`,
       );
@@ -438,6 +463,7 @@ function ScheduleIntelligenceSection({
       setSummary(result.summary);
       setQueryResult(null);
       setShowRawQueryJson(false);
+      setShowScheduleParseWarnings(false);
       setMessage(
         `Re-parsed: ${result.summary.taskCount.toLocaleString()} WBS nodes`,
       );
@@ -472,6 +498,7 @@ function ScheduleIntelligenceSection({
       setSummary(null);
       setQueryResult(null);
       setShowRawQueryJson(false);
+      setShowScheduleParseWarnings(false);
       setSelectedFile(null);
       setMessage('일정 파일 연결을 해제했습니다. 원본 Excel 파일은 변경하지 않았습니다.');
       setStage('idle');
@@ -500,6 +527,7 @@ function ScheduleIntelligenceSection({
       setQueryResult(result);
       setShowRawQueryJson(false);
       setSummary(result.summary);
+      setShowScheduleParseWarnings(false);
       setMessage(
         getScheduleQuerySuccessMessage({
           kind: result.kind,
@@ -574,6 +602,43 @@ function ScheduleIntelligenceSection({
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  function renderScheduleParseWarnings(
+    warnings: ScheduleParseWarning[] | undefined,
+  ) {
+    const parseWarnings = warnings ?? [];
+
+    if (parseWarnings.length === 0) {
+      return null;
+    }
+
+    return (
+      <div className="issue-skipped-panel schedule-parse-warning-panel">
+        <table>
+          <thead>
+            <tr>
+              <th>Row</th>
+              <th>Reason</th>
+              <th>Task/WBS</th>
+              <th>Title</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            {parseWarnings.map((warning) => (
+              <tr key={`${warning.row}-${warning.reason}`}>
+                <td>{warning.row}</td>
+                <td>{formatScheduleParseWarningReason(warning.reason)}</td>
+                <td>{formatScheduleParseWarningValue(warning.rawTask)}</td>
+                <td>{formatScheduleParseWarningValue(warning.rawTitle)}</td>
+                <td>{formatScheduleParseWarningValue(warning.rawDate)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -1069,14 +1134,32 @@ function ScheduleIntelligenceSection({
       </div>
 
       {summary ? (
-        <div className="schedule-summary-grid">
-          <span>WBS 노드 <strong>{summary.taskCount.toLocaleString()}</strong></span>
-          <span>Leaf 작업 <strong>{summary.leafTaskCount.toLocaleString()}</strong></span>
-          <span>진행 중 작업 <strong>{summary.activeTaskCount.toLocaleString()}</strong></span>
-          <span>지연 작업 <strong>{summary.delayedTaskCount.toLocaleString()}</strong></span>
-          <span>계획 진척률 <strong>{formatProgress(summary.plannedProgress)}</strong></span>
-          <span>실적 진척률 <strong>{formatProgress(summary.actualProgress)}</strong></span>
-        </div>
+        <>
+          <div className="schedule-summary-grid">
+            <span>WBS 노드 <strong>{summary.taskCount.toLocaleString()}</strong></span>
+            <span>Leaf 작업 <strong>{summary.leafTaskCount.toLocaleString()}</strong></span>
+            <span>진행 중 작업 <strong>{summary.activeTaskCount.toLocaleString()}</strong></span>
+            <span>지연 작업 <strong>{summary.delayedTaskCount.toLocaleString()}</strong></span>
+            <span>계획 진척률 <strong>{formatProgress(summary.plannedProgress)}</strong></span>
+            <span>실적 진척률 <strong>{formatProgress(summary.actualProgress)}</strong></span>
+          </div>
+          {(summary.skippedRows ?? 0) > 0 ? (
+            <>
+              <button
+                className="issue-summary-button schedule-warning-button"
+                onClick={() => {
+                  setShowScheduleParseWarnings((current) => !current);
+                }}
+                type="button"
+              >
+                Skipped rows <strong>{summary.skippedRows?.toLocaleString()}</strong>
+              </button>
+              {showScheduleParseWarnings
+                ? renderScheduleParseWarnings(summary.parseWarnings)
+                : null}
+            </>
+          ) : null}
+        </>
       ) : null}
 
       <div className="schedule-query-test">

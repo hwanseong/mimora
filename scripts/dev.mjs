@@ -34,11 +34,25 @@ const electronEnv = {
 
 delete electronEnv.ELECTRON_RUN_AS_NODE;
 
-const electronProcess = spawn(electronPath, ['.'], {
-  cwd: rootDir,
-  stdio: 'inherit',
-  env: electronEnv,
-});
+const electronArgs = ['.'];
+
+if (process.env.MIMORA_ELECTRON_DEV_NO_SANDBOX !== '0') {
+  electronArgs.push('--no-sandbox');
+}
+
+if (process.env.MIMORA_ELECTRON_DEV_IN_PROCESS_GPU === '1') {
+  electronArgs.push('--in-process-gpu');
+}
+
+const electronProcess = spawn(
+  electronPath,
+  electronArgs,
+  {
+    cwd: rootDir,
+    stdio: 'inherit',
+    env: electronEnv,
+  },
+);
 
 let shuttingDown = false;
 

@@ -7,7 +7,7 @@ import type { KnowledgeSearchFilters } from './knowledgeSearch';
 import type { ContentOriginSearchScope } from './contentOrigin';
 
 export type AutoRetrievedContext = {
-  sourceType?: 'vault' | 'rag' | 'schedule';
+  sourceType?: 'vault' | 'rag' | 'schedule' | 'issue';
   documentId: string;
   mimoraDocumentId?: string;
   workspaceIds: string[];

@@ -6,14 +6,28 @@ export type ScheduleSourceStatus =
   | 'failed'
   | 'missing';
 
+export type ScheduleDocumentStatus = 'active' | 'disconnected' | 'archived';
+export type ScheduleDocumentSecurity = 'internal' | 'private';
+
 export type ScheduleFileSelection = {
   selectionId: string;
   name: string;
 };
 
 export type ScheduleSource = {
+  id?: string;
   workspaceId: string;
   sourcePath: string;
+  originalFileName?: string;
+  managedFilePath?: string;
+  sourceHash?: string;
+  registeredAt?: string;
+  registeredBy?: string;
+  status?: ScheduleDocumentStatus;
+  disconnectedAt?: string | null;
+  parserType?: 'schedule_excel';
+  security?: ScheduleDocumentSecurity;
+  notes?: string | null;
   filename: string;
   fileSize: number;
   modifiedAt: string;
@@ -40,6 +54,14 @@ export type ScheduleQueryInput = {
   workspaceId: string;
   query: string;
   asOfDate?: string;
+};
+
+export type ScheduleParseWarning = {
+  row: number;
+  reason: string;
+  rawTask?: string | null;
+  rawTitle?: string | null;
+  rawDate?: string | null;
 };
 
 export type ScheduleResourceAssignment = {
@@ -112,6 +134,7 @@ export type CanonicalSchedule = {
   parsedSheets: string[];
   columnMapping: Record<string, string>;
   dependencies?: ScheduleDependency[];
+  parseWarnings?: ScheduleParseWarning[];
 };
 
 export type ScheduleSummary = {
@@ -133,6 +156,8 @@ export type ScheduleSummary = {
   projectStart: string | null;
   projectFinish: string | null;
   parsedSheets: string[];
+  skippedRows?: number;
+  parseWarnings?: ScheduleParseWarning[];
   source: ScheduleSource;
 };
 
@@ -140,6 +165,7 @@ export type ScheduleQueryKind =
   | 'summary'
   | 'active_tasks'
   | 'delayed_tasks'
+  | 'remaining_tasks'
   | 'starting_between'
   | 'finishing_between'
   | 'resource_lookup'

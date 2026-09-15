@@ -6,6 +6,8 @@ import {
   safeStorage,
   shell,
 } from 'electron';
+import { existsSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
@@ -110,6 +112,17 @@ import type {
   ScheduleSummary,
 } from '../src/schedule';
 import type {
+  IssueDocument,
+  IssueFileSelection,
+  IssueParseResult,
+  IssueQueryInput,
+  IssueQueryResult,
+  IssueRegisterInput,
+  IssueRemoveResult,
+  IssueRefreshOptions,
+  IssueSummary,
+} from '../src/issue';
+import type {
   WeeklyReportRenderInput,
   WeeklyReportRenderResult,
 } from '../src/weeklyReport';
@@ -126,6 +139,10 @@ import {
   createScheduleService,
   scheduleFileDialogFilters,
 } from './scheduleService';
+import {
+  createIssueService,
+  issueFileDialogFilters,
+} from './issueService';
 import {
   createSecureFileSelectionStore,
   validateSelectionOnlyIpcInput,
@@ -149,12 +166,74 @@ import type {
 import { createWorkspaceInsightStore } from './workspaceInsightStore';
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const devCompositorMode =
+  process.env.MIMORA_ELECTRON_COMPOSITOR_MODE ??
+  'hardware-acceleration';
 const settingsFileName = 'mimora-settings.json';
 const openAICredentialFileName = 'openai-api-key.safe';
 const externalCredentialDirectoryName = 'credentials';
 const chatHistoryFileName = 'chat-history.dat';
 const registryCacheFileName = 'registry-runtime-cache.json';
 const workspaceInsightFileName = 'workspace-insights.dat';
+
+function configureDevCompositorWorkaround(): void {
+  if (!devServerUrl) {
+    return;
+  }
+
+  const normalizedMode = devCompositorMode.trim().toLowerCase();
+  const appliedSwitches: string[] = [];
+
+  if (normalizedMode !== 'off') {
+    app.disableHardwareAcceleration();
+  }
+
+  if (
+    normalizedMode === 'disable-gpu' ||
+    normalizedMode === 'disable-direct-composition' ||
+    normalizedMode === 'disable-features' ||
+    normalizedMode === 'temp-user-data'
+  ) {
+    app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('disable-gpu-compositing');
+    appliedSwitches.push('disable-gpu', 'disable-gpu-compositing');
+  }
+
+  if (
+    normalizedMode === 'disable-direct-composition' ||
+    normalizedMode === 'disable-features' ||
+    normalizedMode === 'temp-user-data'
+  ) {
+    app.commandLine.appendSwitch('disable-direct-composition');
+    appliedSwitches.push('disable-direct-composition');
+  }
+
+  if (normalizedMode === 'disable-features' || normalizedMode === 'temp-user-data') {
+    app.commandLine.appendSwitch(
+      'disable-features',
+      'UseSkiaRenderer,VizDisplayCompositor,CanvasOopRasterization',
+    );
+    appliedSwitches.push(
+      'disable-features=UseSkiaRenderer,VizDisplayCompositor,CanvasOopRasterization',
+    );
+  }
+
+  if (normalizedMode === 'temp-user-data') {
+    const userDataDir =
+      process.env.MIMORA_ELECTRON_DEV_USER_DATA_DIR ??
+      path.join(os.tmpdir(), 'mimora-electron-dev');
+    app.commandLine.appendSwitch('user-data-dir', userDataDir);
+    appliedSwitches.push(`user-data-dir=${userDataDir}`);
+  }
+
+  console.info('[Mimora Electron Dev] compositor workaround', {
+    mode: normalizedMode,
+    disableHardwareAcceleration: normalizedMode !== 'off',
+    appliedSwitches,
+  });
+}
+
+configureDevCompositorWorkaround();
 
 function getSettingsPath(): string {
   return path.join(app.getPath('userData'), settingsFileName);
@@ -201,6 +280,10 @@ const ragService = createRagService({
   },
 });
 const scheduleService = createScheduleService({
+  getUserDataPath: () => app.getPath('userData'),
+  getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
+});
+const issueService = createIssueService({
   getUserDataPath: () => app.getPath('userData'),
   getAppRoot: () => (app.isPackaged ? process.resourcesPath : process.cwd()),
 });
@@ -726,6 +809,106 @@ function registerScheduleHandlers(): void {
       input: ScheduleQueryInput,
     ): Promise<MimoraIpcResult<ScheduleQueryResult>> =>
       toIpcResult(() => scheduleService.query(input)),
+  );
+}
+
+function registerIssueHandlers(): void {
+  ipcMain.handle(
+    'issue:getStorageRoot',
+    async (): Promise<MimoraIpcResult<string>> =>
+      toIpcResult(() => issueService.getIssueRoot()),
+  );
+
+  ipcMain.handle(
+    'issue:selectSourceFile',
+    async (): Promise<IssueFileSelection | null> => {
+      const result = await dialog.showOpenDialog({
+        filters: issueFileDialogFilters,
+        properties: ['openFile'],
+        title: 'Issue Excel Select',
+      });
+
+      if (result.canceled || !result.filePaths[0]) {
+        return null;
+      }
+
+      return secureFileSelections.create(
+        result.filePaths[0],
+        'issue-register',
+      ) as Promise<IssueFileSelection>;
+    },
+  );
+
+  ipcMain.handle(
+    'issue:registerDocument',
+    async (
+      _event,
+      rawInput: unknown,
+    ): Promise<MimoraIpcResult<IssueDocument>> =>
+      toIpcResult(async () => {
+        const input = validateSelectionOnlyIpcInput<IssueRegisterInput>(
+          rawInput,
+          ['workspaceId', 'selectionId', 'security', 'notes'],
+          'Issue register',
+        );
+        const sourcePath = await secureFileSelections.consume(
+          input.selectionId,
+          'issue-register',
+        );
+
+        return issueService.registerDocument({
+          workspaceId: input.workspaceId,
+          sourcePath,
+          security: input.security,
+          notes: input.notes,
+        });
+      }),
+  );
+
+  ipcMain.handle(
+    'issue:getDocument',
+    async (
+      _event,
+      workspaceId: string,
+    ): Promise<MimoraIpcResult<IssueDocument | null>> =>
+      toIpcResult(() => issueService.getDocument(workspaceId)),
+  );
+
+  ipcMain.handle(
+    'issue:removeDocument',
+    async (
+      _event,
+      workspaceId: string,
+    ): Promise<MimoraIpcResult<IssueRemoveResult>> =>
+      toIpcResult(() => issueService.removeDocument(workspaceId)),
+  );
+
+  ipcMain.handle(
+    'issue:refresh',
+    async (
+      _event,
+      workspaceId: string,
+      options?: IssueRefreshOptions,
+    ): Promise<MimoraIpcResult<IssueParseResult>> =>
+      toIpcResult(() => issueService.refresh(workspaceId, options)),
+  );
+
+  ipcMain.handle(
+    'issue:getSummary',
+    async (
+      _event,
+      workspaceId: string,
+    ): Promise<MimoraIpcResult<IssueSummary>> =>
+      toIpcResult(() => issueService.getSummary(workspaceId)),
+  );
+
+  ipcMain.handle(
+    'issue:query',
+    async (
+      _event,
+      input: IssueQueryInput,
+    ): Promise<MimoraIpcResult<IssueQueryResult>> =>
+      toIpcResult(() => issueService.query(input)),
   );
 }
 
@@ -1770,6 +1953,7 @@ function registerExternalLinkHandlers(): void {
 }
 
 function createMainWindow(): void {
+  const preloadPath = path.join(__dirname, 'preload.cjs');
   const mainWindow = new BrowserWindow({
     width: 1100,
     height: 720,
@@ -1778,12 +1962,137 @@ function createMainWindow(): void {
     title: 'Mimora',
     backgroundColor: '#f8fafc',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
     },
   });
+
+  console.info('[Mimora Window] created', {
+    devServerUrl: devServerUrl ?? null,
+    preloadPath,
+    preloadExists: existsSync(preloadPath),
+  });
+
+  mainWindow.webContents.on(
+    'did-fail-load',
+    (_event, errorCode, errorDescription, validatedUrl) => {
+      console.error('[Mimora Window] did-fail-load', {
+        errorCode,
+        errorDescription,
+        validatedUrl,
+      });
+    },
+  );
+
+  function inspectRenderer(label: string): void {
+    void mainWindow.webContents
+      .executeJavaScript(
+        `(() => {
+          const root = document.getElementById("root");
+          const firstChild = root?.firstElementChild ?? null;
+          const rootStyle = root ? getComputedStyle(root) : null;
+          const firstStyle = firstChild ? getComputedStyle(firstChild) : null;
+          const rootRect = root?.getBoundingClientRect();
+          const firstRect = firstChild?.getBoundingClientRect();
+
+          return {
+            url: location.href,
+            title: document.title,
+            hasMimora: !!window.mimora,
+            mimoraKeys: window.mimora ? Object.keys(window.mimora).slice(0, 12) : [],
+            bodyText: document.body.innerText.slice(0, 500),
+            rootChildren: root?.childElementCount ?? null,
+            rootClass: root?.className ?? null,
+            rootDisplay: rootStyle?.display ?? null,
+            rootVisibility: rootStyle?.visibility ?? null,
+            rootOpacity: rootStyle?.opacity ?? null,
+            rootSize: rootRect
+              ? { width: Math.round(rootRect.width), height: Math.round(rootRect.height) }
+              : null,
+            firstTag: firstChild?.tagName ?? null,
+            firstClass: firstChild?.className ?? null,
+            firstDisplay: firstStyle?.display ?? null,
+            firstVisibility: firstStyle?.visibility ?? null,
+            firstOpacity: firstStyle?.opacity ?? null,
+            firstSize: firstRect
+              ? { width: Math.round(firstRect.width), height: Math.round(firstRect.height) }
+              : null,
+          };
+        })()`,
+      )
+      .then((state) => {
+        console.info(`[Mimora Window] ${label}`, state);
+      })
+      .catch((error: unknown) => {
+        console.error(`[Mimora Window] ${label} inspect failed`, error);
+      });
+  }
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (!devServerUrl) {
+      console.info('[Mimora Window] did-finish-load', {
+        url: mainWindow.webContents.getURL(),
+        title: mainWindow.getTitle(),
+      });
+      return;
+    }
+
+    inspectRenderer('did-finish-load');
+    setTimeout(() => {
+      inspectRenderer('post-load');
+    }, 1000);
+  });
+
+  mainWindow.webContents.on(
+    'render-process-gone',
+    (_event, details) => {
+      console.error('[Mimora Window] render-process-gone', details);
+    },
+  );
+
+  mainWindow.on('unresponsive', () => {
+    console.error('[Mimora Window] unresponsive');
+  });
+
+  mainWindow.webContents.on(
+    'console-message',
+    (event) => {
+      const details = event as unknown as {
+        level?: 'debug' | 'error' | 'info' | 'warning';
+        message?: string;
+        lineNumber?: number;
+        sourceId?: string;
+        stack?: string;
+        frame?: {
+          url?: string;
+          routingId?: number;
+          processId?: number;
+        };
+      };
+      const level = details.level ?? 'info';
+
+      if (!devServerUrl && level !== 'error' && level !== 'warning') {
+        return;
+      }
+
+      console.info('[Mimora Renderer Console]', {
+        level,
+        message: details.message,
+        line: details.lineNumber,
+        sourceId: details.sourceId,
+        stack: details.stack ?? null,
+        frame: details.frame
+          ? {
+              url: details.frame.url ?? null,
+              routingId: details.frame.routingId ?? null,
+              processId: details.frame.processId ?? null,
+            }
+          : null,
+      });
+    },
+  );
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     openValidatedExternalLinkInBackground(url, 'window-open');
@@ -1800,17 +2109,21 @@ function createMainWindow(): void {
   });
 
   if (devServerUrl) {
+    console.info('[Mimora Window] loadURL', devServerUrl);
     void mainWindow.loadURL(devServerUrl);
     return;
   }
 
-  void mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+  const indexPath = path.join(__dirname, '../dist/index.html');
+  console.info('[Mimora Window] loadFile', indexPath);
+  void mainWindow.loadFile(indexPath);
 }
 
 registerSettingsHandlers();
 registerRegistryHandlers();
 registerRagHandlers();
 registerScheduleHandlers();
+registerIssueHandlers();
 registerWeeklyReportHandlers();
 registerChatHistoryHandlers();
 registerWorkspaceInsightHandlers();

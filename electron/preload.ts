@@ -43,6 +43,17 @@ import type {
   ScheduleSummary,
 } from '../src/schedule';
 import type {
+  IssueDocument,
+  IssueFileSelection,
+  IssueParseResult,
+  IssueQueryInput,
+  IssueQueryResult,
+  IssueRegisterInput,
+  IssueRemoveResult,
+  IssueRefreshOptions,
+  IssueSummary,
+} from '../src/issue';
+import type {
   WeeklyReportRenderInput,
   WeeklyReportRenderResult,
 } from '../src/weeklyReport';
@@ -103,6 +114,23 @@ function unwrapIpcResult<T>(result: MimoraIpcResult<T>): T {
 
   throw new Error(result.error);
 }
+
+function writePreloadBootMarker(message: string): void {
+  const marker = document.getElementById('mimora-boot-diagnostics');
+
+  if (!marker) {
+    return;
+  }
+
+  const line = document.createElement('span');
+  line.textContent = message;
+  marker.appendChild(line);
+}
+
+console.info('[Mimora Preload] loaded');
+window.addEventListener('DOMContentLoaded', () => {
+  writePreloadBootMarker('preload: loaded');
+});
 
 contextBridge.exposeInMainWorld('mimora', {
   appName: 'Mimora',
@@ -428,6 +456,55 @@ contextBridge.exposeInMainWorld('mimora', {
         MimoraIpcResult<ScheduleQueryResult>
       >
     ).then(unwrapIpcResult),
+  getIssueStorageRoot: () =>
+    (
+      ipcRenderer.invoke('issue:getStorageRoot') as Promise<
+        MimoraIpcResult<string>
+      >
+    ).then(unwrapIpcResult),
+  selectIssueSourceFile: () =>
+    ipcRenderer.invoke(
+      'issue:selectSourceFile',
+    ) as Promise<IssueFileSelection | null>,
+  registerIssueDocument: (input: IssueRegisterInput) =>
+    (
+      ipcRenderer.invoke('issue:registerDocument', input) as Promise<
+        MimoraIpcResult<IssueDocument>
+      >
+    ).then(unwrapIpcResult),
+  getIssueDocument: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke('issue:getDocument', workspaceId) as Promise<
+        MimoraIpcResult<IssueDocument | null>
+      >
+    ).then(unwrapIpcResult),
+  removeIssueDocument: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke('issue:removeDocument', workspaceId) as Promise<
+        MimoraIpcResult<IssueRemoveResult>
+      >
+    ).then(unwrapIpcResult),
+  refreshIssueDocument: (
+    workspaceId: string,
+    options?: IssueRefreshOptions,
+  ) =>
+    (
+      ipcRenderer.invoke('issue:refresh', workspaceId, options) as Promise<
+        MimoraIpcResult<IssueParseResult>
+      >
+    ).then(unwrapIpcResult),
+  getIssueSummary: (workspaceId: string) =>
+    (
+      ipcRenderer.invoke('issue:getSummary', workspaceId) as Promise<
+        MimoraIpcResult<IssueSummary>
+      >
+    ).then(unwrapIpcResult),
+  queryIssues: (input: IssueQueryInput) =>
+    (
+      ipcRenderer.invoke('issue:query', input) as Promise<
+        MimoraIpcResult<IssueQueryResult>
+      >
+    ).then(unwrapIpcResult),
   getWeeklyReportStorageRoot: () =>
     (
       ipcRenderer.invoke('weeklyReport:getStorageRoot') as Promise<
@@ -533,4 +610,9 @@ contextBridge.exposeInMainWorld('mimora', {
         MimoraIpcResult<boolean>
       >
     ).then(unwrapIpcResult),
+});
+
+console.info('[Mimora Preload] contextBridge exposed: window.mimora');
+window.addEventListener('DOMContentLoaded', () => {
+  writePreloadBootMarker('preload: contextBridge exposed window.mimora');
 });

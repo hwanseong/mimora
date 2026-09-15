@@ -2018,6 +2018,46 @@ def first_text_in_columns(row: tuple[Any, ...], column_indices: list[int]) -> st
     return ""
 
 
+def schedule_row_has_signal(row: tuple[Any, ...], mapping: dict[str, int]) -> bool:
+    signal_fields = [
+        "wbs",
+        "name",
+        "planned_start",
+        "planned_finish",
+        "actual_start",
+        "actual_finish",
+        "planned_progress",
+        "actual_progress",
+        "resource",
+    ]
+    return any(cell_to_text(row_value(row, mapping, field)) for field in signal_fields)
+
+
+def schedule_parse_warning(
+    row_number: int,
+    reason: str,
+    row: tuple[Any, ...],
+    mapping: dict[str, int],
+    name_columns: list[int],
+) -> dict[str, Any]:
+    raw_title = first_text_in_columns(row, name_columns)
+    raw_date = (
+        cell_to_text(row_value(row, mapping, "planned_start"))
+        or cell_to_text(row_value(row, mapping, "planned_finish"))
+        or cell_to_text(row_value(row, mapping, "actual_start"))
+        or cell_to_text(row_value(row, mapping, "actual_finish"))
+        or None
+    )
+
+    return {
+        "row": row_number,
+        "reason": reason,
+        "rawTask": cell_to_text(row_value(row, mapping, "wbs")) or None,
+        "rawTitle": raw_title or None,
+        "rawDate": raw_date,
+    }
+
+
 def infer_wbs_level(wbs: str, explicit_level: Any) -> int:
     explicit = parse_schedule_number(explicit_level)
     if explicit is not None and explicit >= 0:
@@ -2034,7 +2074,7 @@ def infer_parent_wbs(wbs: str) -> str | None:
     return None
 
 
-def parse_schedule_sheet(workbook: Any, workspace_id: str, source_path: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
+def parse_schedule_sheet(workbook: Any, workspace_id: str, source_path: Path) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, Any]]]:
     if "Schedule" not in workbook.sheetnames:
         raise WorkerError("schedule_sheet_missing", "Schedule sheet is missing.")
     sheet = workbook["Schedule"]
@@ -2044,12 +2084,33 @@ def parse_schedule_sheet(workbook: Any, workspace_id: str, source_path: Path) ->
     header_row, mapping = detect_header_mapping(rows, SCHEDULE_COLUMN_ALIASES, {"wbs", "name"})
     name_columns = detect_task_name_columns(sheet, header_row, mapping)
     tasks: list[dict[str, Any]] = []
+    parse_warnings: list[dict[str, Any]] = []
     for row_number, row in enumerate(rows[header_row + 1 :], start=header_row + 2):
         wbs = normalize_wbs(row_value(row, mapping, "wbs"))
         name = first_text_in_columns(row, name_columns)
         if not wbs and not name:
+            if schedule_row_has_signal(row, mapping):
+                parse_warnings.append(
+                    schedule_parse_warning(
+                        row_number,
+                        "missing_wbs_and_task_name",
+                        row,
+                        mapping,
+                        name_columns,
+                    )
+                )
             continue
         if not name or name.lower() in {"summary", "total", "합계"}:
+            if not name and schedule_row_has_signal(row, mapping):
+                parse_warnings.append(
+                    schedule_parse_warning(
+                        row_number,
+                        "missing_task_name",
+                        row,
+                        mapping,
+                        name_columns,
+                    )
+                )
             continue
         task = {
             "taskId": f"{workspace_id}:{wbs or row_number}",
@@ -2080,7 +2141,7 @@ def parse_schedule_sheet(workbook: Any, workspace_id: str, source_path: Path) ->
     column_mapping = {field: cell_to_text(rows[header_row][index]) for field, index in mapping.items()}
     if name_columns:
         column_mapping["nameColumns"] = ",".join(str(index + 1) for index in name_columns)
-    return tasks, column_mapping
+    return tasks, column_mapping, parse_warnings
 
 
 def parse_calendar_sheet(workbook: Any) -> list[dict[str, Any]]:
@@ -2267,6 +2328,8 @@ def schedule_summary(schedule: dict[str, Any], source: dict[str, Any], as_of_dat
         "projectStart": schedule.get("projectStart"),
         "projectFinish": schedule.get("projectFinish"),
         "parsedSheets": schedule.get("parsedSheets", []),
+        "skippedRows": len(schedule.get("parseWarnings", []) or []),
+        "parseWarnings": schedule.get("parseWarnings", []) or [],
         "source": source,
     }
 
@@ -2283,7 +2346,7 @@ def parse_schedule(input_data: dict[str, Any]) -> dict[str, Any]:
     try:
         workbook = load_workbook(source_path, read_only=False, data_only=True, keep_vba=False)
         sheet_names = list(workbook.sheetnames)
-        tasks, column_mapping = parse_schedule_sheet(workbook, workspace_id, source_path)
+        tasks, column_mapping, parse_warnings = parse_schedule_sheet(workbook, workspace_id, source_path)
         dependencies = build_schedule_dependencies(tasks)
         calendars = parse_calendar_sheet(workbook)
         progress_series = parse_progress_sheet(workbook)
@@ -2329,6 +2392,7 @@ def parse_schedule(input_data: dict[str, Any]) -> dict[str, Any]:
         "settings": settings,
         "parsedSheets": parsed_sheets,
         "columnMapping": column_mapping,
+        "parseWarnings": parse_warnings,
     }
     return {
         "source": source,
@@ -2531,6 +2595,77 @@ def is_completed_task(task: dict[str, Any]) -> bool:
     return bool(task.get("actualFinish")) or (
         isinstance(actual_progress, (int, float)) and float(actual_progress) >= 1
     )
+
+
+def is_open_schedule_task(task: dict[str, Any]) -> bool:
+    return not is_completed_task(task)
+
+
+def schedule_contains_any(query_text: str, tokens: list[str]) -> bool:
+    return any(token in query_text for token in tokens)
+
+
+def schedule_compact_text(query_text: str) -> str:
+    return re.sub(r"\s+", "", query_text)
+
+
+def schedule_requests_completed_history(query_text: str) -> bool:
+    compact = schedule_compact_text(query_text)
+    return (
+        schedule_contains_any(query_text, ["완료 이력 포함", "완료된 일정도 포함", "완료된 작업도 포함", "완료도 포함", "include completed", "include finished"])
+        or ("포함" in compact and schedule_contains_any(compact, ["완료된일정", "완료된작업", "완료이력"]))
+    )
+
+
+def schedule_requests_remaining(query_text: str) -> bool:
+    compact = schedule_compact_text(query_text)
+    return schedule_contains_any(query_text, [
+        "남은",
+        "남아있는",
+        "해야 할",
+        "해야할",
+        "할 일",
+        "할일",
+        "완료된 일정 제외",
+        "완료된 작업 제외",
+        "remaining",
+        "todo",
+        "to do",
+    ]) or schedule_contains_any(compact, [
+        "완료된일정제외",
+        "완료된작업제외",
+        "남은것",
+        "남은작업",
+        "남은일정",
+        "해야할일",
+        "이번주해야할일",
+    ])
+
+
+def schedule_requests_this_week(query_text: str) -> bool:
+    compact = schedule_compact_text(query_text)
+    return schedule_contains_any(query_text, ["이번 주", "이번주", "this week"]) or "이번주" in compact
+
+
+def schedule_requests_risk(query_text: str) -> bool:
+    return schedule_contains_any(query_text, ["리스크", "위험", "risk"])
+
+
+def task_overlaps_period(task: dict[str, Any], start_date: str, finish_date: str) -> bool:
+    planned_start = task.get("plannedStart")
+    planned_finish = task.get("plannedFinish")
+    if planned_finish and planned_finish < start_date:
+        return False
+    if planned_start and planned_start > finish_date:
+        return False
+    return bool(planned_start or planned_finish)
+
+
+def schedule_open_sort_key(task: dict[str, Any], as_of_date: str) -> tuple[int, str, str, str]:
+    delayed_rank = 0 if is_delayed_task(task, as_of_date) else 1
+    finish = cell_to_text(task.get("plannedFinish")) or "9999-12-31"
+    start = cell_to_text(task.get("plannedStart")) or "9999-12-31"
+    return (delayed_rank, finish, start, cell_to_text(task.get("wbs")))
 
 
 def is_not_started_task(task: dict[str, Any]) -> bool:
@@ -3323,6 +3458,7 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
     task_entity_type, task_entity = find_task_entity(query, tasks)
     what_if_requested = query_mentions_what_if_scenario(query)
     delay_days = extract_delay_days(query)
+    include_completed_history = schedule_requests_completed_history(query_text)
 
     if task_entity and what_if_requested and delay_days is not None:
         target = task_entity
@@ -3394,15 +3530,58 @@ def schedule_query(input_data: dict[str, Any]) -> dict[str, Any]:
         kind = "forecast"
         selected = []
         advanced_analysis = calculate_schedule_forecast(schedule, source, as_of_date)
+    elif schedule_requests_this_week(query_text) and schedule_requests_remaining(query_text):
+        as_of = parse_iso_date(as_of_date)
+        week_finish = date_text(as_of + timedelta(days=6)) if as_of else as_of_date
+        selected = [
+            task
+            for task in tasks
+            if task.get("isLeaf")
+            and (include_completed_history or is_open_schedule_task(task))
+            and task_overlaps_period(task, as_of_date, week_finish or as_of_date)
+        ]
+        selected = sorted(selected, key=lambda task: schedule_open_sort_key(task, as_of_date))
+        kind = "remaining_tasks"
+    elif schedule_requests_remaining(query_text):
+        selected = [
+            task
+            for task in tasks
+            if task.get("isLeaf") and (include_completed_history or is_open_schedule_task(task))
+        ]
+        selected = sorted(selected, key=lambda task: schedule_open_sort_key(task, as_of_date))
+        kind = "remaining_tasks"
+    elif schedule_requests_risk(query_text):
+        selected = [
+            task
+            for task in tasks
+            if task.get("isLeaf")
+            and is_open_schedule_task(task)
+            and (
+                is_delayed_task(task, as_of_date)
+                or is_active_task(task, as_of_date)
+                or not task.get("plannedFinish")
+            )
+        ]
+        selected = sorted(selected, key=lambda task: schedule_open_sort_key(task, as_of_date))
+        kind = "delayed_tasks"
     elif any(token in query_text for token in ["지연", "지체", "delay", "delayed"]):
         selected = [
             task
             for task in tasks
-            if task.get("isLeaf") and is_delayed_task(task, as_of_date)
+            if task.get("isLeaf")
+            and (include_completed_history or is_open_schedule_task(task))
+            and is_delayed_task(task, as_of_date)
         ]
+        selected = sorted(selected, key=lambda task: schedule_open_sort_key(task, as_of_date))
         kind = "delayed_tasks"
     elif any(token in query_text for token in ["진행", "active", "현재", "착수 중"]):
-        selected = [task for task in tasks if is_active_task(task, as_of_date)]
+        selected = [
+            task for task in tasks
+            if task.get("isLeaf")
+            and (include_completed_history or is_open_schedule_task(task))
+            and is_active_task(task, as_of_date)
+        ]
+        selected = sorted(selected, key=lambda task: schedule_open_sort_key(task, as_of_date))
         kind = "active_tasks"
     elif any(token in query_text for token in ["완료", "finish", "finishing", "종료"]):
         selected = [
@@ -3605,6 +3784,1242 @@ def weekly_report_render(input_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+ISSUE_COLUMN_ALIASES = {
+    "risk_analysis_id": ["위험id전사분석용", "위험ID/(전사분석용)"],
+    "item_type": ["구분", "유형", "type", "itemtype", "riskissue"],
+    "item_id": ["이슈id", "이슈ID", "관리번호", "번호", "no", "id", "issueid"],
+    "priority": ["우선순위", "priority"],
+    "issue_area": ["이슈영역", "영역", "issuearea", "area", "domain"],
+    "issue_category": ["이슈분류", "분류", "issuecategory", "category", "classification"],
+    "phase": ["단계", "phase", "stage"],
+    "title": ["이슈사건", "이슈 사건", "이슈명", "제목", "위험이슈명", "위험/이슈명", "issuename", "issuetitle", "issue", "title", "subject"],
+    "description": ["상세내용", "내용", "위험이슈내용", "위험/이슈 내용", "현상", "description"],
+    "reported_date": ["이슈발생일", "발생일", "등록일", "occurreddate", "issuedate", "opendate", "createddate"],
+    "risk_id": ["위험id", "위험ID", "리스크id", "riskid"],
+    "probability": ["발생확률", "발생 확률", "확률", "probability", "likelihood"],
+    "impact": ["영향도", "영향", "impact"],
+    "severity": ["위험도", "심각도", "리스크등급", "risklevel", "severity"],
+    "root_cause": ["원인", "근본원인", "rootcause", "cause"],
+    "action_plan": ["대응방안", "대응계획", "조치계획", "actionplan", "responseplan", "mitigation"],
+    "resolution": ["조치내용", "해결내용", "완료내용", "resolution"],
+    "owner": ["조치담당자", "조치/담당자", "담당자", "owner", "assignee", "pic"],
+    "target_date": ["조치예정일", "조치/예정일", "완료예정일", "목표완료일", "목표일", "duedate", "targetdate", "planfinish"],
+    "organization_support_required": ["조직지원필요여부", "조직지원필요", "조직지원", "지원필요", "organizationsupportrequired", "supportrequired", "orgsupport"],
+    "status": ["진행상황", "진행상태", "상태", "status", "progressstatus", "state"],
+    "effort_mh": ["처리공수mh", "처리공수", "공수", "effortmh", "mh", "manhour"],
+    "resolved_date": ["조치일자", "완료일", "조치완료일", "해결일", "종료일", "completeddate", "closeddate", "actiondate", "finishdate"],
+    "remarks": ["비고", "메모", "remarks", "memo", "notes"],
+}
+
+ISSUE_REQUIRED_COLUMN_GROUPS = [{"title", "description"}, {"status"}]
+ISSUE_RISK_HINT_FIELDS = {"risk_analysis_id", "risk_id", "probability", "impact", "severity"}
+
+
+def issue_source_path(input_data: dict[str, Any]) -> Path:
+    source_path = input_data.get("source_path")
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise WorkerError("issue_source_not_found", "Issue source path is required.")
+    path_value = Path(source_path).resolve()
+    if path_value.suffix.lower() not in SUPPORTED_SCHEDULE_EXTENSIONS:
+        raise WorkerError("unsupported_issue_file", "Issue source must be .xlsx or .xlsm.")
+    if not path_value.exists() or not path_value.is_file():
+        raise WorkerError("issue_source_not_found", "Issue source file was not found.")
+    return path_value
+
+
+def normalize_issue_header(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("_x000D_", " ").replace("_x000d_", " ")
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", text.strip().lower())
+
+
+def issue_header_matches(normalized: str, aliases: set[str]) -> bool:
+    if normalized in aliases:
+        return True
+    return any(alias and len(alias) >= 6 and alias in normalized for alias in aliases)
+
+
+def missing_issue_required_columns(mapping: dict[str, int]) -> list[str]:
+    missing: list[str] = []
+    for group in ISSUE_REQUIRED_COLUMN_GROUPS:
+        if not any(field in mapping for field in group):
+            missing.append("/".join(sorted(group)))
+    return missing
+
+
+def issue_detected_columns(rows: list[tuple[Any, ...]], header_row: int) -> list[str]:
+    if header_row < 0 or header_row >= len(rows):
+        return []
+    return [
+        cell_to_text(value)
+        for value in rows[header_row]
+        if cell_to_text(value)
+    ]
+
+
+def issue_mapping_failure_message(
+    sheet_name: str | None,
+    header_row: int,
+    mapping: dict[str, int],
+    rows: list[tuple[Any, ...]],
+    missing: list[str],
+) -> str:
+    detected_columns = issue_detected_columns(rows, header_row)
+    mapped_fields = ",".join(sorted(mapping.keys())) or "-"
+    return (
+        "Issue column mapping failed. "
+        f"detected_sheet={sheet_name or '-'}; "
+        f"detected_header_row={(header_row + 1) if header_row >= 0 else '-'}; "
+        f"detected_columns={detected_columns}; "
+        f"mapped_fields={mapped_fields}; "
+        f"missing_required_columns={missing or '-'}"
+    )
+
+
+def detect_issue_header_mapping(rows: list[tuple[Any, ...]]) -> tuple[int, dict[str, int], list[str]]:
+    normalized_aliases = {
+        field: {normalize_issue_header(alias) for alias in values}
+        for field, values in ISSUE_COLUMN_ALIASES.items()
+    }
+    best_row = -1
+    best_mapping: dict[str, int] = {}
+    best_score = -1
+    for row_index, row in enumerate(rows[:40]):
+        mapping: dict[str, int] = {}
+        normalized_cells = [normalize_issue_header(value) for value in row]
+        for cell_index, normalized in enumerate(normalized_cells):
+            if not normalized:
+                continue
+            for field, field_aliases in normalized_aliases.items():
+                if field in mapping:
+                    continue
+                if issue_header_matches(normalized, field_aliases):
+                    mapping[field] = cell_index
+        score = len(mapping)
+        if "title" in mapping or "description" in mapping:
+            score += 2
+        if "status" in mapping:
+            score += 2
+        if score > best_score:
+            best_row = row_index
+            best_mapping = mapping
+            best_score = score
+    return best_row, best_mapping, missing_issue_required_columns(best_mapping)
+
+
+def parse_issue_date(value: Any) -> str | None:
+    return parse_schedule_date(value)
+
+
+def parse_issue_number(value: Any) -> float | None:
+    return parse_schedule_number(value)
+
+
+def parse_issue_bool(value: Any) -> bool | None:
+    text = cell_to_text(value).strip().lower()
+    if not text:
+        return None
+    if text in {"y", "yes", "true", "1", "필요", "예", "o", "○"}:
+        return True
+    if text in {"n", "no", "false", "0", "불필요", "아니오", "x"}:
+        return False
+    return True if "필요" in text or "support" in text else None
+
+
+def normalize_issue_status(value: Any) -> str | None:
+    text = cell_to_text(value)
+    if not text:
+        return None
+    lowered = text.lower()
+    if any(token in lowered for token in ["보류", "hold", "defer", "pending"]):
+        return "on_hold"
+    if any(token in lowered for token in ["진행중", "조치중", "doing", "progress", "in progress"]):
+        return "in_progress"
+    if any(token in lowered for token in ["종결", "closed"]):
+        return "closed"
+    if any(token in lowered for token in ["완료", "해결", "done", "complete", "resolved"]):
+        return "resolved"
+    if any(token in lowered for token in ["open", "신규", "접수", "미해결"]):
+        return "open"
+    return text
+
+
+def is_completed_issue(issue: dict[str, Any]) -> bool:
+    return issue.get("status") in {"resolved", "closed", "completed"} or bool(issue.get("completedDate") or issue.get("resolvedDate"))
+
+
+def normalize_issue_item_type(value: Any, row: tuple[Any, ...], mapping: dict[str, int]) -> str:
+    text = cell_to_text(value).lower()
+    if any(token in text for token in ["risk", "위험", "리스크"]):
+        return "risk"
+    if any(token in text for token in ["issue", "이슈"]):
+        return "issue"
+    for field in ISSUE_RISK_HINT_FIELDS:
+        if cell_to_text(row_value(row, mapping, field)):
+            return "risk"
+    return "issue"
+
+
+def days_between_dates(start: str | None, finish: str | None) -> int | None:
+    start_date = parse_iso_date(start)
+    finish_date = parse_iso_date(finish)
+    if not start_date or not finish_date:
+        return None
+    return (finish_date.date() - start_date.date()).days
+
+
+def extract_latest_note_date(value: Any) -> str | None:
+    text = cell_to_text(value)
+    if not text:
+        return None
+    candidates: list[str] = []
+    for match in re.finditer(r"\((\d{4}[./-]\d{1,2}[./-]\d{1,2})\)", text):
+        parsed = parse_issue_date(match.group(1))
+        if parsed:
+            candidates.append(parsed)
+    for match in re.finditer(r"\b(\d{4}[./-]\d{1,2}[./-]\d{1,2})\b", text):
+        parsed = parse_issue_date(match.group(1))
+        if parsed:
+            candidates.append(parsed)
+    return max(candidates) if candidates else None
+
+
+def issue_risk_score(probability: float | None, impact: float | None) -> float | None:
+    if probability is None and impact is None:
+        return None
+    p = probability if probability is not None else 1
+    i = impact if impact is not None else 1
+    return float(p) * float(i)
+
+
+def issue_risk_flags(issue: dict[str, Any], as_of_date: str) -> list[str]:
+    flags: list[str] = []
+    metrics = issue.get("derivedMetrics") if isinstance(issue.get("derivedMetrics"), dict) else {}
+    if not is_completed_issue(issue) and not issue.get("dueDate"):
+        flags.append("missing_due")
+    if isinstance(metrics.get("overdueDays"), int) and metrics["overdueDays"] > 0:
+        flags.append("overdue")
+    if isinstance(metrics.get("openAgeDays"), int) and metrics["openAgeDays"] >= 60:
+        flags.append("long_open_60d")
+    if issue.get("organizationSupportRequired") is True and not is_completed_issue(issue):
+        flags.append("organization_support_required")
+    if isinstance(metrics.get("daysSinceLastUpdate"), int) and metrics["daysSinceLastUpdate"] >= 14:
+        flags.append("stale_update")
+    if issue_risk_score(issue.get("probability"), issue.get("impact")) and issue_risk_score(issue.get("probability"), issue.get("impact")) >= 9:
+        flags.append("high_risk_score")
+    return flags
+
+
+def build_issue_metrics(issue: dict[str, Any], as_of_date: str) -> dict[str, Any]:
+    completed = is_completed_issue(issue)
+    as_of = as_of_date
+    open_age_days = None if completed else days_between_dates(issue.get("occurredDate"), as_of)
+    issue_age_finish = issue.get("actionDate") or issue.get("resolvedDate") or issue.get("completedDate") if completed else as_of
+    issue_age_days = days_between_dates(issue.get("occurredDate"), issue_age_finish)
+    overdue_days = None
+    if not completed and issue.get("dueDate"):
+        overdue_days = days_between_dates(issue.get("dueDate"), as_of)
+        if overdue_days is not None:
+            overdue_days = max(0, overdue_days)
+    days_since_last_update = None if completed else days_between_dates(issue.get("latestNoteDate") or issue.get("occurredDate"), as_of)
+    resolution_days = days_between_dates(issue.get("occurredDate"), issue.get("completedDate")) if completed else None
+    completed_late_days = None
+    if completed and issue.get("dueDate") and issue.get("completedDate"):
+        completed_late_days = max(0, days_between_dates(issue.get("dueDate"), issue.get("completedDate")) or 0)
+    derived_risk_score = issue_risk_score(issue.get("probability"), issue.get("impact"))
+    metrics = {
+        "openAgeDays": open_age_days,
+        "issueAgeDays": issue_age_days,
+        "overdueDays": overdue_days,
+        "daysSinceLastUpdate": days_since_last_update,
+        "resolutionDays": resolution_days,
+        "completedLateDays": completed_late_days,
+        "derivedRiskScore": derived_risk_score,
+        "riskFlags": [],
+    }
+    issue["derivedMetrics"] = metrics
+    metrics["riskFlags"] = issue_risk_flags(issue, as_of_date)
+    return metrics
+
+
+def candidate_issue_sheets(workbook: Any) -> list[Any]:
+    visible_sheets = [
+        sheet for sheet in workbook.worksheets
+        if getattr(sheet, "sheet_state", "visible") == "visible"
+    ]
+    return visible_sheets or list(workbook.worksheets)
+
+
+def detect_issue_sheet(workbook: Any) -> tuple[Any, int, dict[str, int]]:
+    best_sheet = None
+    best_rows: list[tuple[Any, ...]] = []
+    best_header_row = -1
+    best_mapping: dict[str, int] = {}
+    best_missing: list[str] = []
+    best_score = -1
+    for sheet in candidate_issue_sheets(workbook):
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            continue
+        header_row, mapping, missing = detect_issue_header_mapping(rows)
+        body_signal = 0
+        if header_row >= 0:
+            for row in rows[header_row + 1 : header_row + 16]:
+                if any(cell_to_text(value) for value in row):
+                    body_signal += 1
+        score = len(mapping) * 10 + body_signal - (len(missing) * 100)
+        if score > best_score:
+            best_sheet = sheet
+            best_rows = rows
+            best_header_row = header_row
+            best_mapping = mapping
+            best_missing = missing
+            best_score = score
+    if best_sheet is None or best_missing:
+        raise WorkerError(
+            "issue_column_mapping_failed",
+            issue_mapping_failure_message(
+                getattr(best_sheet, "title", None),
+                best_header_row,
+                best_mapping,
+                best_rows,
+                best_missing,
+            ),
+        )
+    return best_sheet, best_header_row, best_mapping
+
+
+def issue_has_row_signal(row: tuple[Any, ...], mapping: dict[str, int]) -> bool:
+    signal_fields = [
+        "item_id",
+        "title",
+        "description",
+        "status",
+        "action_plan",
+        "resolution",
+        "remarks",
+        "owner",
+    ]
+    return any(cell_to_text(row_value(row, mapping, field)) for field in signal_fields)
+
+
+def parse_issue_sheet(
+    workbook: Any,
+    workspace_id: str,
+    source_path: Path,
+    source_hash: str,
+    as_of_date: str,
+) -> tuple[list[dict[str, Any]], dict[str, str], str, int, list[dict[str, Any]]]:
+    sheet, header_row, mapping = detect_issue_sheet(workbook)
+    sheet_name = sheet.title
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        raise WorkerError("issue_parse_failed", "Issue sheet is empty.")
+    issues: list[dict[str, Any]] = []
+    parse_warnings: list[dict[str, Any]] = []
+    for row_number, row in enumerate(rows[header_row + 1 :], start=header_row + 2):
+        title = cell_to_text(row_value(row, mapping, "title"))
+        description = cell_to_text(row_value(row, mapping, "description")) or None
+        raw_status = cell_to_text(row_value(row, mapping, "status")) or None
+        if not issue_has_row_signal(row, mapping):
+            parse_warnings.append({"row": row_number, "reason": "empty_or_unidentified_row"})
+            continue
+        if not title and not description:
+            parse_warnings.append({"row": row_number, "reason": "missing_title_or_description"})
+            continue
+        action_plan = cell_to_text(row_value(row, mapping, "action_plan")) or None
+        owner = cell_to_text(row_value(row, mapping, "owner")) or None
+        remarks = cell_to_text(row_value(row, mapping, "remarks")) or None
+        explicit_item_id = cell_to_text(row_value(row, mapping, "item_id"))
+        item_type = normalize_issue_item_type(row_value(row, mapping, "item_type"), row, mapping)
+        item_id = explicit_item_id or f"{workspace_id}:{item_type}:{row_number}"
+        reported_date = parse_issue_date(row_value(row, mapping, "reported_date"))
+        target_date = parse_issue_date(row_value(row, mapping, "target_date"))
+        resolved_date = parse_issue_date(row_value(row, mapping, "resolved_date"))
+        status = normalize_issue_status(raw_status)
+        issue = {
+            "itemId": item_id,
+            "itemType": item_type,
+            "issueId": item_id,
+            "sourceRow": row_number,
+            "issueArea": cell_to_text(row_value(row, mapping, "issue_area")) or None,
+            "issueCategory": cell_to_text(row_value(row, mapping, "issue_category")) or None,
+            "phase": cell_to_text(row_value(row, mapping, "phase")) or None,
+            "title": title,
+            "issueEvent": title,
+            "description": description,
+            "reportedDate": reported_date,
+            "occurredDate": reported_date,
+            "riskAnalysisId": cell_to_text(row_value(row, mapping, "risk_analysis_id")) or None,
+            "riskId": cell_to_text(row_value(row, mapping, "risk_id")) or None,
+            "probability": parse_issue_number(row_value(row, mapping, "probability")),
+            "impact": parse_issue_number(row_value(row, mapping, "impact")),
+            "severity": cell_to_text(row_value(row, mapping, "severity")) or None,
+            "riskLevel": cell_to_text(row_value(row, mapping, "severity")) or None,
+            "rootCause": cell_to_text(row_value(row, mapping, "root_cause")) or None,
+            "actionPlan": action_plan,
+            "responsePlan": action_plan,
+            "resolution": cell_to_text(row_value(row, mapping, "resolution")) or None,
+            "owner": owner,
+            "actionOwner": owner,
+            "targetDate": target_date,
+            "dueDate": target_date,
+            "organizationSupportRequired": parse_issue_bool(row_value(row, mapping, "organization_support_required")),
+            "rawStatus": raw_status,
+            "progressStatus": raw_status,
+            "status": status,
+            "canonicalStatus": status,
+            "priority": cell_to_text(row_value(row, mapping, "priority")) or None,
+            "effortMh": parse_issue_number(row_value(row, mapping, "effort_mh")),
+            "actionDate": resolved_date,
+            "resolvedDate": resolved_date,
+            "completedDate": resolved_date,
+            "remarks": remarks,
+            "noteTimeline": remarks or action_plan,
+            "latestNoteDate": extract_latest_note_date(remarks or action_plan),
+            "sourceHash": source_hash,
+            "dataQualityFlags": [],
+            "derivedMetrics": {},
+        }
+        if not raw_status:
+            issue["dataQualityFlags"].append("missing_status")
+            parse_warnings.append({"row": row_number, "reason": "missing_status_partial_parse"})
+        if not issue["reportedDate"]:
+            issue["dataQualityFlags"].append("missing_reported_date")
+        if not issue["dueDate"] and not is_completed_issue(issue):
+            issue["dataQualityFlags"].append("missing_due_date")
+        if not issue["owner"]:
+            issue["dataQualityFlags"].append("missing_owner")
+        build_issue_metrics(issue, as_of_date)
+        issues.append(issue)
+    column_mapping = {field: cell_to_text(rows[header_row][index]) for field, index in mapping.items()}
+    return issues, column_mapping, sheet_name, header_row + 1, parse_warnings
+
+
+def issue_summary(issue_book: dict[str, Any], document: dict[str, Any], as_of_date: str | None = None) -> dict[str, Any]:
+    current_as_of = as_of_date or datetime.now().date().isoformat()
+    issues = [issue for issue in issue_book.get("issues", []) if isinstance(issue, dict)]
+    for issue in issues:
+        build_issue_metrics(issue, current_as_of)
+    open_issues = [issue for issue in issues if not is_completed_issue(issue)]
+    completed_issues = [issue for issue in issues if is_completed_issue(issue)]
+    issue_items = [issue for issue in issues if issue.get("itemType") != "risk"]
+    risk_items = [issue for issue in issues if issue.get("itemType") == "risk"]
+    raw_status_values = sorted({
+        cell_to_text(issue.get("rawStatus"))
+        for issue in issues
+        if cell_to_text(issue.get("rawStatus"))
+    })
+    status_counts: dict[str, int] = {}
+    raw_status_counts: dict[str, int] = {}
+    for issue in issues:
+        status = cell_to_text(issue.get("status")) or "unknown"
+        raw_status = cell_to_text(issue.get("rawStatus")) or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        raw_status_counts[raw_status] = raw_status_counts.get(raw_status, 0) + 1
+    resolution_days = [
+        issue.get("derivedMetrics", {}).get("resolutionDays")
+        for issue in completed_issues
+        if isinstance(issue.get("derivedMetrics", {}).get("resolutionDays"), int)
+    ]
+    completed_late_values = [
+        issue.get("derivedMetrics", {}).get("completedLateDays")
+        for issue in completed_issues
+        if issue.get("dueDate") and issue.get("completedDate")
+    ]
+    due_adherent = sum(1 for value in completed_late_values if isinstance(value, int) and value <= 0)
+    overdue_open = [
+        issue for issue in open_issues
+        if isinstance(issue.get("derivedMetrics", {}).get("overdueDays"), int)
+        and issue["derivedMetrics"]["overdueDays"] > 0
+    ]
+    stale = [
+        issue for issue in open_issues
+        if isinstance(issue.get("derivedMetrics", {}).get("daysSinceLastUpdate"), int)
+        and issue["derivedMetrics"]["daysSinceLastUpdate"] >= 14
+    ]
+    return {
+        "workspaceId": issue_book["workspaceId"],
+        "filename": issue_book["filename"],
+        "modifiedAt": document.get("modifiedAt"),
+        "lastAnalyzedAt": document.get("lastAnalyzedAt") or now_iso(),
+        "parseStatus": document.get("parseStatus", "parsed"),
+        "totalIssues": len(issues),
+        "issueCount": len(issue_items),
+        "riskCount": len(risk_items),
+        "openIssues": len(open_issues),
+        "completedIssues": len(completed_issues),
+        "resolvedIssues": len(completed_issues),
+        "openInProgressIssues": sum(1 for issue in issues if issue.get("status") in {"open", "in_progress"}),
+        "completionRate": (len(completed_issues) / len(issues)) if issues else None,
+        "overdueOpenIssues": len(overdue_open),
+        "longOpenIssues30d": sum(1 for issue in open_issues if (issue.get("derivedMetrics", {}).get("openAgeDays") or 0) >= 30),
+        "longOpenIssues60d": sum(1 for issue in open_issues if (issue.get("derivedMetrics", {}).get("openAgeDays") or 0) >= 60),
+        "longOpenIssues90d": sum(1 for issue in open_issues if (issue.get("derivedMetrics", {}).get("openAgeDays") or 0) >= 90),
+        "missingDueOpenIssues": sum(1 for issue in open_issues if not issue.get("dueDate")),
+        "staleUpdateIssues": len(stale),
+        "organizationSupportRequiredOpen": sum(1 for issue in open_issues if issue.get("organizationSupportRequired") is True),
+        "averageResolutionDays": (sum(resolution_days) / len(resolution_days)) if resolution_days else None,
+        "medianResolutionDays": median_number(resolution_days),
+        "dueDateAdherenceRate": (due_adherent / len(completed_late_values)) if completed_late_values else None,
+        "statusCounts": status_counts,
+        "rawStatusCounts": raw_status_counts,
+        "rawStatusValues": raw_status_values,
+        "skippedRows": len(issue_book.get("parseWarnings", []) or []),
+        "parseWarnings": issue_book.get("parseWarnings", []) or [],
+        "source": document,
+    }
+
+
+def median_number(values: list[int | float]) -> float | None:
+    if not values:
+        return None
+    sorted_values = sorted(float(value) for value in values)
+    mid = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[mid]
+    return (sorted_values[mid - 1] + sorted_values[mid]) / 2
+
+
+def parse_issue(input_data: dict[str, Any]) -> dict[str, Any]:
+    workspace_id = input_data.get("workspace_id")
+    if not isinstance(workspace_id, str) or not workspace_id.strip():
+        raise WorkerError("invalid_workspace", "workspace_id is required.")
+    source_path = issue_source_path(input_data)
+    source_hash = cell_to_text(input_data.get("source_hash")) or sha256_file(source_path)
+    as_of_date = input_data.get("as_of_date") if isinstance(input_data.get("as_of_date"), str) else datetime.now().date().isoformat()
+    try:
+        import openpyxl
+    except ImportError as error:
+        raise WorkerError("issue_parse_failed", "openpyxl is required to parse Issue Excel files.") from error
+    try:
+        workbook = openpyxl.load_workbook(source_path, data_only=True, read_only=False)
+        issues, column_mapping, sheet_name, header_row, parse_warnings = parse_issue_sheet(workbook, workspace_id, source_path, source_hash, as_of_date)
+    except WorkerError:
+        raise
+    except Exception as error:
+        raise WorkerError("issue_parse_failed", "Issue workbook parsing failed.") from error
+    stats = source_path.stat()
+    analyzed_at = now_iso()
+    document = {
+        "id": cell_to_text(input_data.get("source_document_id")) or f"issue-{workspace_id}",
+        "workspaceId": workspace_id,
+        "originalFileName": source_path.name,
+        "managedFilePath": str(source_path),
+        "sourceHash": source_hash,
+        "registeredAt": analyzed_at,
+        "registeredBy": "local-user",
+        "status": "active",
+        "disconnectedAt": None,
+        "lastAnalyzedAt": analyzed_at,
+        "parserType": "issue_excel",
+        "security": "internal",
+        "notes": None,
+        "fileSize": stats.st_size,
+        "modifiedAt": datetime.fromtimestamp(stats.st_mtime, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "parseStatus": "parsed",
+    }
+    issue_book = {
+        "workspaceId": workspace_id,
+        "sourceFile": str(source_path),
+        "filename": source_path.name,
+        "parsedSheets": [sheet_name],
+        "headerRow": header_row,
+        "detectedColumns": list(column_mapping.values()),
+        "columnMapping": column_mapping,
+        "parseWarnings": parse_warnings,
+        "issues": issues,
+    }
+    return {
+        "document": document,
+        "issueBook": issue_book,
+        "summary": issue_summary(issue_book, document, as_of_date),
+        "fromCache": False,
+    }
+
+
+def issue_summary_command(input_data: dict[str, Any]) -> dict[str, Any]:
+    issue_book = input_data.get("issue_book")
+    document = input_data.get("document")
+    if not isinstance(issue_book, dict) or not isinstance(document, dict):
+        raise WorkerError("invalid_input", "issue_book and document are required.")
+    return issue_summary(issue_book, document, input_data.get("as_of_date"))
+
+
+def normalize_issue_lookup_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", cell_to_text(value).lower()).strip()
+
+
+def tokenize_issue_text(value: Any) -> list[str]:
+    text = normalize_issue_lookup_text(value)
+    tokens = re.findall(r"[0-9a-zA-Z가-힣]{2,}", text)
+    stopwords = {"issue", "risk", "task", "open", "closed", "완료", "진행", "이슈", "조치"}
+    return [token for token in tokens if token not in stopwords]
+
+
+def issue_matches_query(issue: dict[str, Any], query: str) -> bool:
+    normalized_query = normalize_issue_lookup_text(query)
+    haystack = " ".join(
+        normalize_issue_lookup_text(issue.get(field))
+        for field in ["itemId", "issueId", "itemType", "title", "description", "issueArea", "issueCategory", "phase", "owner", "riskId", "rawStatus", "status"]
+    )
+    return any(token in haystack for token in tokenize_issue_text(normalized_query))
+
+
+def issue_owner_summaries(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_owner: dict[str, list[dict[str, Any]]] = {}
+    for issue in issues:
+        owner = cell_to_text(issue.get("owner")) or "Unassigned"
+        by_owner.setdefault(owner, []).append(issue)
+    summaries: list[dict[str, Any]] = []
+    for owner, owner_issues in by_owner.items():
+        open_items = [issue for issue in owner_issues if not is_completed_issue(issue)]
+        overdue_items = [
+            issue for issue in open_items
+            if (issue.get("derivedMetrics", {}).get("overdueDays") or 0) > 0
+        ]
+        long_open_items = [
+            issue for issue in open_items
+            if (issue.get("derivedMetrics", {}).get("openAgeDays") or 0) >= 30
+        ]
+        missing_due_items = [
+            issue for issue in open_items
+            if not issue.get("dueDate")
+        ]
+        stale_update_items = [
+            issue for issue in open_items
+            if (issue.get("derivedMetrics", {}).get("daysSinceLastUpdate") or 0) >= 14
+        ]
+        resolution_values = [
+            issue.get("derivedMetrics", {}).get("resolutionDays")
+            for issue in owner_issues
+            if isinstance(issue.get("derivedMetrics", {}).get("resolutionDays"), int)
+        ]
+        bottleneck_score = (
+            (len(overdue_items) * 4)
+            + (len(missing_due_items) * 3)
+            + (len(stale_update_items) * 2)
+            + (len(long_open_items) * 2)
+            + len(open_items)
+        )
+        summaries.append({
+            "owner": owner,
+            "totalAssigned": len(owner_issues),
+            "openAssigned": len(open_items),
+            "overdueAssigned": len(overdue_items),
+            "missingDueAssigned": len(missing_due_items),
+            "staleUpdateAssigned": len(stale_update_items),
+            "longOpenAssigned": len(long_open_items),
+            "averageResolutionDays": (sum(resolution_values) / len(resolution_values)) if resolution_values else None,
+            "bottleneckScore": bottleneck_score,
+        })
+    return sorted(summaries, key=lambda item: (-item["bottleneckScore"], item["owner"]))[:20]
+
+
+def issue_keyword_clusters(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    clusters: dict[str, list[dict[str, Any]]] = {}
+    for issue in issues:
+        tokens = tokenize_issue_text(issue.get("title"))
+        for token in tokens:
+            if len(token) < 3:
+                continue
+            clusters.setdefault(token, []).append(issue)
+    result = []
+    for key, cluster_issues in clusters.items():
+        unique_ids = list(dict.fromkeys(cell_to_text(issue.get("issueId")) for issue in cluster_issues))
+        if len(unique_ids) < 2:
+            continue
+        result.append({
+            "key": key,
+            "count": len(unique_ids),
+            "issueIds": unique_ids[:20],
+            "sampleTitles": [cell_to_text(issue.get("title")) for issue in cluster_issues[:3]],
+        })
+    return sorted(result, key=lambda item: (-item["count"], item["key"]))[:20]
+
+
+def issue_context_text(kind: str, summary: dict[str, Any], issues: list[dict[str, Any]], assignees: list[dict[str, Any]] | None = None, clusters: list[dict[str, Any]] | None = None, query_plan: dict[str, Any] | None = None) -> str:
+    lines = [
+        "[ISSUE SOURCE OF TRUTH]",
+        f"Type: {kind}",
+        f"Workspace ID: {summary.get('workspaceId')}",
+        f"Source: {summary.get('filename')}",
+        f"Total Items: {summary.get('totalIssues')}",
+        f"Issue Count: {summary.get('issueCount')}",
+        f"Risk Count: {summary.get('riskCount')}",
+        f"Open/In Progress Items: {summary.get('openInProgressIssues')}",
+        f"Resolved/Closed Items: {summary.get('resolvedIssues')}",
+        f"Status Counts: {summary.get('statusCounts')}",
+        f"Raw Status Values: {summary.get('rawStatusValues')}",
+        f"Overdue Open Issues: {summary.get('overdueOpenIssues')}",
+        f"Organization Support Required Open: {summary.get('organizationSupportRequiredOpen')}",
+        f"Skipped Rows: {summary.get('skippedRows')}",
+    ]
+    if query_plan:
+        lines.extend([
+            f"Detected Intent: {query_plan.get('detectedIntent')}",
+            f"Temporal Scope: {query_plan.get('temporalScope')}",
+            f"Status Filter: {query_plan.get('statusFilter')}",
+            f"Additional Filters: {query_plan.get('additionalFilters')}",
+            f"Sort Order: {query_plan.get('sortOrder')}",
+        ])
+    if assignees:
+        lines.append("Assignee Bottlenecks:")
+        for assignee in assignees[:10]:
+            lines.append(
+                f"- {assignee.get('owner')}: open={assignee.get('openAssigned')} overdue={assignee.get('overdueAssigned')} missingDue={assignee.get('missingDueAssigned')} stale={assignee.get('staleUpdateAssigned')} score={assignee.get('bottleneckScore')}"
+            )
+    if clusters:
+        lines.append("Repeated Issue Clusters:")
+        for cluster in clusters[:10]:
+            lines.append(f"- {cluster.get('key')}: {cluster.get('count')} issues")
+    if issues:
+        lines.append("Issues:")
+        for issue in issues[:20]:
+            metrics = issue.get("derivedMetrics", {}) if isinstance(issue.get("derivedMetrics"), dict) else {}
+            lines.append(
+                f"- Row {issue.get('sourceRow')} | {issue.get('itemType') or 'issue'} | {issue.get('itemId') or issue.get('issueId')} | {issue.get('title')} | owner={issue.get('owner') or '-'} | rawStatus={issue.get('rawStatus') or '-'} | status={issue.get('status') or '-'} | target={issue.get('targetDate') or issue.get('dueDate') or '-'} | overdueDays={metrics.get('overdueDays')}"
+            )
+    else:
+        lines.append("Issues: No matching issues.")
+    lines.extend([
+        "Instruction: These are authoritative current Issue values from the connected Excel source.",
+        "Instruction: Use RAG only for past resolved case references, not for current issue status.",
+        "[/ISSUE SOURCE OF TRUTH]",
+    ])
+    return "\n".join(lines)
+
+
+CURRENT_OPEN_STATUSES = {"open", "in_progress", "on_hold"}
+RESOLVED_STATUSES = {"resolved", "closed", "completed"}
+ISSUE_QUERY_INTENTS = {
+    "issue_list",
+    "issue_lookup",
+    "open_issues",
+    "unresolved_issues",
+    "owner_bottleneck",
+    "overdue_issues",
+    "organization_support",
+    "risk_candidates",
+    "resolved_cases",
+    "issue_status",
+}
+ISSUE_QUERY_STATUS_SCOPES = {"unresolved", "resolved", "all"}
+ISSUE_QUERY_FILTER_FIELDS = {
+    "owner",
+    "issue_area",
+    "issue_category",
+    "phase",
+    "organization_support_required",
+    "overdue_only",
+}
+ISSUE_QUERY_SORT_VALUES = {
+    "overdue_desc",
+    "missing_due_desc",
+    "issue_age_desc",
+    "open_count_desc",
+    "latest_note_date_asc_null_first",
+    "organization_support_desc",
+    "target_date_urgency_asc",
+    "status_desc",
+    "severity_priority_desc",
+    "source_row_asc",
+}
+ISSUE_QUERY_GROUP_BY_VALUES = {None, "action_owner", "issue_area", "issue_category", "phase", "status"}
+ISSUE_QUERY_STATUS_TO_TEMPORAL = {
+    "unresolved": "CURRENT_OPEN",
+    "resolved": "RESOLVED_ONLY",
+    "all": "HISTORICAL_ALL",
+}
+
+
+def issue_contains_any(query_text: str, tokens: list[str]) -> bool:
+    return any(token in query_text for token in tokens)
+
+
+def issue_compact_text(query_text: str) -> str:
+    return re.sub(r"\s+", "", query_text)
+
+
+def has_unresolved_issue_signal(query_text: str) -> bool:
+    compact = issue_compact_text(query_text)
+    return issue_contains_any(query_text, [
+        "미해결",
+        "진행 중",
+        "진행중",
+        "열린 이슈",
+        "오픈 이슈",
+        "남은 이슈",
+        "남아있는 이슈",
+        "open",
+        "unresolved",
+    ]) or issue_contains_any(compact, [
+        "해결안된",
+        "해결안된이슈",
+        "해결이안된",
+        "안끝난",
+        "진행중",
+        "진행중인",
+        "열린이슈",
+        "오픈이슈",
+        "남은이슈",
+        "남아있는이슈",
+    ])
+
+
+def has_completed_history_include_signal(query_text: str) -> bool:
+    compact = issue_compact_text(query_text)
+    return (
+        issue_contains_any(query_text, ["완료 이력 포함", "완료된 이슈도 포함", "완료도 포함", "resolved history", "include resolved", "include completed"])
+        or ("포함" in compact and issue_contains_any(compact, ["완료된", "해결된", "완료이력"]))
+    )
+
+
+def issue_status_scope_from_text(query_text: str) -> str:
+    if has_completed_history_include_signal(query_text):
+        return "all"
+    if issue_contains_any(query_text, ["해결된", "완료된", "어떻게 해결", "조치가 완료", "해결 사례", "resolved", "closed", "completed"]):
+        return "resolved"
+    if issue_contains_any(query_text, ["과거", "이력", "이력이 있는", "필요했던", "발생했던", "전체", "모든", "historical", "history", "all"]):
+        return "all"
+    if has_unresolved_issue_signal(query_text):
+        return "unresolved"
+    if issue_contains_any(query_text, ["누가", "담당", "맡", "owner", "assignee", "bottleneck", "병목"]):
+        return "unresolved"
+    if issue_contains_any(query_text, ["조직지원", "조직 지원", "조직의 지원", "지원"]) and issue_contains_any(query_text, ["필요한", "필요"]):
+        return "unresolved"
+    if issue_contains_any(query_text, [
+        "현재",
+        "진행 중",
+        "진행중",
+        "해결이 필요한",
+        "위험한 이슈",
+        "지연된 이슈",
+        "오래 지연",
+        "조치가 필요한",
+        "조직지원이 필요한",
+        "조직지원 필요한",
+        "지원이 필요한",
+        "지원 필요한",
+        "지원 필요",
+        "조직의 지원이 필요한",
+        "open",
+        "current",
+        "overdue",
+        "late",
+    ]):
+        return "unresolved"
+    return "all"
+
+
+def issue_temporal_scope(query_text: str) -> str:
+    return ISSUE_QUERY_STATUS_TO_TEMPORAL[issue_status_scope_from_text(query_text)]
+
+
+def create_issue_query_filters() -> dict[str, Any]:
+    return {
+        "owner": None,
+        "issue_area": None,
+        "issue_category": None,
+        "phase": None,
+        "organization_support_required": None,
+        "overdue_only": False,
+    }
+
+
+def issue_intent_from_text(query_text: str, status_scope: str) -> str:
+    has_owner_intent = issue_contains_any(query_text, ["bottleneck", "owner", "assignee", "누가", "담당", "병목", "맡"])
+    has_support_intent = issue_contains_any(query_text, ["support", "조직지원", "조직 지원", "조직의 지원", "지원"])
+    has_risk_intent = issue_contains_any(query_text, ["risk", "위험", "리스크"])
+    has_overdue_intent = issue_contains_any(query_text, ["overdue", "late", "지연", "기한", "늦"])
+    has_status_intent = issue_contains_any(query_text, ["상태", "진행상황", "진행 상황", "status"])
+
+    if has_owner_intent:
+        return "owner_bottleneck"
+    if has_completed_history_include_signal(query_text):
+        return "open_issues"
+    if has_unresolved_issue_signal(query_text):
+        return "open_issues"
+    if has_support_intent:
+        return "organization_support"
+    if has_risk_intent:
+        return "risk_candidates"
+    if has_overdue_intent:
+        return "overdue_issues"
+    if status_scope == "resolved":
+        return "resolved_cases"
+    if has_status_intent:
+        return "issue_status"
+    return "issue_lookup" if tokenize_issue_text(query_text) else "issue_list"
+
+
+def issue_sort_from_intent(intent: str) -> list[str]:
+    if intent == "owner_bottleneck":
+        return ["overdue_desc", "missing_due_desc", "issue_age_desc", "latest_note_date_asc_null_first", "open_count_desc"]
+    if intent in {"open_issues", "unresolved_issues"}:
+        return ["overdue_desc", "missing_due_desc", "issue_age_desc", "latest_note_date_asc_null_first"]
+    if intent == "risk_candidates":
+        return [
+            "overdue_desc",
+            "issue_age_desc",
+            "organization_support_desc",
+            "target_date_urgency_asc",
+            "status_desc",
+            "severity_priority_desc",
+        ]
+    if intent == "organization_support":
+        return ["overdue_desc", "issue_age_desc", "status_desc"]
+    if intent == "overdue_issues":
+        return ["overdue_desc", "issue_age_desc"]
+    if intent == "resolved_cases":
+        return ["source_row_asc"]
+    return ["source_row_asc"]
+
+
+def issue_group_by_from_intent(intent: str) -> str | None:
+    return "action_owner" if intent == "owner_bottleneck" else None
+
+
+def interpret_issue_query_locally(query: str) -> dict[str, Any]:
+    query_text = normalize_issue_lookup_text(query)
+    status_scope = issue_status_scope_from_text(query_text)
+    intent = issue_intent_from_text(query_text, status_scope)
+    filters = create_issue_query_filters()
+    if intent == "organization_support":
+        filters["organization_support_required"] = True
+    if intent == "overdue_issues":
+        filters["overdue_only"] = True
+    return {
+        "intent": intent,
+        "status_scope": status_scope,
+        "filters": filters,
+        "group_by": issue_group_by_from_intent(intent),
+        "sort": issue_sort_from_intent(intent),
+        "limit": 20,
+    }
+
+
+def validate_issue_query_filter(raw_filters: Any) -> dict[str, Any]:
+    filters = create_issue_query_filters()
+    if not isinstance(raw_filters, dict):
+        return filters
+    for key, value in raw_filters.items():
+        if key not in ISSUE_QUERY_FILTER_FIELDS:
+            continue
+        if key in {"owner", "issue_area", "issue_category", "phase"}:
+            filters[key] = cell_to_text(value) or None
+        elif key == "organization_support_required":
+            filters[key] = value if isinstance(value, bool) else None
+        elif key == "overdue_only":
+            filters[key] = value is True
+    return filters
+
+
+def validate_issue_query(value: Any, fallback_query: str) -> dict[str, Any]:
+    fallback = interpret_issue_query_locally(fallback_query)
+    if not isinstance(value, dict):
+        return fallback
+    intent = value.get("intent") if value.get("intent") in ISSUE_QUERY_INTENTS else fallback["intent"]
+    status_scope = value.get("status_scope") if value.get("status_scope") in ISSUE_QUERY_STATUS_SCOPES else fallback["status_scope"]
+    if fallback["intent"] in {"open_issues", "unresolved_issues"} and intent in {"issue_lookup", "issue_list"}:
+        intent = fallback["intent"]
+    if intent == "owner_bottleneck" and status_scope == "all" and fallback["status_scope"] == "unresolved":
+        status_scope = "unresolved"
+    filters = validate_issue_query_filter(value.get("filters"))
+    raw_group_by = value.get("group_by")
+    group_by = raw_group_by if raw_group_by in ISSUE_QUERY_GROUP_BY_VALUES else issue_group_by_from_intent(intent)
+    raw_sort = value.get("sort")
+    sort = [
+        item for item in raw_sort
+        if isinstance(item, str) and item in ISSUE_QUERY_SORT_VALUES
+    ] if isinstance(raw_sort, list) else []
+    limit = value.get("limit")
+    if not isinstance(limit, int) or limit < 1 or limit > 100:
+        limit = 20
+    return {
+        "intent": intent,
+        "status_scope": status_scope,
+        "filters": filters,
+        "group_by": group_by,
+        "sort": sort or issue_sort_from_intent(intent),
+        "limit": limit,
+    }
+
+
+def issue_status_scope_label(scope: str) -> str:
+    if scope == "unresolved":
+        return "진행중/미해결"
+    if scope == "resolved":
+        return "해결/종결(resolved, closed)"
+    if scope == "all":
+        return "전체 이력"
+    if scope == "CURRENT_OPEN":
+        return "진행중/미해결"
+    if scope == "RESOLVED_ONLY":
+        return "해결/종결(resolved, closed)"
+    return "전체 이력"
+
+
+def issue_in_temporal_scope(issue: dict[str, Any], scope: str) -> bool:
+    status = cell_to_text(issue.get("status"))
+    if scope == "CURRENT_OPEN":
+        return status in CURRENT_OPEN_STATUSES and not is_completed_issue(issue)
+    if scope == "RESOLVED_ONLY":
+        return status in RESOLVED_STATUSES or is_completed_issue(issue)
+    return True
+
+
+def scoped_issues(issues: list[dict[str, Any]], scope: str) -> list[dict[str, Any]]:
+    temporal_scope = ISSUE_QUERY_STATUS_TO_TEMPORAL.get(scope, scope)
+    return [issue for issue in issues if issue_in_temporal_scope(issue, temporal_scope)]
+
+
+def issue_filter_text_matches(value: Any, expected: str | None) -> bool:
+    if not expected:
+        return True
+    return normalize_issue_lookup_text(expected) in normalize_issue_lookup_text(value)
+
+
+def apply_issue_query_filters(issues: list[dict[str, Any]], issue_query: dict[str, Any]) -> list[dict[str, Any]]:
+    filtered = scoped_issues(issues, cell_to_text(issue_query.get("status_scope")) or "all")
+    filters = issue_query.get("filters") if isinstance(issue_query.get("filters"), dict) else {}
+    owner = filters.get("owner")
+    issue_area = filters.get("issue_area")
+    issue_category = filters.get("issue_category")
+    phase = filters.get("phase")
+    if owner:
+        filtered = [issue for issue in filtered if issue_filter_text_matches(issue.get("owner") or issue.get("actionOwner"), owner)]
+    if issue_area:
+        filtered = [issue for issue in filtered if issue_filter_text_matches(issue.get("issueArea"), issue_area)]
+    if issue_category:
+        filtered = [issue for issue in filtered if issue_filter_text_matches(issue.get("issueCategory"), issue_category)]
+    if phase:
+        filtered = [issue for issue in filtered if issue_filter_text_matches(issue.get("phase"), phase)]
+    if filters.get("organization_support_required") is True:
+        filtered = [issue for issue in filtered if issue.get("organizationSupportRequired") is True]
+    if filters.get("organization_support_required") is False:
+        filtered = [issue for issue in filtered if issue.get("organizationSupportRequired") is False]
+    if filters.get("overdue_only") is True:
+        filtered = [issue for issue in filtered if (issue.get("derivedMetrics", {}).get("overdueDays") or 0) > 0]
+    return filtered
+
+
+def issue_priority_signal(value: Any) -> int:
+    text = cell_to_text(value).lower()
+    if not text:
+        return 0
+    if parse_issue_number(text) is not None:
+        return int(parse_issue_number(text) or 0)
+    if any(token in text for token in ["critical", "urgent", "high", "상", "높", "긴급", "심각"]):
+        return 3
+    if any(token in text for token in ["medium", "중"]):
+        return 2
+    if any(token in text for token in ["low", "하", "낮"]):
+        return 1
+    return 0
+
+
+def issue_target_urgency(issue: dict[str, Any], as_of_date: str) -> int:
+    target = parse_iso_date(issue.get("targetDate") or issue.get("dueDate"))
+    as_of = parse_iso_date(as_of_date)
+    if not target or not as_of:
+        return 0
+    days_until = (target.date() - as_of.date()).days
+    return max(0, 365 - days_until)
+
+
+def issue_risk_sort_key(issue: dict[str, Any], as_of_date: str) -> tuple[int, int, int, int, int, int, int]:
+    metrics = issue.get("derivedMetrics", {}) if isinstance(issue.get("derivedMetrics"), dict) else {}
+    overdue_days = metrics.get("overdueDays") if isinstance(metrics.get("overdueDays"), int) else 0
+    issue_age_days = metrics.get("issueAgeDays") if isinstance(metrics.get("issueAgeDays"), int) else metrics.get("openAgeDays")
+    status_weight = {"on_hold": 3, "in_progress": 2, "open": 1}.get(cell_to_text(issue.get("status")), 0)
+    signal = max(issue_priority_signal(issue.get("severity")), issue_priority_signal(issue.get("priority")), issue_priority_signal(issue.get("riskLevel")))
+    return (
+        1 if overdue_days > 0 else 0,
+        overdue_days,
+        int(issue_age_days or 0),
+        1 if issue.get("organizationSupportRequired") is True else 0,
+        issue_target_urgency(issue, as_of_date),
+        status_weight,
+        signal,
+    )
+
+
+def issue_open_sort_key(issue: dict[str, Any]) -> tuple[int, int, int, int, str, int]:
+    metrics = issue.get("derivedMetrics", {}) if isinstance(issue.get("derivedMetrics"), dict) else {}
+    overdue_days = metrics.get("overdueDays") if isinstance(metrics.get("overdueDays"), int) else 0
+    open_age_days = metrics.get("openAgeDays") if isinstance(metrics.get("openAgeDays"), int) else metrics.get("issueAgeDays")
+    missing_due = 1 if not issue.get("dueDate") and not is_completed_issue(issue) else 0
+    latest_note_date = cell_to_text(issue.get("latestNoteDate"))
+    return (
+        1 if is_completed_issue(issue) else 0,
+        -overdue_days,
+        -missing_due,
+        -int(open_age_days or 0),
+        latest_note_date,
+        int(issue.get("sourceRow") or 0),
+    )
+
+
+def issue_support_sort_key(issue: dict[str, Any]) -> tuple[int, int, int]:
+    metrics = issue.get("derivedMetrics", {}) if isinstance(issue.get("derivedMetrics"), dict) else {}
+    overdue_days = metrics.get("overdueDays") if isinstance(metrics.get("overdueDays"), int) else 0
+    issue_age_days = metrics.get("issueAgeDays") if isinstance(metrics.get("issueAgeDays"), int) else metrics.get("openAgeDays")
+    status_weight = {"on_hold": 3, "in_progress": 2, "open": 1, "resolved": 0, "closed": 0}.get(cell_to_text(issue.get("status")), 0)
+    return (
+        overdue_days,
+        int(issue_age_days or 0),
+        status_weight,
+    )
+
+
+def issue_query_plan(scope: str, detected_intent: str, additional_filters: list[str] | None = None, sort_order: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "temporalScope": ISSUE_QUERY_STATUS_TO_TEMPORAL.get(scope, scope),
+        "detectedIntent": detected_intent,
+        "statusFilter": issue_status_scope_label(scope),
+        "additionalFilters": additional_filters or [],
+        "sortOrder": sort_order or [],
+    }
+
+
+def format_issue_intent_label(intent: str) -> str:
+    labels = {
+        "issue_list": "이슈 목록",
+        "issue_lookup": "키워드 검색",
+        "open_issues": "미해결 이슈",
+        "unresolved_issues": "미해결 이슈",
+        "owner_bottleneck": "담당자 병목",
+        "overdue_issues": "지연 이슈",
+        "organization_support": "조직지원 필요 이슈",
+        "risk_candidates": "위험 이슈",
+        "resolved_cases": "해결/완료 이슈",
+        "issue_status": "이슈 상태",
+    }
+    return labels.get(intent, intent)
+
+
+def format_issue_sort_label(sort_key: str) -> str:
+    labels = {
+        "overdue_desc": "Overdue",
+        "missing_due_desc": "Missing due",
+        "issue_age_desc": "Age",
+        "open_count_desc": "Open Count",
+        "latest_note_date_asc_null_first": "Latest note date asc/null first",
+        "organization_support_desc": "조직지원",
+        "target_date_urgency_asc": "Target date urgency",
+        "status_desc": "Status",
+        "severity_priority_desc": "Severity/Priority signal",
+        "source_row_asc": "Source row",
+    }
+    return labels.get(sort_key, sort_key)
+
+
+def issue_query(input_data: dict[str, Any]) -> dict[str, Any]:
+    issue_book = input_data.get("issue_book")
+    document = input_data.get("document")
+    query = input_data.get("query")
+    as_of_date = input_data.get("as_of_date") or datetime.now().date().isoformat()
+    if not isinstance(issue_book, dict) or not isinstance(document, dict) or not isinstance(query, str):
+        raise WorkerError("invalid_input", "issue_book, document, and query are required.")
+    issues = [issue for issue in issue_book.get("issues", []) if isinstance(issue, dict)]
+    for issue in issues:
+        build_issue_metrics(issue, as_of_date)
+    query_text = query.lower()
+    structured_query = validate_issue_query(
+        input_data.get("issue_query"),
+        query,
+    )
+    filtered_issues = apply_issue_query_filters(issues, structured_query)
+    intent = cell_to_text(structured_query.get("intent")) or "issue_list"
+    status_scope = cell_to_text(structured_query.get("status_scope")) or "all"
+    kind = {
+        "issue_list": "summary",
+        "issue_lookup": "issue_lookup",
+        "open_issues": "open_issues",
+        "unresolved_issues": "open_issues",
+        "owner_bottleneck": "owner_bottlenecks",
+        "overdue_issues": "overdue_issues",
+        "organization_support": "organization_support",
+        "risk_candidates": "risk_issues",
+        "resolved_cases": "completed_issues",
+        "issue_status": "open_issues" if status_scope == "unresolved" else "summary",
+    }.get(intent, "summary")
+    target = None
+    selected = filtered_issues[: structured_query["limit"]]
+    assignees = None
+    clusters = None
+    additional_filters = []
+    filters = structured_query.get("filters") if isinstance(structured_query.get("filters"), dict) else {}
+    for key in sorted(ISSUE_QUERY_FILTER_FIELDS):
+        value = filters.get(key)
+        if value is not None and value is not False:
+            additional_filters.append(f"{key}={value}")
+    sort_labels = [format_issue_sort_label(value) for value in structured_query.get("sort", [])]
+    detected_intent = format_issue_intent_label(intent)
+    plan = issue_query_plan(status_scope, detected_intent, additional_filters, sort_labels)
+    if intent in {"open_issues", "unresolved_issues", "owner_bottleneck"}:
+        plan["statusFilter"] = "진행중/미해결 + 완료 이력" if status_scope == "all" else "진행중/미해결"
+    plan["structuredQuery"] = structured_query
+    plan["filteredIssueCount"] = len(filtered_issues)
+
+    if intent == "owner_bottleneck":
+        assignees = issue_owner_summaries(filtered_issues)
+        selected = sorted(
+            filtered_issues,
+            key=issue_open_sort_key,
+        )[: structured_query["limit"]]
+    elif intent in {"open_issues", "unresolved_issues"}:
+        selected = sorted(
+            filtered_issues,
+            key=issue_open_sort_key,
+        )[: structured_query["limit"]]
+    elif intent == "risk_candidates":
+        selected = sorted(
+            filtered_issues,
+            key=lambda issue: issue_risk_sort_key(issue, as_of_date),
+            reverse=True,
+        )[: structured_query["limit"]]
+    elif intent == "organization_support":
+        selected = sorted(
+            filtered_issues,
+            key=issue_support_sort_key,
+            reverse=True,
+        )[: structured_query["limit"]]
+    elif intent == "overdue_issues":
+        selected = sorted(
+            filtered_issues,
+            key=lambda issue: (issue.get("derivedMetrics", {}).get("overdueDays") or 0, issue.get("derivedMetrics", {}).get("issueAgeDays") or 0),
+            reverse=True,
+        )[: structured_query["limit"]]
+    elif intent == "issue_lookup":
+        matches = [issue for issue in filtered_issues if issue_matches_query(issue, query)]
+        if matches:
+            selected = matches[: structured_query["limit"]]
+            target = query
+    elif issue_contains_any(query_text, ["repeat", "similar", "cluster", "반복", "유사"]):
+        kind = "repeated_issues"
+        clusters = issue_keyword_clusters(filtered_issues)
+        selected = []
+    summary = issue_summary(issue_book, document, as_of_date)
+    return {
+        "kind": kind,
+        "target": target,
+        "workspaceId": issue_book["workspaceId"],
+        "filename": issue_book["filename"],
+        "lastAnalyzedAt": summary["lastAnalyzedAt"],
+        "asOfDate": as_of_date,
+        "summary": summary,
+        "issues": selected[:20],
+        "assignees": assignees,
+        "clusters": clusters,
+        "queryPlan": plan,
+        "structuredQuery": structured_query,
+        "contextText": issue_context_text(kind, summary, selected, assignees, clusters, plan),
+    }
+
+
 COMMANDS = {
     "runtime-check": runtime_check,
     "embedding-check": check_embedding_status,
@@ -3618,6 +5033,9 @@ COMMANDS = {
     "schedule-parse": parse_schedule,
     "schedule-summary": schedule_summary_command,
     "schedule-query": schedule_query,
+    "issue-parse": parse_issue,
+    "issue-summary": issue_summary_command,
+    "issue-query": issue_query,
     "weekly-report-render": weekly_report_render,
 }
 

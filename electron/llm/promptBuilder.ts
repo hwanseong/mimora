@@ -31,6 +31,9 @@ If RAG context is absent or irrelevant, do not claim that an answer is based on 
 When Schedule context is provided, treat it as deterministic schedule analysis from the live Excel source; do not recalculate dates or progress from assumptions.
 When a context block is marked [SCHEDULE SOURCE OF TRUTH], treat its schedule numbers and dates as authoritative current values.
 If Vault or RAG documents contain conflicting schedule progress, dates, task status, forecast, or resource schedule values, ignore those document values and use the Schedule Source of Truth values.
+When Issue context is provided, treat it as deterministic issue analysis from the live Excel source.
+When a context block is marked [ISSUE SOURCE OF TRUTH], treat issue rows, owners, due dates, status, risk flags, and source row provenance as authoritative current values.
+Use RAG for past resolved issue cases and lessons only; do not let RAG override current Issue Source of Truth status.
 Use Vault and RAG documents for reasons, issues, risks, decisions, changes, and explanations when provided, but never let them override schedule quantities.
 For combined Schedule plus document questions, start with a short current schedule status summary from the Schedule block, then explain causes or evidence from Vault/RAG documents.
 For task- or resource-specific combined questions, the first answer section must describe the Primary Schedule Entity, including WBS, planned period, actual start/finish, actual progress, and status when those fields are present.
@@ -86,7 +89,8 @@ function isContextDocument(value: unknown): value is LLMContextDocument {
     (document.sourceType === undefined ||
       document.sourceType === 'vault' ||
       document.sourceType === 'rag' ||
-      document.sourceType === 'schedule') &&
+      document.sourceType === 'schedule' ||
+      document.sourceType === 'issue') &&
     (document.ragDocumentId === undefined ||
       typeof document.ragDocumentId === 'string') &&
     (document.page === undefined ||
@@ -136,7 +140,11 @@ function parseChatInput(value: unknown): LocalAIChatInput {
 }
 
 function createDocumentKey(document: LLMContextDocument): string {
-  if (document.sourceType === 'rag' || document.sourceType === 'schedule') {
+  if (
+    document.sourceType === 'rag' ||
+    document.sourceType === 'schedule' ||
+    document.sourceType === 'issue'
+  ) {
     return JSON.stringify([
       document.sourceType,
       document.ragDocumentId ?? document.relativePath,
@@ -222,7 +230,9 @@ function fitBudgetedDocument(
       ? 'RAG'
       : document.sourceType === 'schedule'
         ? 'Schedule'
-        : 'Vault';
+        : document.sourceType === 'issue'
+          ? 'Issue'
+          : 'Vault';
   const sourceLines = [
     `[CONTEXT DOCUMENT ${documentNumber}]`,
     `Source Type: ${sourceType}`,
@@ -242,6 +252,11 @@ function fitBudgetedDocument(
           open: '[CURRENT SCHEDULE - AUTHORITATIVE]',
           close: '[/CURRENT SCHEDULE]',
         }
+      : document.sourceType === 'issue'
+        ? {
+            open: '[CURRENT ISSUE - AUTHORITATIVE]',
+            close: '[/CURRENT ISSUE]',
+          }
       : document.sourceType === 'rag'
         ? {
             open: '[RAG DOCUMENT CONTEXT]',

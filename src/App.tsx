@@ -33,8 +33,10 @@ import { ChatMessages } from './components/ChatMessages';
 import { ContextPanel } from './components/ContextPanel';
 import { DerivedKnowledgeDraftModal } from './components/DerivedKnowledgeDraftModal';
 import { QuickPromptBar } from './components/QuickPromptBar';
+import { IssueDocumentsView } from './components/IssueDocumentsView';
 import { RagDocumentsView } from './components/RagDocumentsView';
 import { RecentChatsView } from './components/RecentChatsView';
+import { ScheduleDocumentsView } from './components/ScheduleDocumentsView';
 import { SettingsView } from './components/SettingsView';
 import { Sidebar } from './components/Sidebar';
 import { VaultBrowserView } from './components/VaultBrowserView';
@@ -106,12 +108,21 @@ import type {
 import { getAIProviderDisplayName } from './externalAI';
 import type { RagDocumentSecurity, RagSearchResult } from './rag';
 import type { ScheduleQueryResult } from './schedule';
+import type { IssueQueryResult } from './issue';
 import {
   classifyWorkspaceChatQueryRoute,
   formatScheduleDisplayValue,
+  hasIssueChatSignal,
   hasScheduleChatSignal,
   type WorkspaceChatQueryRoute,
 } from './scheduleUx';
+import {
+  isBootDiagnosticsEnabled,
+  mimoraBootDiagnosticsEvent,
+  readBootDiagnostics,
+  updateBootDiagnostics,
+  type MimoraBootDiagnostics,
+} from './bootDiagnostics';
 import {
   createWeeklyReportDefaultFileName,
   createWeeklyReportScheduleSource,
@@ -139,6 +150,7 @@ type ChatContextRetrievalResult = {
   elapsedMs: number;
   error?: string;
   scheduleResult?: ScheduleQueryResult;
+  issueResult?: IssueQueryResult;
 };
 
 type WeeklyReportBuildResult = {
@@ -166,9 +178,43 @@ type PendingExternalRequest = {
   inFlight: boolean;
 };
 
+function BootDiagnosticPanel({
+  diagnostics,
+}: {
+  diagnostics: MimoraBootDiagnostics;
+}) {
+  return (
+    <aside
+      aria-live="polite"
+      className="app-boot-diagnostic-panel"
+      data-testid="mimora-boot-diagnostic-panel"
+    >
+      <strong>Boot diagnostics</strong>
+      <span>phase: {diagnostics.phase}</span>
+      <span>window.mimora: {diagnostics.bridgeExists ? 'true' : 'false'}</span>
+      <span>react: {diagnostics.reactMounted ? 'mounted' : 'pending'}</span>
+      <span>app: {diagnostics.appRendered ? 'rendered' : 'pending'}</span>
+      <span>workspace: {diagnostics.workspaceLoadStatus}</span>
+      <span>session: {diagnostics.sessionLoadStatus}</span>
+      <span>console errors: {diagnostics.rendererConsoleErrorCount}</span>
+      {diagnostics.lastError ? (
+        <span className="app-boot-diagnostic-error">
+          last error: {diagnostics.lastError}
+        </span>
+      ) : null}
+    </aside>
+  );
+}
+
 export function App() {
   const [activeView, setActiveView] = useState<
-    'chat' | 'recent-chats' | 'vault-browser' | 'rag-documents' | 'settings'
+    | 'chat'
+    | 'recent-chats'
+    | 'vault-browser'
+    | 'schedule-documents'
+    | 'issue-documents'
+    | 'rag-documents'
+    | 'settings'
   >('chat');
   const [selectedWorkspace, setSelectedWorkspace] =
     useState<Workspace>(defaultWorkspace);
@@ -211,6 +257,9 @@ export function App() {
     'loading' | 'ready' | 'error'
   >('loading');
   const [chatHistoryError, setChatHistoryError] = useState<string | null>(null);
+  const [bootDiagnostics, setBootDiagnostics] =
+    useState<MimoraBootDiagnostics>(readBootDiagnostics);
+  const showBootDiagnostics = isBootDiagnosticsEnabled();
   const skipNextChatHistorySaveRef = useRef(false);
   const [workspaceContexts, setWorkspaceContexts] =
     useState<WorkspaceContexts>({});
@@ -333,6 +382,43 @@ export function App() {
     ).security;
 
   useEffect(() => {
+    const handleBootDiagnosticsChange = () => {
+      setBootDiagnostics(readBootDiagnostics());
+    };
+
+    window.addEventListener(
+      mimoraBootDiagnosticsEvent,
+      handleBootDiagnosticsChange,
+    );
+
+    return () => {
+      window.removeEventListener(
+        mimoraBootDiagnosticsEvent,
+        handleBootDiagnosticsChange,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentDiagnostics = readBootDiagnostics();
+
+    updateBootDiagnostics({
+      phase: 'App render entered',
+      appRendered: true,
+      workspaceLoadStatus: isWorkspaceRegistryUnavailable
+        ? 'unavailable'
+        : registryRuntimeMode,
+      sessionLoadStatus: chatHistoryStatus,
+      lastError: chatHistoryError ?? currentDiagnostics.lastError,
+    });
+  }, [
+    chatHistoryError,
+    chatHistoryStatus,
+    isWorkspaceRegistryUnavailable,
+    registryRuntimeMode,
+  ]);
+
+  useEffect(() => {
     if (
       activeView === 'chat' &&
       !selectableWorkspaces.some(
@@ -364,10 +450,22 @@ export function App() {
       setIsWorkspaceRegistryUnavailable(
         workspaceRegistry.state !== 'loaded' && loadedWorkspaces.length === 0,
       );
-    } catch {
+      updateBootDiagnostics({
+        phase: 'Workspace registry loaded',
+        workspaceLoadStatus: workspaceRegistry.state,
+      });
+    } catch (error: unknown) {
       setRegistryWorkspaces([]);
       setRegistryRuntimeMode('unresolved');
       setIsWorkspaceRegistryUnavailable(true);
+      updateBootDiagnostics({
+        phase: 'Workspace load failed',
+        workspaceLoadStatus: 'error',
+        lastError:
+          error instanceof Error
+            ? error.message
+            : 'Workspace registry load failed.',
+      });
     }
   }
 
@@ -476,6 +574,14 @@ export function App() {
         );
         setChatHistoryError(result.error ?? null);
         setChatHistoryStatus(result.status === 'ready' ? 'ready' : 'error');
+        updateBootDiagnostics({
+          phase:
+            result.status === 'ready'
+              ? 'Session load ready'
+              : 'Session load failed',
+          sessionLoadStatus: result.status,
+          lastError: result.error ?? readBootDiagnostics().lastError,
+        });
       })
       .catch((error: unknown) => {
         if (!isMounted) {
@@ -490,6 +596,14 @@ export function App() {
             : '저장된 대화 기록을 불러오지 못했습니다.',
         );
         setChatHistoryStatus('error');
+        updateBootDiagnostics({
+          phase: 'Session load failed',
+          sessionLoadStatus: 'error',
+          lastError:
+            error instanceof Error
+              ? error.message
+              : 'Saved chat history load failed.',
+        });
       });
 
     return () => {
@@ -1019,6 +1133,7 @@ export function App() {
   function createCombinedDocumentRetrievalQuery(input: {
     query: string;
     scheduleResult?: ScheduleQueryResult;
+    issueResult?: IssueQueryResult;
   }): string {
     const terms = new Set<string>();
     const addTerm = (term: string | null | undefined) => {
@@ -1038,8 +1153,19 @@ export function App() {
       addTerm(task.name);
     }
 
+    for (const issue of input.issueResult?.issues.slice(0, 5) ?? []) {
+      addTerm(issue.issueId);
+      addTerm(issue.title);
+      addTerm(issue.owner);
+      addTerm(issue.actionPlan);
+    }
+
     if (input.scheduleResult) {
       addTerm('일정 지연 이슈 리스크 결정 변경 원인');
+    }
+
+    if (input.issueResult) {
+      addTerm('issue risk action owner support resolved case lesson');
     }
 
     return [...terms].join('\n');
@@ -1182,7 +1308,10 @@ export function App() {
     ) {
       const removableIndex = selectedContexts
         .map((context, index) => ({ context, index }))
-        .filter(({ context }) => context.sourceType !== 'schedule')
+        .filter(
+          ({ context }) =>
+            context.sourceType !== 'schedule' && context.sourceType !== 'issue',
+        )
         .sort((left, right) => {
           const leftRank = left.context.sourceType === 'rag' ? 0 : 1;
           const rightRank = right.context.sourceType === 'rag' ? 0 : 1;
@@ -1324,6 +1453,204 @@ export function App() {
           : 'Schedule context retrieval failed.';
 
       console.warn('[Mimora Schedule Chat Retrieval] Failed.', {
+        queryChars: input.query.length,
+        workspaceId: input.workspaceId,
+        error: errorMessage,
+      });
+
+      return {
+        contexts: [],
+        elapsedMs: performance.now() - startedTime,
+        error: errorMessage,
+      };
+    }
+  }
+
+  function isIssueQuestion(query: string): boolean {
+    return hasIssueChatSignal(query);
+  }
+
+  function formatIssuePercent(value: unknown): string {
+    return typeof value === 'number' && Number.isFinite(value)
+      ? `${(value * 100).toFixed(1)}%`
+      : 'unavailable';
+  }
+
+  function createIssueSourceOfTruthContent(result: IssueQueryResult): string {
+    const lines = [
+      '[ISSUE SOURCE OF TRUTH]',
+      `Workspace ID: ${result.workspaceId}`,
+      `Source: ${result.filename}`,
+      `As Of: ${result.asOfDate}`,
+      `Analysis: ${result.kind}`,
+      'Project Issue Summary:',
+      `Total Issues: ${result.summary.totalIssues.toLocaleString()}`,
+      `Open Issues: ${result.summary.openIssues.toLocaleString()}`,
+      `Completed Issues: ${result.summary.completedIssues.toLocaleString()}`,
+      `Completion Rate: ${formatIssuePercent(result.summary.completionRate)}`,
+      `Overdue Open Issues: ${result.summary.overdueOpenIssues.toLocaleString()}`,
+      `Long Open 30d: ${result.summary.longOpenIssues30d.toLocaleString()}`,
+      `Long Open 60d: ${result.summary.longOpenIssues60d.toLocaleString()}`,
+      `Long Open 90d: ${result.summary.longOpenIssues90d.toLocaleString()}`,
+      `Missing Due Open Issues: ${result.summary.missingDueOpenIssues.toLocaleString()}`,
+      `Stale Update Issues: ${result.summary.staleUpdateIssues.toLocaleString()}`,
+      `Organization Support Required Open: ${result.summary.organizationSupportRequiredOpen.toLocaleString()}`,
+    ];
+
+    if (result.issues.length > 0) {
+      lines.push('Current Issues:');
+      for (const issue of result.issues.slice(0, 12)) {
+        lines.push(
+          `- Row ${issue.sourceRow} | ${issue.issueId} | ${issue.title}`,
+          `  Area: ${issue.issueArea ?? 'unavailable'} | Phase: ${issue.phase ?? 'unavailable'}`,
+          `  Owner: ${issue.owner ?? 'unassigned'} | Status: ${issue.status ?? 'unknown'}`,
+          `  Occurred: ${issue.occurredDate ?? 'unavailable'} | Due: ${issue.dueDate ?? 'unavailable'} | Completed: ${issue.completedDate ?? 'unavailable'}`,
+          `  Open Age Days: ${issue.derivedMetrics.openAgeDays ?? 'unavailable'} | Overdue Days: ${issue.derivedMetrics.overdueDays ?? 'unavailable'} | Last Note Date: ${issue.latestNoteDate ?? 'unavailable'}`,
+          `  Risk Flags: ${issue.derivedMetrics.riskFlags.join(', ') || 'none'}`,
+          `  Action Plan: ${issue.actionPlan ?? 'unavailable'}`,
+        );
+      }
+    }
+
+    if (result.assignees?.length) {
+      lines.push('Assignee Bottlenecks:');
+      for (const assignee of result.assignees.slice(0, 8)) {
+        lines.push(
+          `- ${assignee.owner}: open=${assignee.openAssigned}, overdue=${assignee.overdueAssigned}, longOpen=${assignee.longOpenAssigned}, score=${assignee.bottleneckScore}`,
+        );
+      }
+    }
+
+    if (result.clusters?.length) {
+      lines.push('Repeated Issue Clusters:');
+      for (const cluster of result.clusters.slice(0, 8)) {
+        lines.push(
+          `- ${cluster.key}: ${cluster.count} issues (${cluster.issueIds.join(', ')})`,
+        );
+      }
+    }
+
+    lines.push(
+      'Instruction: These are authoritative current Issue values from the connected Excel source.',
+      'Instruction: Use row numbers and issue titles when citing current issue status.',
+      'Instruction: Use RAG only for past resolved case lessons; do not let RAG override current issue status.',
+      '[/ISSUE SOURCE OF TRUTH]',
+    );
+
+    return `${lines.join('\n')}\n\n${result.contextText}`;
+  }
+
+  function toIssueAutoContext(result: IssueQueryResult): AutoRetrievedContext {
+    const content = createIssueSourceOfTruthContent(result);
+    const documentSecurity =
+      result.summary.source.security === 'private' ? 'private' : 'internal';
+
+    return {
+      sourceType: 'issue',
+      documentId: `issue:${result.workspaceId}`,
+      workspaceIds: [result.workspaceId],
+      originWorkspaceId: result.workspaceId,
+      documentSecurity,
+      vaultId: 'issue-intelligence',
+      vaultName: 'Issue Intelligence',
+      vaultType: 'knowledge',
+      security: result.summary.source.security === 'private' ? 'sensitive' : 'sensitive',
+      relativePath: `issue://${result.workspaceId}/${result.filename}`,
+      fileName: result.filename,
+      score: 1,
+      snippet: content.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
+      content,
+      heading: `As of ${result.asOfDate} / ${result.kind}`,
+    };
+  }
+
+  function toMissingIssueAutoContext(input: {
+    workspaceId: Workspace['id'];
+    query: string;
+  }): AutoRetrievedContext {
+    const content = [
+      '[ISSUE ANALYSIS]',
+      'Type: issue_source_missing',
+      'No Issue Excel is connected to this Workspace.',
+      'Open Issue Documents and register an Issue Excel file before asking current issue-status questions.',
+      `User Question: ${input.query}`,
+      '[/ISSUE ANALYSIS]',
+    ].join('\n');
+
+    return {
+      sourceType: 'issue',
+      documentId: `issue:${input.workspaceId}:missing`,
+      workspaceIds: [input.workspaceId],
+      originWorkspaceId: input.workspaceId,
+      documentSecurity: 'internal',
+      vaultId: 'issue-intelligence',
+      vaultName: 'Issue Intelligence',
+      vaultType: 'knowledge',
+      security: 'sensitive',
+      relativePath: `issue://${input.workspaceId}/not-connected`,
+      fileName: 'Issue Excel not connected',
+      score: 1,
+      snippet: content.slice(0, SCHEDULE_CONTEXT_SNIPPET_MAX_CHARS),
+      content,
+      heading: 'Issue Excel not connected',
+    };
+  }
+
+  async function retrieveIssueChatContext(input: {
+    query: string;
+    workspaceId: Workspace['id'];
+  }): Promise<ChatContextRetrievalResult> {
+    const startedTime = performance.now();
+
+    if (isAllWorkspaceScope(input.workspaceId) || !isIssueQuestion(input.query)) {
+      return {
+        contexts: [],
+        elapsedMs: performance.now() - startedTime,
+      };
+    }
+
+    try {
+      const document = await window.mimora.getIssueDocument(input.workspaceId);
+
+      if (!document) {
+        return {
+          contexts: [
+            toMissingIssueAutoContext({
+              workspaceId: input.workspaceId,
+              query: input.query,
+            }),
+          ],
+          elapsedMs: performance.now() - startedTime,
+        };
+      }
+
+      const result = await window.mimora.queryIssues({
+        workspaceId: input.workspaceId,
+        query: input.query,
+      });
+      const context = toIssueAutoContext(result);
+
+      console.info('[Mimora Issue Chat Retrieval]', {
+        queryChars: input.query.length,
+        workspaceId: input.workspaceId,
+        source: result.filename,
+        kind: result.kind,
+        selectedIssueCount: result.issues.length,
+        lastAnalyzedAt: result.lastAnalyzedAt,
+      });
+
+      return {
+        contexts: [context],
+        elapsedMs: performance.now() - startedTime,
+        issueResult: result,
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'Issue context retrieval failed.';
+
+      console.warn('[Mimora Issue Chat Retrieval] Failed.', {
         queryChars: input.query.length,
         workspaceId: input.workspaceId,
         error: errorMessage,
@@ -2781,10 +3108,25 @@ export function App() {
       ? 'document_only'
       : classifyWorkspaceChatQueryRoute(query);
     const derivedKnowledgeRequest = isDerivedKnowledgeRequest(query);
-    const scheduleQuestion = queryRoute !== 'document_only';
+    const scheduleQuestion =
+      queryRoute === 'schedule_only' ||
+      queryRoute === 'combined' ||
+      queryRoute === 'schedule_issue';
+    const issueQuestion =
+      queryRoute === 'issue_only' ||
+      queryRoute === 'issue_document' ||
+      queryRoute === 'schedule_issue';
     const scheduleOnlyQuery = queryRoute === 'schedule_only';
-    const combinedQuery = queryRoute === 'combined';
+    const issueOnlyQuery = queryRoute === 'issue_only';
+    const combinedQuery =
+      queryRoute === 'combined' ||
+      queryRoute === 'issue_document' ||
+      queryRoute === 'schedule_issue';
     let scheduleRetrieval: ChatContextRetrievalResult = {
+      contexts: [],
+      elapsedMs: 0,
+    };
+    let issueRetrieval: ChatContextRetrievalResult = {
       contexts: [],
       elapsedMs: 0,
     };
@@ -2797,14 +3139,23 @@ export function App() {
       });
     }
 
+    if (issueQuestion) {
+      issueRetrieval = await retrieveIssueChatContext({
+        query,
+        workspaceId,
+      });
+    }
+
     if (
-      !scheduleOnlyQuery ||
-      (scheduleRetrieval.contexts.length === 0 && scheduleRetrieval.error)
+      (!scheduleOnlyQuery && !issueOnlyQuery && queryRoute !== 'schedule_issue') ||
+      (scheduleRetrieval.contexts.length === 0 && scheduleRetrieval.error) ||
+      (issueRetrieval.contexts.length === 0 && issueRetrieval.error)
     ) {
       const documentRetrievalQuery = combinedQuery
         ? createCombinedDocumentRetrievalQuery({
             query,
             scheduleResult: scheduleRetrieval.scheduleResult,
+            issueResult: issueRetrieval.issueResult,
           })
         : query;
 
@@ -2847,22 +3198,24 @@ export function App() {
       retrievedRagContextCount = ragContext.length;
     }
 
-    const combinedAutoContext = scheduleQuestion
-      ? scheduleRetrieval.contexts
-      : [];
+    const intelligenceAutoContext =
+      scheduleQuestion || issueQuestion
+        ? [...scheduleRetrieval.contexts, ...issueRetrieval.contexts]
+        : [];
     const documentAutoContext = combinedQuery
       ? selectCombinedDocumentContexts({
           vaultContexts: autoContext,
           ragContexts: ragContext,
         })
       : [...autoContext, ...ragContext];
-    const finalAutoContext = scheduleQuestion
+    const finalAutoContext = scheduleQuestion || issueQuestion
       ? trimLowPriorityCombinedContexts({
-          scheduleContexts: combinedAutoContext,
+          scheduleContexts: intelligenceAutoContext,
           documentContexts: documentAutoContext,
         })
       : documentAutoContext;
-    const scheduleForcesLocal = scheduleQuestion || derivedKnowledgeRequest;
+    const scheduleForcesLocal =
+      scheduleQuestion || issueQuestion || derivedKnowledgeRequest;
     const retrievalMs = performance.now() - retrievalStartedTime;
 
     completeAutoContextRetrieval(
@@ -2968,10 +3321,15 @@ export function App() {
       query_route: queryRoute,
       schedule_context_used: scheduleRetrieval.contexts.length > 0,
       schedule_source: scheduleRetrieval.scheduleResult?.filename,
+      issue_context_used: issueRetrieval.contexts.length > 0,
+      issue_source: issueRetrieval.issueResult?.filename,
       retrieved_vault_context_count: retrievedVaultContextCount,
       retrieved_rag_context_count: retrievedRagContextCount,
       vault_context_count: finalAutoContext.filter(
-        (context) => context.sourceType !== 'rag' && context.sourceType !== 'schedule',
+        (context) =>
+          context.sourceType !== 'rag' &&
+          context.sourceType !== 'schedule' &&
+          context.sourceType !== 'issue',
       ).length,
       rag_context_count: finalAutoContext.filter(
         (context) => context.sourceType === 'rag',
@@ -2996,10 +3354,15 @@ export function App() {
             query_route: queryRoute,
             schedule_context_used: scheduleRetrieval.contexts.length > 0,
             schedule_source: scheduleRetrieval.scheduleResult?.filename,
+            issue_context_used: issueRetrieval.contexts.length > 0,
+            issue_source: issueRetrieval.issueResult?.filename,
             retrieved_vault_context_count: retrievedVaultContextCount,
             retrieved_rag_context_count: retrievedRagContextCount,
             vault_context_count: finalAutoContext.filter(
-              (context) => context.sourceType !== 'rag' && context.sourceType !== 'schedule',
+              (context) =>
+                context.sourceType !== 'rag' &&
+                context.sourceType !== 'schedule' &&
+                context.sourceType !== 'issue',
             ).length,
             rag_context_count: finalAutoContext.filter(
               (context) => context.sourceType === 'rag',
@@ -3774,6 +4137,9 @@ export function App() {
 
   return (
     <div className="app-layout">
+      {showBootDiagnostics ? (
+        <BootDiagnosticPanel diagnostics={bootDiagnostics} />
+      ) : null}
       <div
         aria-hidden="true"
         className="app-focus-anchor"
@@ -3782,8 +4148,10 @@ export function App() {
       />
       <Sidebar
         chatSessions={chatSessions}
+        isIssueDocumentsActive={activeView === 'issue-documents'}
         isRecentChatsActive={activeView === 'recent-chats'}
         isRagDocumentsActive={activeView === 'rag-documents'}
+        isScheduleDocumentsActive={activeView === 'schedule-documents'}
         isVaultBrowserActive={activeView === 'vault-browser'}
         isSettingsActive={activeView === 'settings'}
         onOpenRecentChats={() => {
@@ -3796,6 +4164,14 @@ export function App() {
         }}
         onOpenRagDocuments={() => {
           setActiveView('rag-documents');
+          setMessage('');
+        }}
+        onOpenScheduleDocuments={() => {
+          setActiveView('schedule-documents');
+          setMessage('');
+        }}
+        onOpenIssueDocuments={() => {
+          setActiveView('issue-documents');
           setMessage('');
         }}
         onOpenSettings={() => {
@@ -3818,6 +4194,10 @@ export function App() {
         aria-label={
           activeView === 'settings'
             ? '설정'
+            : activeView === 'schedule-documents'
+              ? 'Schedule Documents'
+            : activeView === 'issue-documents'
+              ? 'Issue Documents'
             : activeView === 'rag-documents'
               ? 'RAG 문서'
             : activeView === 'recent-chats'
@@ -3835,6 +4215,10 @@ export function App() {
             onVaultDocumentsChanged={refreshVaultDocumentSnapshot}
             onWorkspaceRegistryChanged={refreshWorkspaceRegistry}
           />
+        ) : activeView === 'schedule-documents' ? (
+          <ScheduleDocumentsView />
+        ) : activeView === 'issue-documents' ? (
+          <IssueDocumentsView />
         ) : activeView === 'rag-documents' ? (
           <RagDocumentsView />
         ) : activeView === 'recent-chats' ? (

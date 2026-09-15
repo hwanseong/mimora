@@ -13,7 +13,7 @@ export type WeeklyReportTask = {
 };
 
 export type WeeklyReportSource = {
-  source_type: 'vault' | 'rag' | 'schedule';
+  source_type: 'vault' | 'rag' | 'schedule' | 'issue';
   document_id?: string;
   rag_document_id?: string;
   filename: string;
@@ -211,6 +211,8 @@ export function toWeeklyReportSource(
         ? 'rag'
         : context.sourceType === 'schedule'
           ? 'schedule'
+          : context.sourceType === 'issue'
+            ? 'issue'
           : 'vault',
     document_id: context.mimoraDocumentId ?? context.documentId,
     rag_document_id: context.ragDocumentId,

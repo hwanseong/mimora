@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
-import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type {
   CanonicalSchedule,
@@ -14,21 +14,7 @@ import type {
 } from '../src/schedule';
 import { scheduleSupportedExtensions } from '../src/schedule';
 import { workspaceIdPattern } from '../src/workspace/types';
-
-type ScheduleWorkerSuccess<T> = {
-  ok: true;
-  data: T;
-};
-
-type ScheduleWorkerFailure = {
-  ok: false;
-  error: {
-    code: string;
-    message: string;
-  };
-};
-
-type ScheduleWorkerResult<T> = ScheduleWorkerSuccess<T> | ScheduleWorkerFailure;
+import { runPythonWorker } from './pythonRuntime';
 
 type ScheduleServiceOptions = {
   getUserDataPath: () => string;
@@ -49,22 +35,10 @@ export const scheduleFileDialogFilters = [
   },
 ];
 
-const pythonExecutableCandidates =
-  process.platform === 'win32'
-    ? [
-        { executable: 'python', args: [] as string[] },
-        { executable: 'py', args: ['-3'] },
-      ]
-    : [{ executable: 'python3', args: [] as string[] }];
-
 const scheduleCacheVersion = 3;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getWorkerPath(getAppRoot?: () => string): string {
-  return path.resolve(getAppRoot?.() ?? process.cwd(), 'python', 'mimora_worker.py');
 }
 
 function getScheduleRoot(userDataPath: string): string {
@@ -73,6 +47,10 @@ function getScheduleRoot(userDataPath: string): string {
 
 function getSourcesPath(scheduleRoot: string): string {
   return path.join(scheduleRoot, 'sources.json');
+}
+
+function getManagedDocumentsRoot(scheduleRoot: string): string {
+  return path.join(scheduleRoot, 'documents');
 }
 
 function getCachePath(scheduleRoot: string, workspaceId: string): string {
@@ -115,6 +93,15 @@ async function validateScheduleSourcePath(sourcePath: unknown): Promise<string> 
   return normalizedPath;
 }
 
+async function sha256File(filePath: string): Promise<string> {
+  const data = await readFile(filePath);
+  return createHash('sha256').update(data).digest('hex');
+}
+
+function sanitizeFilename(filename: string): string {
+  return path.basename(filename).replace(/[<>:"/\\|?*\u0000-\u001F]/gu, '_') || 'schedule.xlsx';
+}
+
 function getFileModifiedAt(mtimeMs: number): string {
   return new Date(mtimeMs).toISOString();
 }
@@ -122,15 +109,41 @@ function getFileModifiedAt(mtimeMs: number): string {
 async function createScheduleSource(
   workspaceId: string,
   sourcePath: string,
+  scheduleRoot: string,
 ): Promise<ScheduleSource> {
   const stats = await stat(sourcePath);
+  const sourceHash = await sha256File(sourcePath);
+  const originalFileName = path.basename(sourcePath);
+  const managedDirectory = path.join(
+    getManagedDocumentsRoot(scheduleRoot),
+    workspaceId,
+  );
+  const managedFilePath = path.join(
+    managedDirectory,
+    `${sourceHash.slice(0, 12)}-${sanitizeFilename(originalFileName)}`,
+  );
+  const now = new Date().toISOString();
+
+  await mkdir(managedDirectory, { recursive: true });
+  await copyFile(sourcePath, managedFilePath);
 
   return {
+    id: `schedule-${workspaceId}-${randomUUID()}`,
     workspaceId,
-    sourcePath,
-    filename: path.basename(sourcePath),
+    sourcePath: managedFilePath,
+    originalFileName,
+    managedFilePath,
+    sourceHash,
+    registeredAt: now,
+    registeredBy: 'local-user',
+    status: 'active',
+    disconnectedAt: null,
+    parserType: 'schedule_excel',
+    security: 'internal',
+    notes: null,
+    filename: originalFileName,
     fileSize: stats.size,
-    modifiedAt: getFileModifiedAt(stats.mtimeMs),
+    modifiedAt: getFileModifiedAt((await stat(managedFilePath)).mtimeMs),
     lastParsedAt: null,
     parseStatus: 'registered',
   };
@@ -212,64 +225,27 @@ export function createScheduleService(options: ScheduleServiceOptions) {
       return options.runWorker<T>(command, input);
     }
 
-    const workerPath = getWorkerPath(options.getAppRoot);
-    let lastError: unknown;
+    return runPythonWorker<T>({
+      command,
+      input,
+      getAppRoot: options.getAppRoot,
+      serviceName: 'Schedule',
+    });
+  }
 
-    for (const candidate of pythonExecutableCandidates) {
-      try {
-        return await new Promise<T>((resolve, reject) => {
-          const child = spawn(
-            candidate.executable,
-            [...candidate.args, workerPath, command],
-            {
-              shell: false,
-              stdio: ['pipe', 'pipe', 'pipe'],
-              windowsHide: true,
-            },
-          );
-          let stdout = '';
-          let stderr = '';
-
-          child.stdout.setEncoding('utf8');
-          child.stderr.setEncoding('utf8');
-          child.stdout.on('data', (chunk: string) => {
-            stdout += chunk;
-          });
-          child.stderr.on('data', (chunk: string) => {
-            stderr += chunk;
-          });
-          child.on('error', reject);
-          child.on('close', (code) => {
-            if (code !== 0 && !stdout.trim()) {
-              reject(new Error(stderr.trim() || 'Schedule worker failed.'));
-              return;
-            }
-
-            try {
-              const parsed = JSON.parse(stdout.trim()) as ScheduleWorkerResult<T>;
-              if (parsed.ok) {
-                resolve(parsed.data);
-              } else {
-                reject(new Error(parsed.error.message));
-              }
-            } catch (error) {
-              reject(error);
-            }
-          });
-          child.stdin.end(JSON.stringify(input));
-        });
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw lastError instanceof Error
-      ? lastError
-      : new Error('Schedule Python worker is unavailable.');
+  async function loadAllSources(): Promise<ScheduleSource[]> {
+    return readJsonFile<ScheduleSource[]>(
+      getSourcesPath(scheduleRoot),
+      [],
+    );
   }
 
   async function loadSources(): Promise<ScheduleSource[]> {
-    return readJsonFile<ScheduleSource[]>(getSourcesPath(scheduleRoot), []);
+    const sources = await loadAllSources();
+
+    return sources.filter(
+      (source) => source.status === undefined || source.status === 'active',
+    );
   }
 
   async function saveSources(sources: ScheduleSource[]): Promise<void> {
@@ -277,9 +253,27 @@ export function createScheduleService(options: ScheduleServiceOptions) {
   }
 
   async function upsertSource(source: ScheduleSource): Promise<ScheduleSource> {
-    const sources = await loadSources();
+    const sources = await loadAllSources();
+    const now = new Date().toISOString();
+    const archivedSources = sources
+      .filter(
+        (item) =>
+          item.workspaceId === source.workspaceId &&
+          (item.status === undefined || item.status === 'active') &&
+          item.id !== source.id,
+      )
+      .map((item) => ({
+        ...item,
+        status: 'archived' as const,
+        disconnectedAt: item.disconnectedAt ?? now,
+      }));
     const nextSources = [
-      ...sources.filter((item) => item.workspaceId !== source.workspaceId),
+      ...sources.filter(
+        (item) =>
+          item.workspaceId !== source.workspaceId ||
+          (item.status !== undefined && item.status !== 'active'),
+      ),
+      ...archivedSources,
       source,
     ];
 
@@ -341,17 +335,41 @@ export function createScheduleService(options: ScheduleServiceOptions) {
     try {
       const parsed = await runWorker<ScheduleParseResult>('schedule-parse', {
         workspace_id: source.workspaceId,
-        source_path: source.sourcePath,
+        source_path: source.managedFilePath ?? source.sourcePath,
       });
       const nextSource = await upsertSource({
+        ...source,
         ...parsed.source,
+        id: source.id,
+        sourcePath: source.managedFilePath ?? source.sourcePath,
+        originalFileName: source.originalFileName ?? parsed.source.filename,
+        managedFilePath: source.managedFilePath ?? source.sourcePath,
+        sourceHash: source.sourceHash,
+        registeredAt: source.registeredAt,
+        registeredBy: source.registeredBy,
+        status: 'active',
+        disconnectedAt: null,
+        parserType: 'schedule_excel',
+        security: source.security ?? 'internal',
+        notes: source.notes ?? null,
+        filename: source.originalFileName ?? parsed.source.filename,
         parseStatus: 'parsed',
         parseError: undefined,
       });
+      const nextSchedule: CanonicalSchedule = {
+        ...parsed.schedule,
+        sourceFile: source.managedFilePath ?? source.sourcePath,
+        filename: source.originalFileName ?? parsed.schedule.filename,
+      };
+      const nextSummary: ScheduleSummary = {
+        ...parsed.summary,
+        filename: source.originalFileName ?? parsed.summary.filename,
+        source: nextSource,
+      };
       const payload = {
         cacheVersion: scheduleCacheVersion,
         source: nextSource,
-        schedule: parsed.schedule,
+        schedule: nextSchedule,
       };
 
       await writeCache(payload);
@@ -359,10 +377,8 @@ export function createScheduleService(options: ScheduleServiceOptions) {
       return {
         ...parsed,
         source: nextSource,
-        summary: {
-          ...parsed.summary,
-          source: nextSource,
-        },
+        schedule: nextSchedule,
+        summary: nextSummary,
         fromCache: false,
       };
     } catch (error) {
@@ -391,8 +407,9 @@ export function createScheduleService(options: ScheduleServiceOptions) {
     }
 
     let stats;
+    const managedPath = source.managedFilePath ?? source.sourcePath;
     try {
-      stats = await stat(source.sourcePath);
+      stats = await stat(managedPath);
     } catch {
       await upsertSource({
         ...source,
@@ -426,6 +443,7 @@ export function createScheduleService(options: ScheduleServiceOptions) {
 
     return parseFresh({
       ...source,
+      sourcePath: managedPath,
       fileSize: stats.size,
       modifiedAt,
     });
@@ -440,6 +458,7 @@ export function createScheduleService(options: ScheduleServiceOptions) {
       const source = await createScheduleSource(
         registerInput.workspaceId,
         sourcePath,
+        scheduleRoot,
       );
 
       await deleteCache(registerInput.workspaceId);
@@ -448,13 +467,27 @@ export function createScheduleService(options: ScheduleServiceOptions) {
 
     removeSource: async (workspaceId: unknown): Promise<ScheduleRemoveResult> => {
       const normalizedWorkspaceId = validateWorkspaceId(workspaceId);
-      const sources = await loadSources();
+      const sources = await loadAllSources();
       const removedSource =
-        sources.find((source) => source.workspaceId === normalizedWorkspaceId) ??
+        sources.find(
+          (source) =>
+            source.workspaceId === normalizedWorkspaceId &&
+            (source.status === undefined || source.status === 'active'),
+        ) ??
         null;
+      const now = new Date().toISOString();
 
       await saveSources(
-        sources.filter((source) => source.workspaceId !== normalizedWorkspaceId),
+        sources.map((source) =>
+          source.workspaceId === normalizedWorkspaceId &&
+          (source.status === undefined || source.status === 'active')
+            ? {
+                ...source,
+                status: 'disconnected',
+                disconnectedAt: source.disconnectedAt ?? now,
+              }
+            : source,
+        ),
       );
       await deleteCache(normalizedWorkspaceId);
 

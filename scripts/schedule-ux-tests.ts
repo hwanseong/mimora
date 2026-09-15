@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   classifyWorkspaceChatQueryRoute,
   getScheduleQueryResultDisplayState,
@@ -149,7 +150,7 @@ assert.equal(
 );
 assert.equal(
   classifyWorkspaceChatQueryRoute('외부기관 관련 이슈가 뭐야?'),
-  'document_only',
+  'issue_only',
 );
 assert.equal(
   classifyWorkspaceChatQueryRoute('왜 일정이 이렇게 늦어진 것 같아?'),
@@ -161,7 +162,39 @@ assert.equal(
 );
 assert.equal(
   classifyWorkspaceChatQueryRoute('현재 지연 작업과 관련된 주요 이슈를 알려줘'),
-  'combined',
+  'schedule_issue',
 );
+assert.equal(
+  classifyWorkspaceChatQueryRoute('이 이슈와 관련된 회의 결정은?'),
+  'issue_document',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('조직지원이 필요한 이슈는?'),
+  'issue_only',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('해결된 이슈 중 조직지원이 필요했던 것은?'),
+  'issue_only',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('누가 맡은 이슈가 오래 지연되고 있어?'),
+  'issue_only',
+);
+assert.equal(
+  classifyWorkspaceChatQueryRoute('해결안된이슈는'),
+  'issue_only',
+);
+
+const settingsView = readFileSync('src/components/SettingsView.tsx', 'utf8');
+const scheduleTypes = readFileSync('src/schedule.ts', 'utf8');
+const worker = readFileSync('python/mimora_worker.py', 'utf8');
+
+assert.match(settingsView, /renderScheduleParseWarnings/u);
+assert.match(settingsView, /Skipped rows/u);
+assert.match(settingsView, /<th>Row<\/th>/u);
+assert.match(scheduleTypes, /ScheduleParseWarning/u);
+assert.match(scheduleTypes, /parseWarnings\?: ScheduleParseWarning\[\]/u);
+assert.match(worker, /parseWarnings/u);
+assert.match(worker, /missing_wbs_and_task_name/u);
 
 console.log('schedule-ux-tests passed');

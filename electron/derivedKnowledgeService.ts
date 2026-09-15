@@ -86,7 +86,8 @@ function validateSaveInput(input: unknown): SaveDerivedKnowledgeInput {
             {
               ...(item.sourceType === 'vault' ||
               item.sourceType === 'rag' ||
-              item.sourceType === 'schedule'
+              item.sourceType === 'schedule' ||
+              item.sourceType === 'issue'
                 ? { sourceType: item.sourceType }
                 : {}),
               vaultId: item.vaultId,

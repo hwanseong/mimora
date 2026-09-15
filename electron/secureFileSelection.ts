@@ -9,11 +9,16 @@ import {
   scheduleSupportedExtensions,
   type ScheduleFileSelection,
 } from '../src/schedule';
+import {
+  issueSupportedExtensions,
+  type IssueFileSelection,
+} from '../src/issue';
 
 export type FileSelectionPurpose =
   | 'rag-import'
   | 'rag-replace'
-  | 'schedule-register';
+  | 'schedule-register'
+  | 'issue-register';
 
 export type PendingFileSelection = {
   path: string;
@@ -85,6 +90,10 @@ function getAllowedExtensions(
     return scheduleSupportedExtensions;
   }
 
+  if (purpose === 'issue-register') {
+    return issueSupportedExtensions;
+  }
+
   return ragSupportedExtensions;
 }
 
@@ -138,7 +147,7 @@ export function createSecureFileSelectionStore(options?: {
   async function create(
     filePath: string,
     purpose: FileSelectionPurpose,
-  ): Promise<RagFileSelection | ScheduleFileSelection> {
+  ): Promise<RagFileSelection | ScheduleFileSelection | IssueFileSelection> {
     const normalizedPath = await assertSupportedExistingFile(filePath, purpose);
     const selectionId = randomUUID();
 

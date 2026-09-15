@@ -14,6 +14,7 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
         {sources.map((source) => {
           const isRagSource = source.sourceType === 'rag';
           const isScheduleSource = source.sourceType === 'schedule';
+          const isIssueSource = source.sourceType === 'issue';
           const isProtected =
             source.vaultType === 'private' ||
             source.security === 'sensitive';
@@ -45,6 +46,9 @@ export function SourcesList({ sources }: { sources: LLMContextSource[] }) {
                 <span className="document-id-source-badge">
                   {source.ragDocumentId}
                 </span>
+              ) : null}
+              {isIssueSource ? (
+                <span className="document-id-source-badge">Issue</span>
               ) : null}
               {documentId ? (
                 <span className="document-id-source-badge">{documentId}</span>

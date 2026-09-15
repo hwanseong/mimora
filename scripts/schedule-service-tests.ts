@@ -17,6 +17,7 @@ await writeFile(sourcePath, Buffer.from('schedule-source'));
 
 const commands: string[] = [];
 let parseCount = 0;
+let registeredManagedPath = '';
 
 function createSummary(
   source: ScheduleSource,
@@ -64,12 +65,14 @@ const service = createScheduleService({
     if (command === 'schedule-parse') {
       parseCount += 1;
       assert.equal(payload.workspace_id, 'WS-2026-0001');
-      assert.equal(payload.source_path, sourcePath);
-      const stats = await stat(sourcePath);
+      assert.notEqual(payload.source_path, sourcePath);
+      assert.match(payload.source_path ?? '', /schedule[\\/]+documents/u);
+      const managedSourcePath = payload.source_path ?? sourcePath;
+      const stats = await stat(managedSourcePath);
       const source: ScheduleSource = {
         workspaceId: 'WS-2026-0001',
-        sourcePath,
-        filename: path.basename(sourcePath),
+        sourcePath: managedSourcePath,
+        filename: path.basename(managedSourcePath),
         fileSize: stats.size,
         modifiedAt: new Date(stats.mtimeMs).toISOString(),
         lastParsedAt: `2026-09-10T00:00:0${parseCount}.000Z`,
@@ -77,8 +80,8 @@ const service = createScheduleService({
       };
       const schedule: CanonicalSchedule = {
         workspaceId: 'WS-2026-0001',
-        sourceFile: sourcePath,
-        filename: path.basename(sourcePath),
+        sourceFile: managedSourcePath,
+        filename: path.basename(managedSourcePath),
         projectStart: '2026-09-01',
         projectFinish: '2026-12-31',
         parsedSheets: ['Schedule', 'Calendar', 'Progress', 'Settings'],
@@ -154,7 +157,11 @@ const registered = await service.registerSource({
   sourcePath,
 });
 assert.equal(registered.filename, 'XLGantt_sample.xlsm');
-assert.equal(registered.sourcePath, sourcePath);
+assert.notEqual(registered.sourcePath, sourcePath);
+assert.equal(registered.originalFileName, 'XLGantt_sample.xlsm');
+assert.ok(registered.managedFilePath);
+registeredManagedPath = registered.managedFilePath ?? registered.sourcePath;
+await access(registeredManagedPath);
 
 const firstParse = await service.refresh('WS-2026-0001');
 assert.equal(firstParse.fromCache, false);
@@ -184,12 +191,14 @@ assert.match(cacheText, /외부기관 심사/u);
 const nextTime = new Date(Date.now() + 60_000);
 await utimes(sourcePath, nextTime, nextTime);
 await service.refresh('WS-2026-0001');
-assert.equal(parseCount, 3);
+assert.equal(parseCount, 2);
 
 const removed = await service.removeSource('WS-2026-0001');
 assert.equal(removed.removed, true);
-assert.equal(removed.source?.sourcePath, sourcePath);
+assert.equal(removed.source?.sourcePath, registeredManagedPath);
+assert.equal(removed.source?.status, 'active');
 await access(sourcePath);
+await access(registeredManagedPath);
 const removedAgain = await service.removeSource('WS-2026-0001');
 assert.equal(removedAgain.removed, false);
 
@@ -198,7 +207,7 @@ await service.registerSource({
   sourcePath,
 });
 await service.refresh('WS-2026-0001');
-assert.equal(parseCount, 4);
+assert.equal(parseCount, 3);
 assert.deepEqual(
   commands.filter((command) => command.startsWith('rag-')),
   [],

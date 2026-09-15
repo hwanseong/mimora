@@ -44,6 +44,17 @@ import type {
   ScheduleSummary,
 } from './schedule';
 import type {
+  IssueDocument,
+  IssueFileSelection,
+  IssueParseResult,
+  IssueQueryInput,
+  IssueQueryResult,
+  IssueRegisterInput,
+  IssueRemoveResult,
+  IssueRefreshOptions,
+  IssueSummary,
+} from './issue';
+import type {
   WeeklyReportRenderInput,
   WeeklyReportRenderResult,
 } from './weeklyReport';
@@ -191,6 +202,25 @@ type MimoraApi = {
     querySchedule: (
       input: ScheduleQueryInput,
     ) => Promise<ScheduleQueryResult>;
+    getIssueStorageRoot: () => Promise<string>;
+    selectIssueSourceFile: () => Promise<IssueFileSelection | null>;
+    registerIssueDocument: (
+      input: IssueRegisterInput,
+    ) => Promise<IssueDocument>;
+    getIssueDocument: (
+      workspaceId: string,
+    ) => Promise<IssueDocument | null>;
+    removeIssueDocument: (
+      workspaceId: string,
+    ) => Promise<IssueRemoveResult>;
+    refreshIssueDocument: (
+      workspaceId: string,
+      options?: IssueRefreshOptions,
+    ) => Promise<IssueParseResult>;
+    getIssueSummary: (workspaceId: string) => Promise<IssueSummary>;
+    queryIssues: (
+      input: IssueQueryInput,
+    ) => Promise<IssueQueryResult>;
     getWeeklyReportStorageRoot: () => Promise<string>;
     renderWeeklyReport: (
       input: WeeklyReportRenderInput,

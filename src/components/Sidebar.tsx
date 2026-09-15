@@ -197,12 +197,16 @@ function NavSection({
 }
 
 export function Sidebar({
+  isIssueDocumentsActive,
   isRecentChatsActive,
   isRagDocumentsActive,
+  isScheduleDocumentsActive,
   isVaultBrowserActive,
   isSettingsActive,
+  onOpenIssueDocuments,
   onOpenRecentChats,
   onOpenRagDocuments,
+  onOpenScheduleDocuments,
   onOpenVaultBrowser,
   onOpenSettings,
   registryRuntimeMode = 'normal',
@@ -217,12 +221,16 @@ export function Sidebar({
   onDeleteSession,
   onReorderSession,
 }: {
+  isIssueDocumentsActive: boolean;
   isRecentChatsActive: boolean;
   isRagDocumentsActive: boolean;
+  isScheduleDocumentsActive: boolean;
   isVaultBrowserActive: boolean;
   isSettingsActive: boolean;
+  onOpenIssueDocuments: () => void;
   onOpenRecentChats: () => void;
   onOpenRagDocuments: () => void;
+  onOpenScheduleDocuments: () => void;
   onOpenVaultBrowser: () => void;
   onOpenSettings: () => void;
   registryRuntimeMode?: RegistryRuntimeMode;
@@ -287,6 +295,22 @@ export function Sidebar({
           type="button"
         >
           Vault Browser
+        </button>
+        <button
+          aria-pressed={isScheduleDocumentsActive}
+          className={`nav-item${isScheduleDocumentsActive ? ' active' : ''}`}
+          onClick={onOpenScheduleDocuments}
+          type="button"
+        >
+          Schedule Documents
+        </button>
+        <button
+          aria-pressed={isIssueDocumentsActive}
+          className={`nav-item${isIssueDocumentsActive ? ' active' : ''}`}
+          onClick={onOpenIssueDocuments}
+          type="button"
+        >
+          Issue Documents
         </button>
         <button
           aria-pressed={isRagDocumentsActive}

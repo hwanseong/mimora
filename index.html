@@ -4,8 +4,71 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mimora</title>
+    <script>
+      (() => {
+        const queryFlag = new URLSearchParams(window.location.search).get(
+          "bootDiagnostics",
+        ) === "1";
+        let storageFlag = false;
+
+        try {
+          storageFlag = window.localStorage.getItem(
+            "mimora.bootDiagnostics",
+          ) === "1";
+        } catch {
+          storageFlag = false;
+        }
+
+        const enabled = queryFlag || storageFlag;
+        window.__mimoraBootDiagnosticsEnabled = enabled;
+        document.documentElement.dataset.mimoraBootDiagnostics = enabled
+          ? "1"
+          : "0";
+      })();
+    </script>
+    <style>
+      #mimora-boot-diagnostics {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        z-index: 2147483647;
+        display: grid;
+        gap: 2px;
+        max-width: min(420px, calc(100vw - 16px));
+        padding: 8px 10px;
+        border: 2px solid #dc2626;
+        border-radius: 6px;
+        background: #ffffff;
+        color: #111827;
+        font:
+          12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas,
+          "Liberation Mono", monospace;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.18);
+        pointer-events: none;
+      }
+
+      html[data-mimora-boot-diagnostics="0"] #mimora-boot-diagnostics {
+        display: none;
+      }
+
+      #mimora-boot-diagnostics strong {
+        color: #991b1b;
+      }
+
+      #mimora-boot-diagnostics .mimora-boot-error {
+        color: #b42318;
+        overflow-wrap: anywhere;
+      }
+    </style>
   </head>
   <body>
+    <div id="mimora-boot-diagnostics">
+      <strong>Mimora boot diagnostics</strong>
+      <span>phase: HTML loaded</span>
+      <span>window.mimora: pending</span>
+      <span>react: not loaded</span>
+      <span>app: not rendered</span>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

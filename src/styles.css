@@ -41,6 +41,71 @@ button {
   min-width: 0;
 }
 
+.boot-error-screen {
+  min-height: 100vh;
+  padding: 32px;
+  color: #111827;
+  background: #f8fafc;
+}
+
+.boot-error-card {
+  max-width: 760px;
+  padding: 24px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.boot-error-card h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.boot-error-card p {
+  margin: 0;
+  color: #667085;
+}
+
+.boot-error-card pre {
+  margin: 16px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  color: #344054;
+}
+
+.app-boot-diagnostic-panel {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 2147483646;
+  display: grid;
+  gap: 2px;
+  width: min(380px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 8px 10px;
+  border: 2px solid #2563eb;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #111827;
+  font:
+    12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.18);
+  pointer-events: none;
+}
+
+.app-boot-diagnostic-panel strong {
+  color: #1d4ed8;
+}
+
+.app-boot-diagnostic-error {
+  color: #b42318;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .app-layout {
   display: grid;
   grid-template-columns: clamp(200px, 13vw, 230px) minmax(0, 1fr) clamp(340px, 26vw, 420px);
@@ -2762,6 +2827,7 @@ button {
 
 .settings-view {
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 18px 22px 24px;
 }
@@ -3111,6 +3177,11 @@ button {
   padding: 16px;
 }
 
+.issue-documents-view .settings-header,
+.issue-documents-view .issue-intelligence-card {
+  width: min(1180px, 100%);
+}
+
 .schedule-intelligence-card .schedule-source-controls,
 .schedule-intelligence-card .schedule-query-test {
   display: grid;
@@ -3120,11 +3191,28 @@ button {
 }
 
 .schedule-intelligence-card .schedule-query-test {
-  grid-template-columns: minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
 }
 
 .schedule-intelligence-card .schedule-query-test > p {
   grid-column: 1 / -1;
+}
+
+.schedule-intelligence-card .issue-query-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-start;
+  min-height: 34px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.schedule-intelligence-card .issue-query-toggle input {
+  width: 14px;
+  height: 14px;
 }
 
 .schedule-intelligence-card .schedule-source-status {
@@ -3199,6 +3287,44 @@ button {
   font-size: 12px;
 }
 
+.schedule-intelligence-card .issue-source-controls {
+  grid-template-columns: minmax(180px, 1fr) minmax(118px, 150px) minmax(220px, 2fr) minmax(260px, auto);
+  align-items: end;
+}
+
+.schedule-intelligence-card .issue-source-file {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.schedule-intelligence-card .issue-source-file span {
+  color: #667085;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.schedule-intelligence-card .issue-source-file strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.schedule-intelligence-card .issue-source-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.schedule-intelligence-card .issue-source-actions .secondary-button,
+.schedule-intelligence-card .issue-source-actions .primary-button {
+  flex: 0 0 auto;
+}
+
 .schedule-intelligence-card .schedule-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
@@ -3219,6 +3345,70 @@ button {
 .schedule-intelligence-card .schedule-summary-grid strong {
   color: #111827;
   font-size: 13px;
+}
+
+.schedule-intelligence-card .issue-summary-grid {
+  grid-template-columns: repeat(6, minmax(118px, 1fr));
+}
+
+.schedule-intelligence-card .issue-summary-secondary {
+  margin: -2px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.schedule-intelligence-card .issue-summary-button {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+  color: #667085;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.schedule-intelligence-card .issue-summary-button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.schedule-intelligence-card .issue-summary-button strong {
+  color: #111827;
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.schedule-intelligence-card .issue-skipped-panel {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 8px;
+}
+
+.schedule-intelligence-card .issue-skipped-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.schedule-intelligence-card .issue-skipped-panel th,
+.schedule-intelligence-card .issue-skipped-panel td {
+  border-bottom: 1px solid #edf0f3;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.schedule-intelligence-card .issue-skipped-panel p {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
 }
 
 .schedule-intelligence-card .schedule-formatted-result {
@@ -3281,20 +3471,206 @@ button {
   font-size: 13px;
 }
 
+.schedule-intelligence-card .issue-query-plan {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.schedule-intelligence-card .issue-query-plan span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 8px;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.schedule-intelligence-card .issue-query-plan strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.schedule-intelligence-card .issue-query-json {
+  min-width: 0;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 8px 10px;
+}
+
+.schedule-intelligence-card .issue-query-json summary {
+  cursor: pointer;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.schedule-intelligence-card .issue-query-json pre {
+  max-width: 100%;
+  margin: 8px 0 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #111827;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.schedule-intelligence-card .issue-assignee-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 8px;
+}
+
+.schedule-intelligence-card .issue-assignee-summary div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 9px;
+}
+
+.schedule-intelligence-card .issue-assignee-summary strong {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.schedule-intelligence-card .issue-assignee-summary span {
+  color: #667085;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.schedule-intelligence-card .issue-query-note {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.schedule-intelligence-card .issue-result-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.schedule-intelligence-card .issue-result-section.secondary {
+  border-top: 1px solid #edf0f3;
+  padding-top: 10px;
+}
+
+.schedule-intelligence-card .issue-result-section-header,
+.schedule-intelligence-card .issue-result-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.schedule-intelligence-card .issue-result-section-header h3 {
+  margin: 0;
+  color: #111827;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.schedule-intelligence-card .issue-result-section-header span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.schedule-intelligence-card .issue-result-section-toggle {
+  width: 100%;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 9px 10px;
+  color: #111827;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.schedule-intelligence-card .issue-result-section-toggle span {
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.schedule-intelligence-card .issue-result-section-toggle strong,
+.schedule-intelligence-card .issue-result-section-toggle em {
+  color: #667085;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.schedule-intelligence-card .schedule-warning-button {
+  justify-self: start;
+}
+
 .schedule-intelligence-card .schedule-analysis-panel {
   display: grid;
   gap: 8px;
 }
 
 .schedule-intelligence-card .schedule-query-table-wrap {
+  max-width: 100%;
   overflow-x: auto;
 }
 
 .schedule-intelligence-card .schedule-query-table {
   width: 100%;
-  min-width: 560px;
+  min-width: 0;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
+}
+
+.schedule-intelligence-card .schedule-query-table th:nth-child(1),
+.schedule-intelligence-card .schedule-query-table td:nth-child(1) {
+  width: 92px;
+}
+
+.schedule-intelligence-card .schedule-query-table th:nth-child(2),
+.schedule-intelligence-card .schedule-query-table td:nth-child(2) {
+  width: 72px;
+}
+
+.schedule-intelligence-card .schedule-query-table th:nth-child(4),
+.schedule-intelligence-card .schedule-query-table td:nth-child(4),
+.schedule-intelligence-card .schedule-query-table th:nth-child(6),
+.schedule-intelligence-card .schedule-query-table td:nth-child(6) {
+  width: 92px;
+}
+
+.schedule-intelligence-card .schedule-query-table th:nth-child(5),
+.schedule-intelligence-card .schedule-query-table td:nth-child(5) {
+  width: 92px;
+}
+
+.schedule-intelligence-card .schedule-query-table th:nth-child(7),
+.schedule-intelligence-card .schedule-query-table td:nth-child(7) {
+  width: 76px;
+}
+
+.schedule-intelligence-card .schedule-query-table th:nth-child(8),
+.schedule-intelligence-card .schedule-query-table td:nth-child(8) {
+  width: 52px;
 }
 
 .schedule-intelligence-card .schedule-query-table th,
@@ -3313,6 +3689,74 @@ button {
 
 .schedule-intelligence-card .schedule-query-table td {
   color: #344054;
+  overflow-wrap: anywhere;
+}
+
+.schedule-intelligence-card .issue-query-row {
+  cursor: pointer;
+}
+
+.schedule-intelligence-card .issue-query-row:hover td {
+  background: #f8fafc;
+}
+
+.schedule-intelligence-card .issue-row-button {
+  display: -webkit-box;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #111827;
+  overflow: hidden;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.schedule-intelligence-card .issue-date-column {
+  white-space: nowrap;
+}
+
+.schedule-intelligence-card .issue-detail-row td {
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.schedule-intelligence-card .issue-detail-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.schedule-intelligence-card .issue-detail-panel > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px;
+}
+
+.schedule-intelligence-card .issue-detail-panel span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.schedule-intelligence-card .issue-detail-panel strong {
+  color: #111827;
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.schedule-intelligence-card .issue-detail-wide {
+  grid-column: span 2;
 }
 
 .schedule-intelligence-card .schedule-query-result {
@@ -3333,10 +3777,62 @@ button {
   .rag-library-card .rag-library-summary-grid,
   .rag-library-card .rag-search-controls,
   .schedule-intelligence-card .schedule-source-controls,
+  .schedule-intelligence-card .issue-source-controls,
   .schedule-intelligence-card .schedule-source-status,
   .schedule-intelligence-card .schedule-query-test,
   .schedule-intelligence-card .schedule-status-summary,
+  .schedule-intelligence-card .issue-query-plan,
   .schedule-intelligence-card .schedule-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-intelligence-card .schedule-query-table {
+    min-width: 680px;
+  }
+
+  .schedule-intelligence-card .issue-detail-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-intelligence-card .issue-detail-wide {
+    grid-column: auto;
+  }
+}
+
+@media (min-width: 901px) and (max-width: 1380px) {
+  .schedule-intelligence-card .issue-source-controls {
+    grid-template-columns: minmax(180px, 1fr) minmax(118px, 150px) minmax(220px, 1.4fr);
+  }
+
+  .schedule-intelligence-card .issue-source-actions {
+    grid-column: 1 / -1;
+  }
+
+  .schedule-intelligence-card .issue-summary-grid {
+    grid-template-columns: repeat(3, minmax(118px, 1fr));
+  }
+}
+
+@media (min-width: 641px) and (max-width: 900px) {
+  .schedule-intelligence-card .issue-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .schedule-intelligence-card .issue-query-plan {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .settings-view {
+    padding: 14px 12px 20px;
+  }
+
+  .schedule-intelligence-card .issue-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .schedule-intelligence-card .issue-query-plan {
     grid-template-columns: 1fr;
   }
 }

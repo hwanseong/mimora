@@ -70,7 +70,7 @@ export type LocalAIPerformanceMetrics = LocalAIExecutionMetrics & {
 };
 
 export type LLMContextDocument = {
-  sourceType?: 'vault' | 'rag' | 'schedule';
+  sourceType?: 'vault' | 'rag' | 'schedule' | 'issue';
   vaultId: string;
   vaultName: string;
   vaultType: VaultType;

@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -26,21 +25,7 @@ import {
   ragSupportedExtensions,
 } from '../src/rag';
 import { workspaceIdPattern } from '../src/workspace/types';
-
-type RagWorkerSuccess<T> = {
-  ok: true;
-  data: T;
-};
-
-type RagWorkerFailure = {
-  ok: false;
-  error: {
-    code: string;
-    message: string;
-  };
-};
-
-type RagWorkerResult<T> = RagWorkerSuccess<T> | RagWorkerFailure;
+import { runPythonWorker } from './pythonRuntime';
 
 type RagServiceOptions = {
   getUserDataPath: () => string;
@@ -53,23 +38,8 @@ type RagServiceOptions = {
   runWorker?: <T>(command: string, input: unknown) => Promise<T>;
 };
 
-const pythonExecutableCandidates =
-  process.platform === 'win32'
-    ? [
-        { executable: 'python', args: [] as string[] },
-        { executable: 'py', args: ['-3'] },
-      ]
-    : [{ executable: 'python3', args: [] as string[] }];
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getWorkerPath(getAppRoot?: () => string): string {
-  const appRoot = getAppRoot?.() ?? process.cwd();
-  const sourceWorkerPath = path.resolve(appRoot, 'python', 'mimora_worker.py');
-
-  return sourceWorkerPath;
 }
 
 function getRagStorageRoot(userDataPath: string): string {
@@ -269,80 +239,17 @@ function validateRagDocumentId(input: unknown): string {
   return input;
 }
 
-async function runPythonProcess<T>(
-  workerPath: string,
-  command: string,
-  input: unknown,
-): Promise<T> {
-  const payload = JSON.stringify(input);
-  let lastError: unknown = null;
-
-  for (const candidate of pythonExecutableCandidates) {
-    try {
-      return await new Promise<T>((resolve, reject) => {
-        const child = spawn(
-          candidate.executable,
-          [...candidate.args, workerPath, command],
-          {
-            stdio: ['pipe', 'pipe', 'pipe'],
-            windowsHide: true,
-          },
-        );
-        let stdout = '';
-        let stderr = '';
-
-        child.stdout.setEncoding('utf8');
-        child.stderr.setEncoding('utf8');
-        child.stdout.on('data', (chunk: string) => {
-          stdout += chunk;
-        });
-        child.stderr.on('data', (chunk: string) => {
-          stderr += chunk;
-        });
-        child.on('error', (error) => {
-          reject(error);
-        });
-        child.on('close', (code) => {
-          let result: RagWorkerResult<T> | null = null;
-
-          try {
-            result = JSON.parse(stdout) as RagWorkerResult<T>;
-          } catch {
-            reject(
-              new Error(
-                stderr.trim() ||
-                  `Python worker returned invalid JSON with exit code ${code ?? 'unknown'}.`,
-              ),
-            );
-            return;
-          }
-
-          if (result.ok) {
-            resolve(result.data);
-            return;
-          }
-
-          reject(new Error(result.error.message || result.error.code));
-        });
-        child.stdin.end(Buffer.from(payload, 'utf8'));
-      });
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('Python worker is unavailable.');
-}
-
 export function createRagService(options: RagServiceOptions) {
-  const workerPath = getWorkerPath(options.getAppRoot);
   const storageRoot = getRagStorageRoot(options.getUserDataPath());
   const runWorker =
     options.runWorker ??
     (<T>(command: string, input: unknown) =>
-      runPythonProcess<T>(workerPath, command, input));
+      runPythonWorker<T>({
+        command,
+        input,
+        getAppRoot: options.getAppRoot,
+        serviceName: 'RAG',
+      }));
 
   async function resolveEmbeddingConfig(input: {
     embeddingProvider?: string;
