@@ -8,6 +8,7 @@ Mimora Phase 2 ships as a Windows NSIS installer.
 - Architecture: Windows x64
 - Installer mode: per-user install, configurable install directory
 - Electron output: `dist/`, `dist-electron/`
+- Python runtime resource: `resources/python/python.exe`
 - Python worker resource: `resources/python/mimora_worker.py`
 - Runtime data: Windows user data directory managed by Electron
 
@@ -18,8 +19,9 @@ Mimora installer includes:
 - Electron application
 - React renderer bundle
 - Electron main/preload bundle
-- Python worker source
-- Python dependency manifest: `python/requirements.txt`
+- Bundled Windows Python runtime staged from `buildResources/python/`
+- Python worker source staged as `buildResources/python/mimora_worker.py`
+- Python dependency manifest staged as `buildResources/python/requirements.txt`
 
 Mimora installer does not include:
 
@@ -72,14 +74,39 @@ npm run build
 
 Packaging TODO:
 
-- Add the actual Windows Python runtime under `buildResources/python/` or
-  another resolver-supported bundled path before creating a production
-  installer.
-- Include the bundled runtime directory in Electron `extraResources` so the
-  packaged app contains `<resources>\python\python.exe`.
-- Keep `mimora_worker.py` and `requirements.txt` in the packaged Python
-  resource directory.
+- Add the actual Windows Python runtime under `buildResources/python/` before
+  creating a production installer.
+- `package.json` maps `buildResources/python` to packaged
+  `<resources>\python`.
+- Keep exactly one copy of `mimora_worker.py` and `requirements.txt` in
+  `buildResources/python/` so the packaged resource directory contains both the
+  runtime and worker files without duplicate resource entries.
 - Do not require users to install system Python.
+
+Expected staging layout:
+
+```text
+buildResources/python/
+  python.exe
+  Lib/
+  Scripts/
+  mimora_worker.py
+  requirements.txt
+```
+
+Expected packaged layout:
+
+```text
+resources/python/
+  python.exe
+  Lib/
+  Scripts/
+  mimora_worker.py
+  requirements.txt
+```
+
+The release package is blocked until `buildResources/python/python.exe` exists
+and can import the packages listed above.
 
 ## Ollama And Model Strategy
 
@@ -123,8 +150,8 @@ Before packaging, verify that the repository is clean or that the pending change
 - Install Mimora with `Mimora-0.2.0-Setup.exe`.
 - Launch Mimora from the Start menu or desktop shortcut.
 - Confirm Settings opens without errors.
-- Confirm Python status is available.
-- Install Python packages from `resources/python/requirements.txt` if Python status or RAG runtime checks fail.
+- Confirm Python status is available and resolves to
+  `<resources>\python\python.exe`.
 - Install and start Ollama.
 - Pull `qwen3:4b-instruct`.
 - Pull `bge-m3`.
@@ -139,12 +166,32 @@ Before packaging, verify that the repository is clean or that the pending change
 - Run RAG Search Test and confirm sources are returned.
 - Register a Workspace schedule `.xlsx` or `.xlsm` file.
 - Refresh Schedule Intelligence and confirm WBS, leaf task, delay, and progress metrics.
+- Register a Workspace issue `.xlsx` or `.xlsm` file.
+- Refresh Issue Intelligence and confirm open/resolved counts, skipped row details, and status filters.
 - Ask a Workspace Chat question that uses Vault context.
 - Ask a Workspace Chat question that uses RAG context.
 - Ask a Workspace Chat question that uses Schedule context.
+- Ask a Workspace Chat question that uses Issue context.
 - Generate an AI Wiki draft and confirm frontmatter metadata is written correctly.
 - Generate a weekly report DOCX and open the result.
 - Restart Mimora and confirm settings, chat history, RAG library, and schedule registration persist.
+
+## Dev Diagnostics
+
+Boot diagnostics overlays are hidden by default. Enable them only while
+debugging renderer boot or compositor issues:
+
+```powershell
+$env:VITE_MIMORA_BOOT_DIAGNOSTICS = "1"
+npm run dev
+```
+
+Alternative toggles:
+
+- URL query: `?bootDiagnostics=1`
+- Renderer local storage: `mimora.bootDiagnostics = "1"`
+
+The default development and packaged UI must not show boot diagnostics overlays.
 
 ## Release Notes
 

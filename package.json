@@ -28,12 +28,8 @@
     ],
     "extraResources": [
       {
-        "from": "python",
-        "to": "python",
-        "filter": [
-          "mimora_worker.py",
-          "requirements.txt"
-        ]
+        "from": "buildResources/python",
+        "to": "python"
       }
     ],
     "win": {
